@@ -17,7 +17,7 @@ use platform_core::{
     production_sudo_key, ChainState, ChallengeContainerConfig, Hotkey, Keypair, NetworkConfig,
     NetworkMessage, SignedNetworkMessage, Stake, SudoAction, ValidatorInfo, SUDO_KEY_SS58,
 };
-use platform_epoch::EpochConfig;
+use platform_epoch::{EpochConfig, EpochPhase, EpochTransition};
 use platform_network::{
     NetworkEvent, NetworkNode, NetworkProtection, NodeConfig, ProtectionConfig, SyncResponse,
     MIN_STAKE_RAO, MIN_STAKE_TAO,
@@ -1026,6 +1026,23 @@ async fn main() -> Result<()> {
                     }
                     RuntimeEvent::EpochTransition(transition) => {
                         info!("Epoch transition: {:?}", transition);
+
+                        // Check if we're entering the reveal phase - trigger pending reveals
+                        // This is a fallback when BlockSyncEvent::RevealWindowOpen doesn't fire
+                        // (e.g., when CommitRevealWeightsEnabled is false but we use mechanism weights)
+                        if let EpochTransition::PhaseChange { new_phase: EpochPhase::Reveal, .. } = transition {
+                            if let Some(ref submitter) = weight_submitter_clone {
+                                let mut sub = submitter.lock().await;
+                                if sub.has_pending_mechanism_commits() {
+                                    info!("Reveal phase detected (internal) - revealing pending mechanism commits...");
+                                    match sub.reveal_pending_mechanism_commits().await {
+                                        Ok(Some(tx)) => info!("Mechanism weights revealed: {}", tx),
+                                        Ok(None) => debug!("No pending commits to reveal"),
+                                        Err(e) => error!("Failed to reveal mechanism weights: {}", e),
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
