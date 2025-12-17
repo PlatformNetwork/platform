@@ -30,7 +30,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # Bittensor
-bittensor-rs = { git = "https://github.com/CortexLM/bittensor-rs", rev = "47a9370" }
+bittensor-rs = { git = "https://github.com/CortexLM/bittensor-rs", rev = "32c6bfa" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full", "sync", "macros", "rt-multi-thread"] }

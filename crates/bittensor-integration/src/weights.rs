@@ -357,17 +357,13 @@ impl WeightSubmitter {
             pending.uids, pending.weights, pending.salt_hex, salt
         );
 
-        // Note: reveal_weights API expects &[u8] for salt, but we store as u16
-        // The salt bytes are converted back from the hex storage
-        let salt_bytes: Vec<u8> = hex::decode(&pending.salt_hex).unwrap_or_default();
-
         let tx_hash = reveal_weights(
             self.client.client()?,
             self.client.signer()?,
             self.client.netuid(),
             &uids_u64,
             &pending.weights,
-            &salt_bytes,
+            &salt, // Now correctly passing &[u16]
             pending.version_key,
             ExtrinsicWait::Finalized,
         )
