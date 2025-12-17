@@ -102,7 +102,7 @@ struct Args {
 
     // === RPC Options ===
     /// RPC server port (0 to disable)
-    #[arg(long, default_value = "8545")]
+    #[arg(long, default_value = "8080")]
     rpc_port: u16,
 
     /// RPC server bind address
