@@ -1,18 +1,54 @@
 #!/bin/bash
+# Pre-push hook: ALL CI checks MUST pass before pushing
+# This ensures code quality and prevents broken builds
+
 set -e
 
-echo "Running pre-push CI checks..."
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# Format check
-echo "Checking format..."
-cargo fmt --all -- --check
+echo "============================================="
+echo "Running pre-push CI checks (ALL MANDATORY)..."
+echo "============================================="
 
-# Clippy
-echo "Running clippy..."
-cargo clippy --all-targets --workspace -- -W clippy::all
+# 1. Format check
+echo -e "\n${YELLOW}[1/4] Checking formatting...${NC}"
+if ! cargo fmt --all -- --check; then
+    echo -e "${RED}ERROR: Code is not formatted.${NC}"
+    echo "Run 'cargo fmt' before pushing."
+    exit 1
+fi
+echo -e "${GREEN}✓ Formatting OK${NC}"
 
-# Tests
-echo "Running tests..."
-cargo test --workspace
+# 2. Cargo check (compilation)
+echo -e "\n${YELLOW}[2/4] Running cargo check...${NC}"
+if ! cargo check --workspace; then
+    echo -e "${RED}ERROR: Compilation failed.${NC}"
+    echo "Fix compilation errors before pushing."
+    exit 1
+fi
+echo -e "${GREEN}✓ Compilation OK${NC}"
 
-echo "All CI checks passed!"
+# 3. Clippy (linting) - MANDATORY, no warnings allowed
+echo -e "\n${YELLOW}[3/4] Running clippy...${NC}"
+if ! cargo clippy --all-targets --workspace -- -D warnings; then
+    echo -e "${RED}ERROR: Clippy found issues.${NC}"
+    echo "Fix clippy warnings before pushing."
+    exit 1
+fi
+echo -e "${GREEN}✓ Clippy OK${NC}"
+
+# 4. Tests - MANDATORY
+echo -e "\n${YELLOW}[4/4] Running tests...${NC}"
+if ! cargo test --workspace; then
+    echo -e "${RED}ERROR: Tests failed.${NC}"
+    echo "Fix failing tests before pushing."
+    exit 1
+fi
+echo -e "${GREEN}✓ Tests OK${NC}"
+
+echo -e "\n${GREEN}============================================="
+echo "All CI checks passed! Pushing..."
+echo -e "=============================================${NC}"

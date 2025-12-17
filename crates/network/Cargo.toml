@@ -25,4 +25,4 @@ rand = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 chrono = { workspace = true }
-ed25519-dalek = { workspace = true }
+sp-core = { version = "31.0", default-features = false, features = ["std"] }

@@ -1,13 +1,25 @@
 #!/bin/bash
+# Pre-commit hook: Format code and check for issues
+
 set -e
 
 echo "Running pre-commit checks..."
 
 # Format code
-echo "Formatting code..."
-cargo fmt --all
-
-# Add formatted files back to staging
-git add -u
+echo "Checking formatting..."
+if ! cargo fmt --all -- --check 2>/dev/null; then
+    echo "Formatting code..."
+    cargo fmt --all
+    
+    # Check if there were changes
+    if ! git diff --quiet; then
+        echo ""
+        echo "Code was auto-formatted. Please review and re-add the changes:"
+        git diff --stat
+        echo ""
+        echo "Run: git add -u && git commit"
+        exit 1
+    fi
+fi
 
 echo "Pre-commit checks passed!"

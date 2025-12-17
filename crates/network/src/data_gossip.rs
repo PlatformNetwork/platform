@@ -18,11 +18,11 @@
 //! - Signature verification
 //! - Quorum requirements
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use parking_lot::RwLock;
 use platform_core::{Hotkey, Keypair};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sp_core::{crypto::Pair as _, sr25519};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -90,7 +90,7 @@ impl ValidatorDataSubmission {
         Ok(())
     }
 
-    /// Verify the ed25519 signature against the claimed hotkey
+    /// Verify the sr25519 signature against the claimed hotkey
     pub fn verify(&self) -> bool {
         if self.signature.len() != 64 {
             return false;
@@ -101,20 +101,17 @@ impl ValidatorDataSubmission {
             None => return false,
         };
 
-        // Get the verifying key from the claimed hotkey
-        let verifying_key = match VerifyingKey::from_bytes(hotkey.as_bytes()) {
-            Ok(k) => k,
-            Err(_) => return false,
-        };
-
-        // Parse the signature
+        // Parse the sr25519 signature
         let mut sig_bytes = [0u8; 64];
         sig_bytes.copy_from_slice(&self.signature);
-        let signature = Signature::from_bytes(&sig_bytes);
+        let signature = sr25519::Signature::from_raw(sig_bytes);
+
+        // Get the public key from the claimed hotkey
+        let public = sr25519::Public::from_raw(hotkey.0);
 
         // Verify: signature must match the message signed by the claimed hotkey
         let message = self.signing_message();
-        verifying_key.verify(&message, &signature).is_ok()
+        sr25519::Pair::verify(&signature, &message, &public)
     }
 
     /// Get the message to sign

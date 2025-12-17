@@ -24,7 +24,7 @@ serde_json = { workspace = true }
 bincode = { workspace = true }
 
 # Crypto
-ed25519-dalek = { workspace = true }
+sp-core = { version = "31.0", default-features = false, features = ["std"] }
 hex = { workspace = true }
 
 # Utils

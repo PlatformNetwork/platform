@@ -1,11 +1,12 @@
 //! Authentication for RPC requests
 //!
-//! Validators authenticate using their hotkey signature.
+//! Validators authenticate using their hotkey signature (sr25519).
 
 use platform_core::Hotkey;
+use sp_core::{crypto::Pair as _, sr25519};
 use tracing::warn;
 
-/// Verify a signed message from a validator
+/// Verify a signed message from a validator (sr25519)
 pub fn verify_validator_signature(
     hotkey_hex: &str,
     message: &str,
@@ -21,17 +22,13 @@ pub fn verify_validator_signature(
         return Err(AuthError::InvalidSignature);
     }
 
-    // Verify using ed25519
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
-    let verifying_key =
-        VerifyingKey::from_bytes(hotkey.as_bytes()).map_err(|_| AuthError::InvalidHotkey)?;
-
+    // Verify using sr25519
     let mut sig_bytes = [0u8; 64];
     sig_bytes.copy_from_slice(&signature_bytes);
-    let signature = Signature::from_bytes(&sig_bytes);
+    let signature = sr25519::Signature::from_raw(sig_bytes);
 
-    let is_valid = verifying_key.verify(message.as_bytes(), &signature).is_ok();
+    let public = sr25519::Public::from_raw(hotkey.0);
+    let is_valid = sr25519::Pair::verify(&signature, message.as_bytes(), &public);
 
     if !is_valid {
         warn!("Invalid signature for hotkey: {}", &hotkey_hex[..16]);
