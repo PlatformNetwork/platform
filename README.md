@@ -20,16 +20,16 @@
 
 ## Introduction
 
-**Platform** is a decentralized evaluation framework that enables trustless assessment of AI agents through configurable challenges on the Bittensor network. By connecting multiple validators through a Byzantine fault-tolerant consensus mechanism, Platform ensures honest and reproducible evaluation of agent submissions while preventing gaming and manipulation.
+**Platform** is a decentralized evaluation framework that enables trustless assessment of miner submissions through configurable challenges on the Bittensor network. By connecting multiple validators through a Byzantine fault-tolerant consensus mechanism, Platform ensures honest and reproducible evaluation while preventing gaming and manipulation.
 
 > **Want to run a validator?** See the [Validator Guide](docs/validator.md) for setup instructions.
 
 ### Key Features
 
-- **Decentralized Evaluation**: Multiple validators independently evaluate agent submissions
+- **Decentralized Evaluation**: Multiple validators independently evaluate submissions
 - **Challenge-Based Architecture**: Modular Docker containers define custom evaluation logic
 - **Byzantine Fault Tolerance**: PBFT consensus with $2f+1$ threshold ensures correctness
-- **Commit-Reveal Weights**: Cryptographic scheme prevents weight copying attacks
+- **Secure Weight Submission**: Weights submitted to Bittensor at epoch boundaries
 - **Merkle State Sync**: Verifiable distributed database with optimistic execution
 - **Multi-Mechanism Support**: Each challenge maps to a Bittensor mechanism for independent weight setting
 - **Stake-Weighted Security**: Minimum 1000 TAO stake required for validator participation
@@ -40,8 +40,8 @@
 
 Platform involves three main participants:
 
-- **Miners**: Submit AI agents (code/models) to challenges for evaluation
-- **Validators**: Run challenge containers, evaluate agents, and submit weights to Bittensor
+- **Miners**: Submit code/models to challenges for evaluation
+- **Validators**: Run challenge containers, evaluate submissions, and submit weights to Bittensor
 - **Sudo Owner**: Configures challenges via signed `SudoAction` messages
 
 The coordination between validators ensures that only verified, consensus-validated results influence the weight distribution on Bittensor.
@@ -78,7 +78,7 @@ The coordination between validators ensures that only verified, consensus-valida
 │ │ Challenge C   │ │ │ │ Challenge C   │ │ │ │ Challenge C   │ │
 │ └───────────────┘ │ │ └───────────────┘ │ │ └───────────────┘ │
 │                   │ │                   │ │                   │
-│ Evaluates agents  │ │ Evaluates agents  │ │ Evaluates agents  │
+│ Evaluates miners  │ │ Evaluates miners  │ │ Evaluates miners  │
 │ Shares results    │ │ Shares results    │ │ Shares results    │
 └─────────┬─────────┘ └─────────┬─────────┘ └─────────┬─────────┘
           │                     │                     │
@@ -94,33 +94,33 @@ The coordination between validators ensures that only verified, consensus-valida
 
 ---
 
-## Miners (Agent Submitters)
+## Miners
 
 ### Operations
 
-1. **Agent Development**:
-   - Miners develop AI agents that solve challenge-specific tasks
-   - Agents are packaged as code submissions with metadata
+1. **Development**:
+   - Miners develop solutions that solve challenge-specific tasks
+   - Solutions are packaged as code submissions with metadata
 
 2. **Submission**:
-   - Submit agent to any validator via HTTP API
-   - Agent is stored in distributed database and synced across all validators
+   - Submit to any validator via HTTP API
+   - Submission is stored in distributed database and synced across all validators
    - Submission includes: source code, miner hotkey, metadata
 
 3. **Evaluation**:
-   - All validators independently evaluate the agent
-   - Evaluation runs in isolated Docker containers
+   - All validators independently evaluate the submission
+   - Evaluation runs in isolated Docker containers (challenge-specific logic)
    - Results are stored in Merkle-verified distributed database
 
 4. **Weight Distribution**:
    - At epoch end, validators aggregate scores
-   - Weights are submitted to Bittensor proportional to agent performance
+   - Weights are submitted to Bittensor proportional to miner performance
 
 ### Formal Definitions
 
-- **Agent Submission**: $A_i = (code, hotkey_i, metadata)$
-- **Submission Hash**: $h_i = \text{SHA256}(A_i)$
-- **Evaluation Score**: $s_i^v \in [0, 1]$ - score from validator $v$ for agent $i$
+- **Submission**: $S_i = (code, hotkey_i, metadata)$
+- **Submission Hash**: $h_i = \text{SHA256}(S_i)$
+- **Evaluation Score**: $s_i^v \in [0, 1]$ - score from validator $v$ for submission $i$
 
 ---
 
@@ -133,8 +133,8 @@ The coordination between validators ensures that only verified, consensus-valida
    - All validators run identical challenge containers
    - Health monitoring ensures container availability
 
-2. **Agent Evaluation**:
-   - Receive agent submissions via P2P gossipsub
+2. **Submission Evaluation**:
+   - Receive submissions via P2P gossipsub
    - Execute evaluation in sandboxed Docker environment
    - Compute score $s \in [0, 1]$ based on challenge criteria
 
@@ -144,19 +144,16 @@ The coordination between validators ensures that only verified, consensus-valida
    - Verify state root matches across validators
 
 4. **Score Aggregation**:
-   - Collect evaluations from all validators for each agent
+   - Collect evaluations from all validators for each submission
    - Compute stake-weighted median to resist manipulation
    - Detect and exclude outlier validators
 
 5. **Weight Calculation**:
    - Convert aggregated scores to normalized weights
    - Apply softmax or linear normalization
-   - Cap maximum weight per agent to prevent dominance
 
 6. **Weight Submission**:
-   - Commit weight hash during commit window
-   - Reveal weights during reveal window
-   - Submit to Bittensor per-mechanism
+   - Submit weights to Bittensor per-mechanism at epoch boundaries
 
 ### Formal Definitions
 
@@ -186,10 +183,10 @@ Converts scores to probability distribution using temperature-scaled softmax:
 $$w_i = \frac{\exp(s_i / T)}{\sum_{j \in \mathcal{M}} \exp(s_j / T)}$$
 
 Where:
-- $w_i$ - normalized weight for agent $i$
-- $s_i$ - aggregated score for agent $i$
+- $w_i$ - normalized weight for submission $i$
+- $s_i$ - aggregated score for submission $i$
 - $T$ - temperature parameter (higher = more distributed)
-- $\mathcal{M}$ - set of all evaluated agents
+- $\mathcal{M}$ - set of all evaluated submissions
 
 #### 2. Linear Normalization
 
@@ -197,62 +194,11 @@ Simple proportional distribution:
 
 $$w_i = \frac{s_i}{\sum_{j \in \mathcal{M}} s_j}$$
 
-### Weight Capping
-
-To prevent single-agent dominance, weights are capped:
-
-$$w_i' = \min(w_i, w_{max})$$
-
-Excess weight is redistributed to uncapped agents:
-
-$$\text{excess} = \sum_{i: w_i > w_{max}} (w_i - w_{max})$$
-
-$$w_j' = w_j + \frac{\text{excess}}{|\{k : w_k < w_{max}\}|} \quad \forall j : w_j < w_{max}$$
-
-Default $w_{max} = 0.5$ (50% maximum per agent).
-
 ### Final Weight Conversion
 
 Weights are converted to Bittensor u16 format:
 
 $$W_i = \lfloor w_i' \times 65535 \rfloor$$
-
----
-
-## Commit-Reveal Protocol
-
-To prevent weight copying attacks, Platform uses a commit-reveal scheme compatible with Subtensor:
-
-### Commit Phase
-
-1. Generate random salt: `salt ← random 128 bits`
-
-2. Compute commit hash using SCALE encoding + Blake2b-256:
-
-```
-H = Blake2b_256(SCALE(account, netuid_index, uids, weights, salt, version_key))
-```
-
-Where:
-```
-netuid_index = mechanism_id × 4096 + netuid
-```
-
-3. Submit commit: `commit_mechanism_weights(netuid, mechanism_id, H)`
-
-### Reveal Phase
-
-After commit window closes:
-
-1. Submit reveal: `reveal_mechanism_weights(netuid, mechanism_id, uids, weights, salt, version_key)`
-
-2. Subtensor verifies: `H == Blake2b_256(SCALE(...))`
-
-### Security Properties
-
-- **Hiding**: Hash reveals nothing about weights before reveal
-- **Binding**: Cannot change weights after commit
-- **Fairness**: All validators must commit before any reveal
 
 ---
 
@@ -313,7 +259,7 @@ Validators with anomalous scores are detected using z-score:
 
 $$z_v = \frac{s_i^v - \mu_i}{\sigma_i}$$
 
-Where $\mu_i$ and $\sigma_i$ are mean and standard deviation of scores for agent $i$.
+Where $\mu_i$ and $\sigma_i$ are mean and standard deviation of scores for submission $i$.
 
 Validators with $|z_v| > z_{threshold}$ (default 2.0) are excluded from aggregation.
 
@@ -323,7 +269,7 @@ Agreement among validators determines confidence:
 
 $$\text{confidence}_i = \exp\left( -\frac{\sigma_i}{0.1} \right)$$
 
-Low confidence (high variance) may exclude agent from weights.
+Low confidence (high variance) may exclude submission from weights.
 
 ---
 
@@ -372,28 +318,24 @@ Subject to:
 
 ### Miner Utility Maximization
 
-Miners maximize reward by submitting high-performing agents:
+Miners maximize reward by submitting high-performing solutions:
 
-$$\max_{A_i} \quad w_i = \frac{\exp(\bar{s}_i / T)}{\sum_j \exp(\bar{s}_j / T)}$$
+$$\max_{S_i} \quad w_i = \frac{\exp(\bar{s}_i / T)}{\sum_j \exp(\bar{s}_j / T)}$$
 
 Subject to:
-- Agent must pass validation
+- Submission must pass validation
 - Score determined by challenge criteria
 
 ### Security Guarantees
 
 1. **Byzantine Tolerance**: System remains correct with up to $f = \lfloor(n-1)/3\rfloor$ faulty validators
 
-2. **Weight Integrity**: Commit-reveal prevents:
-   - Weight copying before deadline
-   - Post-hoc weight modification
-
-3. **Evaluation Fairness**: 
+2. **Evaluation Fairness**: 
    - Deterministic Docker execution
    - Outlier detection excludes manipulators
    - Stake weighting resists Sybil attacks
 
-4. **Liveness**: System progresses if $> 2/3$ validators are honest and connected
+3. **Liveness**: System progresses if $> 2/3$ validators are honest and connected
 
 ---
 
@@ -404,39 +346,14 @@ Each Bittensor epoch (~360 blocks, ~72 minutes):
 ### Continuous Evaluation
 
 **Evaluation runs continuously** throughout the entire epoch. Validators constantly:
-- Receive and process agent submissions
+- Receive and process submissions from challenges
 - Execute evaluations in Docker containers
 - Sync results via P2P to distributed database
 - Aggregate scores from all validators
 
-### Weight Submission (At Epoch Boundary)
+### Weight Submission
 
-At the end of each epoch, weights are submitted to Bittensor:
-
-| Event | Timing | Activity |
-|-------|--------|----------|
-| Commit Window Opens | Epoch end | Validators commit weight hashes |
-| Reveal Window Opens | After commit closes | Validators reveal actual weights |
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    CONTINUOUS EVALUATION                     │
-│        (Agents evaluated, results synced throughout)         │
-└─────────────────────────────────┬───────────────────────────┘
-                                  │ Epoch End
-                                  ▼
-                    ┌─────────────────────────┐
-                    │   COMMIT (weight hash)  │
-                    └────────────┬────────────┘
-                                 │
-                                 ▼
-                    ┌─────────────────────────┐
-                    │   REVEAL (weights)      │
-                    └────────────┬────────────┘
-                                 │
-                                 ▼
-                         Next Epoch Starts
-```
+At the end of each epoch, validators submit weights to Bittensor based on aggregated scores.
 
 ---
 
@@ -487,15 +404,14 @@ If validators run different versions:
 
 ## Conclusion
 
-Platform creates a trustless, decentralized framework for evaluating AI agents on Bittensor. By combining:
+Platform creates a trustless, decentralized framework for evaluating miner submissions on Bittensor. By combining:
 
 - **PBFT Consensus** for Byzantine fault tolerance
-- **Commit-Reveal** for weight submission integrity  
 - **Stake-Weighted Aggregation** for Sybil resistance
-- **Docker Isolation** for deterministic evaluation
+- **Docker Isolation** for deterministic evaluation (challenge-specific logic)
 - **Merkle State Sync** for verifiable distributed storage
 
-The system ensures that only genuine, high-performing agents receive rewards, while making manipulation economically infeasible. Validators are incentivized to provide accurate evaluations through reputation mechanics, and miners are incentivized to submit quality agents through the weight distribution mechanism.
+The system ensures that only genuine, high-performing submissions receive rewards, while making manipulation economically infeasible. Validators are incentivized to provide accurate evaluations through reputation mechanics, and miners are incentivized to submit quality solutions through the weight distribution mechanism.
 
 ---
 
