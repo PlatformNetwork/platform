@@ -32,7 +32,7 @@ services:
       - --data-dir
       - /data
       - --bootstrap-peer
-      - /dns4/bootnode.platform.network/tcp/9000
+      - /dns4/bootnode.platform.network/tcp/9000/p2p/12D3KooWQRUxZ7HkALjwTNybH4efMtnjQ9sBdUjzWc6TbuXHPvzM
     
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
