@@ -43,6 +43,9 @@ pub enum MiniChainError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Rate limited: {0}")]
+    RateLimited(String),
 }
 
 impl From<std::io::Error> for MiniChainError {

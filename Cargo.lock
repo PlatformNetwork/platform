@@ -5001,6 +5001,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bincode",
  "chrono",
  "futures",
  "parking_lot 0.12.5",

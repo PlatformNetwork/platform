@@ -100,6 +100,12 @@ impl Keypair {
             bincode::serialize(data).map_err(|e| MiniChainError::Serialization(e.to_string()))?;
         Ok(self.sign(&message))
     }
+
+    /// Sign raw bytes and return only the signature bytes (for governance)
+    pub fn sign_bytes(&self, data: &[u8]) -> Result<Vec<u8>> {
+        let signature = self.pair.sign(data);
+        Ok(signature.0.to_vec())
+    }
 }
 
 impl std::fmt::Debug for Keypair {
