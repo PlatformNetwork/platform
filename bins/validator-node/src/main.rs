@@ -705,7 +705,8 @@ async fn main() -> Result<()> {
     ));
     consensus.sync_validators();
 
-    // Parse bootstrap peers
+    // Parse bootstrap peers (default to official bootnode if not specified)
+    const DEFAULT_BOOTNODE: &str = "/dns4/bootnode.platform.network/tcp/9000/p2p/12D3KooWEpZoR9A1fpMN4QGspuRSa9UYHYvnFda2GWkXXZyYgAkN";
     let bootstrap_peers: Vec<_> = args
         .bootstrap
         .map(|s| {
@@ -713,7 +714,12 @@ async fn main() -> Result<()> {
                 .filter_map(|addr| addr.trim().parse().ok())
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            // Use default bootnode
+            vec![DEFAULT_BOOTNODE
+                .parse()
+                .expect("Invalid default bootnode address")]
+        });
 
     // Create network node with deterministic peer ID derived from hotkey public key
     let node_config = NodeConfig {

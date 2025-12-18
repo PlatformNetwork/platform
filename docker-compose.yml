@@ -27,12 +27,8 @@ services:
       - DATA_DIR=/data
       - VALIDATOR_SECRET_KEY=${VALIDATOR_SECRET_KEY}
     
-    command:
-      - validator-node
-      - --data-dir
-      - /data
-      - --bootstrap-peer
-      - /dns4/bootnode.platform.network/tcp/9000/p2p/12D3KooWEpZoR9A1fpMN4QGspuRSa9UYHYvnFda2GWkXXZyYgAkN
+    # Bootstrap peer is hardcoded in the binary (bootnode.platform.network)
+    # Override with: --bootstrap /dns4/other-node/tcp/9000/p2p/<PEER_ID>
     
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
