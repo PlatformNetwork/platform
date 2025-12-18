@@ -30,8 +30,8 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Bittensor (with CRv4 timelock encryption support and new Subtensor API)
-# Updated to db10a19: fix commit_reveal_enabled default to true when storage is None
-bittensor-rs = { git = "https://github.com/CortexLM/bittensor-rs", rev = "db10a19" }
+# Updated to f79759e: fix calculate_reveal_round to use chain's LastStoredRound (not system time)
+bittensor-rs = { git = "https://github.com/CortexLM/bittensor-rs", rev = "f79759e" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full", "sync", "macros", "rt-multi-thread"] }

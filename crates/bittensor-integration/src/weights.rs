@@ -26,8 +26,8 @@ use bittensor_rs::{
 // CRv4 imports (no persistence needed - chain auto-reveals)
 use bittensor_rs::crv4::{
     calculate_reveal_round, commit_timelocked_mechanism_weights, get_commit_reveal_version,
-    get_mechid_storage_index, get_reveal_period, get_tempo, prepare_crv4_commit,
-    DEFAULT_COMMIT_REVEAL_VERSION,
+    get_last_drand_round, get_mechid_storage_index, get_reveal_period, get_tempo,
+    prepare_crv4_commit, DEFAULT_COMMIT_REVEAL_VERSION,
 };
 use platform_challenge_sdk::WeightAssignment;
 use serde::{Deserialize, Serialize};
@@ -512,11 +512,14 @@ impl WeightSubmitter {
             .cached_crv_version
             .unwrap_or(DEFAULT_COMMIT_REVEAL_VERSION);
 
+        // Get chain's last DRAND round (CRITICAL: must use chain state, not system time)
+        let chain_last_drand_round = get_last_drand_round(client).await?;
+
         let mut last_tx = String::new();
         let mut committed_count = 0;
 
         for (mechanism_id, uids, weights) in mechanism_weights {
-            // Calculate reveal round for this mechanism
+            // Calculate reveal round for this mechanism (relative to chain's DRAND state)
             let storage_index = get_mechid_storage_index(netuid, *mechanism_id);
             let reveal_round = calculate_reveal_round(
                 tempo,
@@ -524,6 +527,7 @@ impl WeightSubmitter {
                 storage_index,
                 reveal_period,
                 block_time,
+                chain_last_drand_round,
             );
 
             // Encrypt payload using TLE
@@ -531,9 +535,10 @@ impl WeightSubmitter {
                 prepare_crv4_commit(&hotkey_bytes, uids, weights, version_key, reveal_round)?;
 
             info!(
-                "CRv4 committing mechanism {}: {} uids, reveal_round={}",
+                "CRv4 committing mechanism {}: {} uids, chain_last_drand={}, reveal_round={}",
                 mechanism_id,
                 uids.len(),
+                chain_last_drand_round,
                 reveal_round
             );
 
