@@ -2,6 +2,8 @@
 //!
 //! Tests for network protection, state sync, and P2P functionality.
 
+#![allow(dead_code)]
+
 use platform_core::*;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

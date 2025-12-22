@@ -2,6 +2,8 @@
 //!
 //! Tests for weight submission, block sync, and validator sync.
 
+#![allow(dead_code)]
+
 use platform_core::*;
 
 // ============================================================================

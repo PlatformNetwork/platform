@@ -2,6 +2,8 @@
 //!
 //! Tests for epoch management, commit-reveal, and weight aggregation.
 
+#![allow(dead_code, clippy::type_complexity)]
+
 use parking_lot::RwLock;
 use platform_core::*;
 use std::collections::HashMap;

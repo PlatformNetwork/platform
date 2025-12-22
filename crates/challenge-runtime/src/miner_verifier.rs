@@ -401,7 +401,7 @@ mod tests {
             hotkey: "5Miner".to_string(),
             coldkey: "5Cold".to_string(),
             uid: 42,
-            stake: 1000_000_000_000,
+            stake: 1_000_000_000_000,
             is_registered: true,
             is_active: true,
             fetched_at_block: 100,

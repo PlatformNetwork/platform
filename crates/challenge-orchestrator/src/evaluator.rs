@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Evaluator for routing evaluation requests to challenge containers
 pub struct ChallengeEvaluator {

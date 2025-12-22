@@ -1,5 +1,7 @@
 //! Comprehensive RPC Server Tests
 
+#![allow(dead_code, unused_variables)]
+
 use parking_lot::RwLock;
 use platform_core::*;
 use std::sync::Arc;

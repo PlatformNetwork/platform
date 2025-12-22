@@ -41,3 +41,6 @@ pub use bittensor_rs::{
 
 // Re-export chain types needed for weight submission
 pub use bittensor_rs::chain::{signer_from_seed, BittensorSigner, ExtrinsicWait};
+
+// Re-export metagraph sync for validator discovery
+pub use bittensor_rs::metagraph::sync_metagraph;

@@ -2,6 +2,14 @@
 //!
 //! Tests for challenge execution, scheduling, and anti-cheat.
 
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_variables,
+    clippy::type_complexity,
+    clippy::useless_vec
+)]
+
 use platform_challenge_sdk::*;
 use platform_core::*;
 use std::collections::HashMap;

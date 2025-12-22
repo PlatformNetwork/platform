@@ -2,6 +2,8 @@
 //!
 //! These tests verify that all error conditions are properly handled.
 
+#![allow(clippy::field_reassign_with_default)]
+
 use parking_lot::RwLock;
 use platform_consensus::*;
 use platform_core::*;

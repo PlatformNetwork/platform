@@ -5101,7 +5101,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
+ "chacha20poly1305",
  "chrono",
+ "curve25519-dalek 4.1.3",
  "ed25519-dalek",
  "futures",
  "hex",
@@ -5119,6 +5121,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "x25519-dalek",
 ]
 
 [[package]]

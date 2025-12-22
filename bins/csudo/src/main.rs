@@ -1048,13 +1048,15 @@ async fn main() -> Result<()> {
                     docker_image,
                     mechanism_id,
                 } => {
-                    if name.is_some() && docker_image.is_some() && mechanism_id.is_some() {
+                    if let (Some(name), Some(docker_image), Some(mechanism_id)) =
+                        (name, docker_image, mechanism_id)
+                    {
                         // Non-interactive
                         let config = ChallengeContainerConfig {
                             challenge_id: ChallengeId::new(),
-                            name: name.unwrap(),
-                            docker_image: docker_image.unwrap(),
-                            mechanism_id: mechanism_id.unwrap(),
+                            name,
+                            docker_image,
+                            mechanism_id,
                             emission_weight: 1.0,
                             timeout_secs: 3600,
                             cpu_cores: 2.0,

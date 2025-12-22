@@ -222,7 +222,7 @@ pub enum P2PError {
 }
 
 /// Decrypt an API key that was encrypted for this validator
-/// 
+///
 /// Uses X25519 key exchange + ChaCha20-Poly1305 (same scheme as term-challenge)
 pub fn decrypt_api_key(
     encrypted: &EncryptedApiKey,

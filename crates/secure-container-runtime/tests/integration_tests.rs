@@ -10,7 +10,6 @@
 //! Run with: cargo test --test integration_tests -- --ignored
 
 use secure_container_runtime::*;
-use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -315,7 +314,7 @@ fn test_container_config_builder() {
     assert!(config.network.ports.contains_key(&9090));
     assert_eq!(config.mounts.len(), 1);
     assert_eq!(config.mounts[0].source, "/tmp/data");
-    assert_eq!(config.mounts[0].read_only, true);
+    assert!(config.mounts[0].read_only);
     assert_eq!(config.labels.get("version"), Some(&"1.0.0".to_string()));
 }
 
