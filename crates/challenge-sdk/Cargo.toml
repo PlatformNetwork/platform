@@ -28,6 +28,9 @@ parity-scale-codec = { workspace = true }
 aes-gcm = "0.10"
 rand = { workspace = true }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+curve25519-dalek = "4.1"
 
 # Utils
 uuid = { workspace = true }

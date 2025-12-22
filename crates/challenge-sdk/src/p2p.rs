@@ -33,6 +33,12 @@ pub enum ChallengeP2PMessage {
 
     /// Weight calculation result (for consensus)
     WeightResult(WeightResultMessage),
+
+    /// Request API key decryption from platform validator
+    DecryptApiKeyRequest(DecryptApiKeyRequest),
+
+    /// Response with decrypted API key
+    DecryptApiKeyResponse(DecryptApiKeyResponse),
 }
 
 /// Evaluation result message
@@ -83,6 +89,50 @@ pub struct WeightResultMessage {
     pub validator: Hotkey,
     /// Signature
     pub signature: Vec<u8>,
+}
+
+/// Request to decrypt an API key
+/// Challenge container sends this to its host platform validator
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DecryptApiKeyRequest {
+    /// Challenge ID making the request
+    pub challenge_id: String,
+    /// Agent hash this decryption is for
+    pub agent_hash: String,
+    /// The encrypted API key data
+    pub encrypted_key: EncryptedApiKey,
+    /// Request ID for correlation
+    pub request_id: String,
+}
+
+/// Encrypted API key structure (matches term-challenge format)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EncryptedApiKey {
+    /// Validator hotkey this key is encrypted for (SS58 format)
+    pub validator_hotkey: String,
+    /// Ephemeral X25519 public key used for encryption (hex)
+    pub ephemeral_public_key: String,
+    /// Encrypted ciphertext (hex)
+    pub ciphertext: String,
+    /// Nonce used for encryption (hex)
+    pub nonce: String,
+}
+
+/// Response with decrypted API key
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DecryptApiKeyResponse {
+    /// Challenge ID
+    pub challenge_id: String,
+    /// Agent hash
+    pub agent_hash: String,
+    /// Request ID for correlation
+    pub request_id: String,
+    /// Success flag
+    pub success: bool,
+    /// Decrypted API key (only if success)
+    pub api_key: Option<String>,
+    /// Error message (only if !success)
+    pub error: Option<String>,
 }
 
 /// Handler for P2P messages in a challenge
@@ -167,6 +217,84 @@ pub enum P2PError {
     BroadcastFailed(String),
     #[error("Serialization failed: {0}")]
     SerializationFailed(String),
+    #[error("Decryption failed: {0}")]
+    DecryptionFailed(String),
+}
+
+/// Decrypt an API key that was encrypted for this validator
+/// 
+/// Uses X25519 key exchange + ChaCha20-Poly1305 (same scheme as term-challenge)
+pub fn decrypt_api_key(
+    encrypted: &EncryptedApiKey,
+    validator_secret: &[u8; 32],
+) -> Result<String, P2PError> {
+    use chacha20poly1305::{
+        aead::{Aead, KeyInit},
+        ChaCha20Poly1305, Nonce,
+    };
+    use sha2::{Digest, Sha256};
+    use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
+
+    const NONCE_SIZE: usize = 12;
+
+    // Convert ed25519 private key to X25519 using SHA-512 clamping
+    fn ed25519_to_x25519_private(ed25519_secret: &[u8; 32]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ed25519-to-x25519");
+        hasher.update(ed25519_secret);
+        let hash = hasher.finalize();
+        let mut x25519_key: [u8; 32] = hash.into();
+        // Clamp for X25519
+        x25519_key[0] &= 248;
+        x25519_key[31] &= 127;
+        x25519_key[31] |= 64;
+        x25519_key
+    }
+
+    // Convert validator's ed25519 private key to X25519
+    let x25519_secret_bytes = ed25519_to_x25519_private(validator_secret);
+    let validator_x25519 = StaticSecret::from(x25519_secret_bytes);
+
+    // Parse ephemeral public key
+    let ephemeral_bytes: [u8; 32] = hex::decode(&encrypted.ephemeral_public_key)
+        .map_err(|e| P2PError::DecryptionFailed(format!("Invalid ephemeral key hex: {}", e)))?
+        .try_into()
+        .map_err(|_| P2PError::DecryptionFailed("Invalid ephemeral key length".to_string()))?;
+    let ephemeral_public = X25519PublicKey::from(ephemeral_bytes);
+
+    // Perform X25519 key exchange
+    let shared_secret = validator_x25519.diffie_hellman(&ephemeral_public);
+
+    // Derive decryption key
+    let validator_x25519_public = X25519PublicKey::from(&validator_x25519);
+    let mut hasher = Sha256::new();
+    hasher.update(b"term-challenge-api-key-encryption");
+    hasher.update(shared_secret.as_bytes());
+    hasher.update(ephemeral_bytes);
+    hasher.update(validator_x25519_public.as_bytes());
+    let decryption_key = hasher.finalize();
+
+    // Parse nonce
+    let nonce_bytes: [u8; NONCE_SIZE] = hex::decode(&encrypted.nonce)
+        .map_err(|e| P2PError::DecryptionFailed(format!("Invalid nonce hex: {}", e)))?
+        .try_into()
+        .map_err(|_| P2PError::DecryptionFailed("Invalid nonce size".to_string()))?;
+    let nonce = *Nonce::from_slice(&nonce_bytes);
+
+    // Parse ciphertext
+    let ciphertext = hex::decode(&encrypted.ciphertext)
+        .map_err(|e| P2PError::DecryptionFailed(format!("Invalid ciphertext hex: {}", e)))?;
+
+    // Decrypt with ChaCha20-Poly1305
+    let cipher = ChaCha20Poly1305::new_from_slice(&decryption_key)
+        .map_err(|e| P2PError::DecryptionFailed(format!("Cipher init failed: {}", e)))?;
+
+    let plaintext = cipher
+        .decrypt(&nonce, ciphertext.as_ref())
+        .map_err(|_| P2PError::DecryptionFailed("Authentication failed".to_string()))?;
+
+    String::from_utf8(plaintext)
+        .map_err(|e| P2PError::DecryptionFailed(format!("Invalid UTF-8: {}", e)))
 }
 
 /// Helper to create a signed P2P message

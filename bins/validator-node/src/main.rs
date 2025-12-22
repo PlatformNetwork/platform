@@ -8,8 +8,8 @@ use clap::Parser;
 use distributed_db::{ConsensusStatus, DBSyncEvent, DBSyncManager, DBSyncMessage, DistributedDB};
 use parking_lot::RwLock;
 use platform_bittensor::{
-    signer_from_seed, BittensorClient, BlockSync, BlockSyncConfig, BlockSyncEvent, ExtrinsicWait,
-    Subtensor,
+    signer_from_seed, sync_metagraph, BittensorClient, BlockSync, BlockSyncConfig, BlockSyncEvent,
+    ExtrinsicWait, Subtensor,
 };
 use platform_challenge_runtime::{ChallengeRuntime, RuntimeConfig, RuntimeEvent};
 use platform_consensus::PBFTEngine;
@@ -727,6 +727,80 @@ async fn main() -> Result<()> {
                         warn!("Failed to create block sync client: {}", e);
                     }
                 }
+
+                // Initial metagraph sync to populate validators from Bittensor
+                // IMPORTANT: Must complete before accepting peer connections to validate their stake
+                info!("Waiting for metagraph sync to load validators (netuid={})...", args.netuid);
+                
+                let max_retries = 3;
+                let mut sync_success = false;
+                
+                for attempt in 1..=max_retries {
+                    info!("Metagraph sync attempt {}/{}...", attempt, max_retries);
+                    
+                    match BittensorClient::new(&args.subtensor_endpoint).await {
+                        Ok(metagraph_client) => {
+                            match sync_metagraph(&metagraph_client, args.netuid).await {
+                                Ok(metagraph) => {
+                                    let mut added = 0;
+                                    let mut state = chain_state.write();
+                                    
+                                    for neuron in metagraph.neurons.values() {
+                                        // Convert AccountId32 hotkey to our Hotkey type
+                                        let hotkey_bytes: &[u8; 32] = neuron.hotkey.as_ref();
+                                        let hotkey = Hotkey(*hotkey_bytes);
+                                        
+                                        // Get stake (convert from u128 to u64, saturating)
+                                        let stake_rao = neuron.stake.min(u64::MAX as u128) as u64;
+                                        
+                                        // Skip if below minimum stake
+                                        if stake_rao < MIN_STAKE_RAO {
+                                            continue;
+                                        }
+                                        
+                                        // Add validator if not already present
+                                        if state.get_validator(&hotkey).is_none() {
+                                            let info = ValidatorInfo::new(hotkey.clone(), Stake::new(stake_rao));
+                                            if state.add_validator(info).is_ok() {
+                                                added += 1;
+                                            }
+                                        } else if let Some(v) = state.validators.get_mut(&hotkey) {
+                                            // Update stake for existing validator
+                                            v.stake = Stake::new(stake_rao);
+                                        }
+                                        
+                                        // Cache stake in protection for quick validation
+                                        protection.validate_stake(&hotkey.to_hex(), stake_rao);
+                                    }
+                                    
+                                    info!("Metagraph sync complete: {} neurons, {} validators with sufficient stake (min {} TAO)", 
+                                        metagraph.n, added, MIN_STAKE_TAO);
+                                    info!("Validator identity verification ready - will accept messages from {} known validators", 
+                                        state.validators.len());
+                                    sync_success = true;
+                                    break;
+                                }
+                                Err(e) => {
+                                    warn!("Metagraph sync attempt {} failed: {}", attempt, e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to connect for metagraph sync (attempt {}): {}", attempt, e);
+                        }
+                    }
+                    
+                    if attempt < max_retries {
+                        info!("Retrying metagraph sync in 5 seconds...");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+                
+                if !sync_success {
+                    warn!("CRITICAL: Metagraph sync failed after {} attempts!", max_retries);
+                    warn!("Validator will only recognize itself and sudo. Other validators may be rejected.");
+                    warn!("Periodic sync will retry every 10 minutes.");
+                }
             }
             Err(e) => {
                 warn!("Failed to connect to Subtensor: {} (continuing without)", e);
@@ -1173,6 +1247,53 @@ async fn main() -> Result<()> {
                                             msg_value.get("message"),
                                             msg_value.get("target").and_then(|t| t.as_str()),
                                         ) {
+                                            // Check if this is a DecryptApiKeyRequest - handle locally
+                                            if let Ok(platform_challenge_sdk::ChallengeP2PMessage::DecryptApiKeyRequest(req)) = 
+                                                serde_json::from_value::<platform_challenge_sdk::ChallengeP2PMessage>(message.clone()) {
+                                                    // Decrypt the API key locally and send response back to container
+                                                    let response = match platform_challenge_sdk::decrypt_api_key(
+                                                        &req.encrypted_key,
+                                                        &keypair_for_outbox.seed(),
+                                                    ) {
+                                                        Ok(api_key) => {
+                                                            info!("Decrypted API key for agent {} (request {})", &req.agent_hash[..16.min(req.agent_hash.len())], &req.request_id[..8]);
+                                                            platform_challenge_sdk::DecryptApiKeyResponse {
+                                                                challenge_id: req.challenge_id.clone(),
+                                                                agent_hash: req.agent_hash.clone(),
+                                                                request_id: req.request_id.clone(),
+                                                                success: true,
+                                                                api_key: Some(api_key),
+                                                                error: None,
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            warn!("Failed to decrypt API key for agent {}: {}", &req.agent_hash[..16.min(req.agent_hash.len())], e);
+                                                            platform_challenge_sdk::DecryptApiKeyResponse {
+                                                                challenge_id: req.challenge_id.clone(),
+                                                                agent_hash: req.agent_hash.clone(),
+                                                                request_id: req.request_id.clone(),
+                                                                success: false,
+                                                                api_key: None,
+                                                                error: Some(e.to_string()),
+                                                            }
+                                                        }
+                                                    };
+
+                                                    // Send response back to container via P2P message endpoint
+                                                    let p2p_response = platform_challenge_sdk::ChallengeP2PMessage::DecryptApiKeyResponse(response);
+                                                    let p2p_endpoint = format!("http://challenge-{}:8080/p2p/message", container_name);
+                                                    let req_body = serde_json::json!({
+                                                        "from_hotkey": keypair_for_outbox.hotkey().to_hex(),
+                                                        "message": p2p_response
+                                                    });
+
+                                                    if let Err(e) = client.post(&p2p_endpoint).json(&req_body).send().await {
+                                                        debug!("Failed to send decrypt response to container: {}", e);
+                                                    }
+                                                    continue; // Don't broadcast this message
+                                                }
+                                            }
+
                                             // Create ChallengeNetworkMessage to broadcast
                                             let challenge_msg = ChallengeNetworkMessage {
                                                 challenge_id: config.name.clone(),
@@ -1239,7 +1360,7 @@ async fn main() -> Result<()> {
     let challenge_routes_for_p2p = rpc_handler.as_ref().map(|h| h.challenge_routes.clone());
     // Get distributed_db for P2P message handling
     let db_for_p2p = Some(distributed_db.clone());
-    let _storage = Arc::new(storage); // Keep reference but don't persist state
+    let storage = Arc::new(storage); // Keep reference for state persistence
     let runtime_for_blocks = challenge_runtime.clone();
     let subtensor_clone = subtensor.clone();
     let subtensor_signer_clone = subtensor_signer.clone();
@@ -1248,6 +1369,9 @@ async fn main() -> Result<()> {
     let mut block_counter = 0u64;
     let use_bittensor_blocks = block_sync_rx.is_some();
     let netuid = args.netuid;
+    let subtensor_endpoint = args.subtensor_endpoint.clone();
+    let mut last_metagraph_sync = std::time::Instant::now();
+    let metagraph_sync_interval = std::time::Duration::from_secs(600); // Sync metagraph every 10 minutes
 
     // Fetch mechanism count from Bittensor and submit initial weights
     // This prevents vtrust penalty from not having set weights yet
@@ -1765,14 +1889,77 @@ async fn main() -> Result<()> {
                         error!("Timeout check error: {}", e);
                     }
 
-                    // Note: State is not persisted locally - it comes from Bittensor chain
-                    // Challenges and weights are managed via SudoAction and Bittensor
+                    // Persist state periodically (challenge_configs, etc.)
+                    {
+                        let state = chain_state.read();
+                        if let Err(e) = storage.save_state(&state) {
+                            warn!("Failed to persist state: {}", e);
+                        }
+                    }
 
                     // Cleanup expired protection entries
                     protection.cleanup();
 
                     // Cleanup stale hotkey connections (no heartbeat for 5 minutes)
                     protection.cleanup_stale_hotkeys(std::time::Duration::from_secs(300));
+
+                    // Periodic metagraph sync to update validators from Bittensor
+                    if use_bittensor_blocks && last_metagraph_sync.elapsed() >= metagraph_sync_interval {
+                        last_metagraph_sync = std::time::Instant::now();
+                        let endpoint = subtensor_endpoint.clone();
+                        let chain_state_for_sync = chain_state.clone();
+                        let protection_for_sync = protection.clone();
+                        
+                        tokio::spawn(async move {
+                            match BittensorClient::new(&endpoint).await {
+                                Ok(client) => {
+                                    match sync_metagraph(&client, netuid).await {
+                                        Ok(metagraph) => {
+                                            let mut added = 0;
+                                            let mut updated = 0;
+                                            let mut state = chain_state_for_sync.write();
+                                            
+                                            for neuron in metagraph.neurons.values() {
+                                                let hotkey_bytes: &[u8; 32] = neuron.hotkey.as_ref();
+                                                let hotkey = Hotkey(*hotkey_bytes);
+                                                let stake_rao = neuron.stake.min(u64::MAX as u128) as u64;
+                                                
+                                                if stake_rao < MIN_STAKE_RAO {
+                                                    continue;
+                                                }
+                                                
+                                                if state.get_validator(&hotkey).is_none() {
+                                                    let info = ValidatorInfo::new(hotkey.clone(), Stake::new(stake_rao));
+                                                    if state.add_validator(info).is_ok() {
+                                                        added += 1;
+                                                    }
+                                                } else if let Some(v) = state.validators.get_mut(&hotkey) {
+                                                    if v.stake.0 != stake_rao {
+                                                        v.stake = Stake::new(stake_rao);
+                                                        updated += 1;
+                                                    }
+                                                }
+                                                
+                                                // Update stake cache
+                                                protection_for_sync.validate_stake(&hotkey.to_hex(), stake_rao);
+                                            }
+                                            
+                                            if added > 0 || updated > 0 {
+                                                info!("Metagraph periodic sync: {} added, {} updated (total: {} validators)", 
+                                                    added, updated, state.validators.len());
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("Periodic metagraph sync failed: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!("Failed to connect for metagraph sync: {}", e);
+                                }
+                            }
+                        });
+                    }
 
                     // Log protection stats periodically
                     let prot_stats = protection.stats();
@@ -2047,11 +2234,12 @@ async fn handle_message(
             }
         }
         NetworkMessage::Proposal(proposal) => {
-            // Check if this is a Sudo AddChallenge proposal and auto-register routes
+            // Check if this is a Sudo AddChallenge proposal and handle it
             if let platform_core::ProposalAction::Sudo(platform_core::SudoAction::AddChallenge {
                 ref config,
             }) = proposal.action
             {
+                // Auto-register routes
                 if let Some(routes_map) = challenge_routes {
                     use platform_challenge_sdk::ChallengeRoute;
                     let default_routes = vec![
@@ -2069,6 +2257,16 @@ async fn handle_message(
                         "Auto-registered routes for challenge '{}' (from P2P Proposal)",
                         config.name
                     );
+                }
+
+                // Start container via orchestrator (same as SudoAction handler)
+                if let Some(orchestrator) = challenge_orchestrator {
+                    info!("Starting challenge container '{}' from P2P Proposal", config.name);
+                    if let Err(e) = orchestrator.add_challenge(config.clone()).await {
+                        error!("Failed to start challenge container from P2P: {}", e);
+                    } else {
+                        info!("Challenge container '{}' started from P2P", config.name);
+                    }
                 }
             }
 
