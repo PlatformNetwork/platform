@@ -178,7 +178,15 @@ impl DockerClient {
 
     /// Check if a Docker image is from an allowed registry
     /// SECURITY: This prevents pulling/running malicious containers
+    /// In DEVELOPMENT_MODE, all local images are allowed for testing
     fn is_image_allowed(image: &str) -> bool {
+        // In development mode, allow any image (for local testing)
+        if std::env::var("DEVELOPMENT_MODE")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false)
+        {
+            return true;
+        }
         let image_lower = image.to_lowercase();
         ALLOWED_DOCKER_PREFIXES
             .iter()
@@ -266,8 +274,16 @@ impl DockerClient {
         // Ensure network exists
         self.ensure_network().await?;
 
-        // Generate container name
-        let container_name = format!("challenge-{}", config.name.to_lowercase().replace(' ', "-"));
+        // Generate container name with validator identifier for dev mode
+        // In dev mode with shared Docker socket, each validator needs unique container names
+        let validator_suffix = std::env::var("VALIDATOR_NAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| format!("{:x}", std::process::id()));
+        let container_name = format!(
+            "challenge-{}-{}",
+            config.name.to_lowercase().replace(' ', "-"),
+            validator_suffix.to_lowercase().replace("-", "").replace(" ", "")
+        );
 
         // Remove existing container if any
         let _ = self.remove_container(&container_name).await;
@@ -288,6 +304,13 @@ impl DockerClient {
             port_bindings: Some(port_bindings),
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
             memory: Some((config.memory_mb * 1024 * 1024) as i64),
+            // Mount Docker socket for challenge containers to run agent evaluations
+            // Mount tasks directory both to internal path AND to host path for Docker-in-Docker
+            binds: Some(vec![
+                "/var/run/docker.sock:/var/run/docker.sock:rw".to_string(),
+                "/tmp/platform-tasks:/app/data/tasks:rw".to_string(),  // Override internal tasks
+                "/tmp/platform-tasks:/tmp/platform-tasks:rw".to_string(),  // For DinD path mapping
+            ]),
             ..Default::default()
         };
 
@@ -303,9 +326,21 @@ impl DockerClient {
         }
 
         // Build environment variables
+        // Note: Setting env overrides image ENV, so we include common vars
         let mut env: Vec<String> = Vec::new();
         env.push(format!("CHALLENGE_ID={}", config.challenge_id));
         env.push(format!("MECHANISM_ID={}", config.mechanism_id));
+        // Pass through important environment variables from image defaults
+        env.push("TASKS_DIR=/app/data/tasks".to_string());
+        env.push("DATA_DIR=/data".to_string());
+        env.push("RUST_LOG=info,term_challenge=debug".to_string());
+        // For Docker-in-Docker: tasks are at /host-tasks on host (we mount below)
+        // The HOST_TASKS_DIR tells the challenge how to map container paths to host paths
+        env.push("HOST_TASKS_DIR=/tmp/platform-tasks".to_string());
+        // Pass through DEVELOPMENT_MODE for local image support
+        if let Ok(dev_mode) = std::env::var("DEVELOPMENT_MODE") {
+            env.push(format!("DEVELOPMENT_MODE={}", dev_mode));
+        }
 
         // Create container config
         let container_config = Config {

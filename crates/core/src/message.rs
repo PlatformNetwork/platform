@@ -329,10 +329,18 @@ pub enum SudoAction {
 
 /// Allowed Docker image prefixes (whitelist)
 /// Only images from these registries are allowed to prevent malicious containers
+/// In DEVELOPMENT_MODE, local images are also allowed
 pub const ALLOWED_DOCKER_PREFIXES: &[&str] = &[
     "ghcr.io/platformnetwork/", // Official Platform Network images
     "ghcr.io/PlatformNetwork/", // Case variant
 ];
+
+/// Check if development mode is enabled (allows local Docker images)
+pub fn is_development_mode() -> bool {
+    std::env::var("DEVELOPMENT_MODE")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+}
 
 /// Challenge container configuration (for Docker-based challenges)
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -386,7 +394,12 @@ impl ChallengeContainerConfig {
 
     /// Validate the Docker image is from an allowed registry
     /// Returns true if the image is whitelisted, false otherwise
+    /// In DEVELOPMENT_MODE, all local images are allowed
     pub fn is_docker_image_allowed(&self) -> bool {
+        // In development mode, allow any image (for local testing)
+        if is_development_mode() {
+            return true;
+        }
         let image_lower = self.docker_image.to_lowercase();
         ALLOWED_DOCKER_PREFIXES
             .iter()
