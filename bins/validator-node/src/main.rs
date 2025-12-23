@@ -498,9 +498,17 @@ async fn main() -> Result<()> {
                 .rpc_handler()
                 .register_challenge_routes(&challenge_id, routes);
 
-            // Store endpoint for this challenge (container name derived from challenge name)
-            let container_name = config.name.to_lowercase().replace(' ', "-");
-            let endpoint = format!("http://challenge-{}:8080", container_name);
+            // Store endpoint for this challenge (container name derived from challenge name + validator suffix)
+            // Must match logic in challenge-orchestrator/docker.rs
+            let validator_suffix = std::env::var("VALIDATOR_NAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .unwrap_or_else(|_| format!("{:x}", std::process::id()));
+            let container_name = format!(
+                "challenge-{}-{}",
+                config.name.to_lowercase().replace(' ', "-"),
+                validator_suffix.to_lowercase().replace('-', "").replace(' ', "")
+            );
+            let endpoint = format!("http://{}:8080", container_name);
             challenge_endpoints.write().insert(challenge_id, endpoint);
         }
 
@@ -538,8 +546,16 @@ async fn main() -> Result<()> {
 
                         match config {
                             Some(cfg) => {
-                                let container_name = cfg.name.to_lowercase().replace(' ', "-");
-                                format!("http://challenge-{}:8080", container_name)
+                                // Must match logic in challenge-orchestrator/docker.rs
+                                let validator_suffix = std::env::var("VALIDATOR_NAME")
+                                    .or_else(|_| std::env::var("HOSTNAME"))
+                                    .unwrap_or_else(|_| format!("{:x}", std::process::id()));
+                                let container_name = format!(
+                                    "challenge-{}-{}",
+                                    cfg.name.to_lowercase().replace(' ', "-"),
+                                    validator_suffix.to_lowercase().replace('-', "").replace(' ', "")
+                                );
+                                format!("http://{}:8080", container_name)
                             }
                             None => {
                                 return RouteResponse::new(
