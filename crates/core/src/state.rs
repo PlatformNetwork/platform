@@ -59,6 +59,11 @@ pub struct ChainState {
 
     /// Last update timestamp
     pub last_updated: chrono::DateTime<chrono::Utc>,
+
+    /// All registered hotkeys from metagraph (miners + validators)
+    /// Updated during metagraph sync, used for submission verification
+    #[serde(default)]
+    pub registered_hotkeys: std::collections::HashSet<Hotkey>,
 }
 
 impl ChainState {
@@ -78,6 +83,7 @@ impl ChainState {
             pending_jobs: Vec::new(),
             state_hash: [0u8; 32],
             last_updated: chrono::Utc::now(),
+            registered_hotkeys: std::collections::HashSet::new(),
         };
         state.update_hash();
         state

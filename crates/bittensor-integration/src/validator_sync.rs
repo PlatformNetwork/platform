@@ -88,11 +88,17 @@ impl ValidatorSync {
             .await
             .map_err(|e| SyncError::ClientError(e.to_string()))?;
 
-        // Parse validators from metagraph
-        let bt_validators = self.parse_metagraph(metagraph)?;
+        // Parse validators and all hotkeys from metagraph
+        let (bt_validators, all_hotkeys) = self.parse_metagraph(metagraph)?;
         drop(client); // Release lock
 
-        // Update state
+        // Update registered hotkeys in state (all miners + validators)
+        {
+            let mut state_guard = state.write();
+            state_guard.registered_hotkeys = all_hotkeys;
+        }
+
+        // Update state with validators
         let result = self.update_state(state, bt_validators, banned_validators);
 
         // Update last sync block
@@ -106,15 +112,22 @@ impl ValidatorSync {
         Ok(result)
     }
 
-    /// Parse metagraph data to extract validators
-    fn parse_metagraph(&self, metagraph: &Metagraph) -> Result<Vec<MetagraphValidator>, SyncError> {
+    /// Parse metagraph data to extract validators and all registered hotkeys
+    fn parse_metagraph(
+        &self,
+        metagraph: &Metagraph,
+    ) -> Result<(Vec<MetagraphValidator>, std::collections::HashSet<Hotkey>), SyncError> {
         let mut validators = Vec::new();
+        let mut all_hotkeys = std::collections::HashSet::new();
 
         // Parse neurons from metagraph
         for (uid, neuron) in &metagraph.neurons {
             // Convert AccountId32 hotkey to our Hotkey type
             let hotkey_bytes: &[u8; 32] = neuron.hotkey.as_ref();
             let hotkey = Hotkey(*hotkey_bytes);
+
+            // Add ALL hotkeys to the registered set (miners + validators)
+            all_hotkeys.insert(hotkey.clone());
 
             // Get effective stake: alpha stake + root stake (TAO on root subnet)
             // This matches how Bittensor calculates validator weight
@@ -123,32 +136,34 @@ impl ValidatorSync {
             let effective_stake = alpha_stake.saturating_add(root_stake);
             let stake = effective_stake.min(u64::MAX as u128) as u64;
 
-            // Skip if below minimum stake
-            if stake < self.min_stake {
-                continue;
+            // Only add to validators if above minimum stake
+            if stake >= self.min_stake {
+                // Extract normalized scores (u16 -> f64, divide by u16::MAX)
+                let incentive = neuron.incentive / u16::MAX as f64;
+                let trust = neuron.trust / u16::MAX as f64;
+                let consensus = neuron.consensus / u16::MAX as f64;
+
+                // Check if active (has stake)
+                let active = stake > 0;
+
+                validators.push(MetagraphValidator {
+                    hotkey,
+                    uid: *uid as u16,
+                    stake,
+                    active,
+                    incentive,
+                    trust,
+                    consensus,
+                });
             }
-
-            // Extract normalized scores (u16 -> f64, divide by u16::MAX)
-            let incentive = neuron.incentive / u16::MAX as f64;
-            let trust = neuron.trust / u16::MAX as f64;
-            let consensus = neuron.consensus / u16::MAX as f64;
-
-            // Check if active (has stake)
-            let active = stake > 0;
-
-            validators.push(MetagraphValidator {
-                hotkey,
-                uid: *uid as u16,
-                stake,
-                active,
-                incentive,
-                trust,
-                consensus,
-            });
         }
 
-        debug!("Parsed {} validators from metagraph", validators.len());
-        Ok(validators)
+        debug!(
+            "Parsed {} validators and {} total hotkeys from metagraph",
+            validators.len(),
+            all_hotkeys.len()
+        );
+        Ok((validators, all_hotkeys))
     }
 
     /// Update chain state with validators from Bittensor

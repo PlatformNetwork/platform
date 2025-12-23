@@ -349,6 +349,10 @@ impl RpcHandler {
             ["validator", "get"] => self.validator_get(req.id, req.params),
             ["validator", "count"] => self.validator_count(req.id),
 
+            // Metagraph namespace
+            ["metagraph", "hotkeys"] => self.metagraph_hotkeys(req.id),
+            ["metagraph", "isRegistered"] => self.metagraph_is_registered(req.id, req.params),
+
             // Challenge namespace
             ["challenge", "list"] => self.challenge_list(req.id, req.params),
             ["challenge", "get"] => self.challenge_get(req.id, req.params),
@@ -889,6 +893,58 @@ impl RpcHandler {
     fn validator_count(&self, id: Value) -> JsonRpcResponse {
         let chain = self.chain_state.read();
         JsonRpcResponse::result(id, json!(chain.validators.len()))
+    }
+
+    // ==================== Metagraph Namespace ====================
+
+    /// Get all registered hotkeys from metagraph (miners + validators)
+    fn metagraph_hotkeys(&self, id: Value) -> JsonRpcResponse {
+        let chain = self.chain_state.read();
+        let hotkeys: Vec<String> = chain
+            .registered_hotkeys
+            .iter()
+            .map(|h| h.to_hex())
+            .collect();
+
+        JsonRpcResponse::result(
+            id,
+            json!({
+                "count": hotkeys.len(),
+                "hotkeys": hotkeys,
+            }),
+        )
+    }
+
+    /// Check if a hotkey is registered in the metagraph
+    fn metagraph_is_registered(&self, id: Value, params: Value) -> JsonRpcResponse {
+        let hotkey = match self.get_param_str(&params, 0, "hotkey") {
+            Some(h) => h,
+            None => {
+                return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing 'hotkey' parameter")
+            }
+        };
+
+        let hk = match platform_core::Hotkey::from_hex(&hotkey) {
+            Some(h) => h,
+            None => {
+                // Try SS58 format
+                match platform_core::Hotkey::from_ss58(&hotkey) {
+                    Some(h) => h,
+                    None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Invalid hotkey format"),
+                }
+            }
+        };
+
+        let chain = self.chain_state.read();
+        let is_registered = chain.registered_hotkeys.contains(&hk);
+
+        JsonRpcResponse::result(
+            id,
+            json!({
+                "hotkey": hotkey,
+                "isRegistered": is_registered,
+            }),
+        )
     }
 
     // ==================== Challenge Namespace ====================
