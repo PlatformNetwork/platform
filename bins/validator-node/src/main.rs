@@ -2493,16 +2493,64 @@ async fn handle_message(
                                 if let Some(instance) =
                                     orchestrator.get_challenge(&config.challenge_id)
                                 {
+                                    let endpoint = instance.endpoint.clone();
                                     let mut eps = endpoints.write();
                                     eps.insert(
                                         config.challenge_id.to_string(),
-                                        instance.endpoint.clone(),
+                                        endpoint.clone(),
                                     );
-                                    eps.insert(config.name.clone(), instance.endpoint.clone());
+                                    eps.insert(config.name.clone(), endpoint.clone());
                                     info!(
                                         "Updated endpoint for challenge '{}': {}",
-                                        config.name, instance.endpoint
+                                        config.name, endpoint
                                     );
+
+                                    // Sync validators to the challenge container
+                                    let validators: Vec<_> = chain_state
+                                        .read()
+                                        .validators
+                                        .iter()
+                                        .map(|(hotkey, info)| {
+                                            serde_json::json!({
+                                                "hotkey": hotkey,
+                                                "stake": info.stake.0,
+                                                "endpoint": ""
+                                            })
+                                        })
+                                        .collect();
+
+                                    if !validators.is_empty() {
+                                        let sync_url = format!("{}/p2p/validators", endpoint);
+                                        let client = reqwest::Client::new();
+                                        match client
+                                            .post(&sync_url)
+                                            .json(&serde_json::json!({ "validators": validators }))
+                                            .timeout(std::time::Duration::from_secs(5))
+                                            .send()
+                                            .await
+                                        {
+                                            Ok(resp) if resp.status().is_success() => {
+                                                info!(
+                                                    "Synced {} validators to challenge '{}'",
+                                                    validators.len(),
+                                                    config.name
+                                                );
+                                            }
+                                            Ok(resp) => {
+                                                warn!(
+                                                    "Failed to sync validators to challenge '{}': {}",
+                                                    config.name,
+                                                    resp.status()
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "Failed to sync validators to challenge '{}': {}",
+                                                    config.name, e
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2650,16 +2698,64 @@ async fn handle_message(
                         if let Some(endpoints) = challenge_endpoints {
                             if let Some(instance) = orchestrator.get_challenge(&config.challenge_id)
                             {
+                                let endpoint = instance.endpoint.clone();
                                 let mut eps = endpoints.write();
                                 eps.insert(
                                     config.challenge_id.to_string(),
-                                    instance.endpoint.clone(),
+                                    endpoint.clone(),
                                 );
-                                eps.insert(config.name.clone(), instance.endpoint.clone());
+                                eps.insert(config.name.clone(), endpoint.clone());
                                 info!(
                                     "Updated endpoint for challenge '{}' (P2P): {}",
-                                    config.name, instance.endpoint
+                                    config.name, endpoint
                                 );
+
+                                // Sync validators to the challenge container
+                                let validators: Vec<_> = chain_state
+                                    .read()
+                                    .validators
+                                    .iter()
+                                    .map(|(hotkey, info)| {
+                                        serde_json::json!({
+                                            "hotkey": hotkey,
+                                            "stake": info.stake.0,
+                                            "endpoint": ""
+                                        })
+                                    })
+                                    .collect();
+
+                                if !validators.is_empty() {
+                                    let sync_url = format!("{}/p2p/validators", endpoint);
+                                    let client = reqwest::Client::new();
+                                    match client
+                                        .post(&sync_url)
+                                        .json(&serde_json::json!({ "validators": validators }))
+                                        .timeout(std::time::Duration::from_secs(5))
+                                        .send()
+                                        .await
+                                    {
+                                        Ok(resp) if resp.status().is_success() => {
+                                            info!(
+                                                "Synced {} validators to challenge '{}' (P2P)",
+                                                validators.len(),
+                                                config.name
+                                            );
+                                        }
+                                        Ok(resp) => {
+                                            warn!(
+                                                "Failed to sync validators to challenge '{}': {}",
+                                                config.name,
+                                                resp.status()
+                                            );
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                "Failed to sync validators to challenge '{}': {}",
+                                                config.name, e
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
