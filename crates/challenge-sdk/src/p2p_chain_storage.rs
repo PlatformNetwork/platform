@@ -1066,8 +1066,9 @@ mod tests {
 
         let mut state = ProposalState::new(proposal.clone());
         let total_stake = 3_000_000_000_000u64; // 3000 TAO
+        // Required: 3000 * 0.67 = 2010 TAO
 
-        // Add first vote (1000 TAO) - not enough
+        // Add first vote (1000 TAO) - not enough (1000 < 2010)
         let vote1 = ProposalVote::accept(
             proposal.id,
             "validator1".to_string(),
@@ -1077,11 +1078,11 @@ mod tests {
         state.add_vote(vote1);
         assert!(state.check_consensus(total_stake, 101).is_none());
 
-        // Add second vote (1000 TAO) - now 2000/3000 = 67%
+        // Add second vote (1100 TAO) - now 2100/3000 = 70% > 67%
         let vote2 = ProposalVote::accept(
             proposal.id,
             "validator2".to_string(),
-            1_000_000_000_000,
+            1_100_000_000_000,
             102,
         );
         state.add_vote(vote2);
