@@ -35,15 +35,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          shared-key: "platform-build"
 
       - name: Build
         run: cargo build --release
-
-      - name: Cleanup before cache
-        run: |
-          rm -rf target/release/.fingerprint target/release/build target/release/deps target/release/examples target/release/incremental
-          find target -name "*.d" -delete
-          df -h
 
   test:
     name: Test
@@ -70,7 +65,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          cache-on-failure: true
+          shared-key: "platform-build"
           save-if: false
 
       - name: Run tests with coverage
@@ -117,7 +112,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          cache-on-failure: true
+          shared-key: "platform-build"
           save-if: false
 
       - name: Run clippy
@@ -196,6 +191,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: "platform-build"
           save-if: false
 
       - name: Build release binaries
