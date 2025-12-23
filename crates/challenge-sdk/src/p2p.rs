@@ -39,6 +39,15 @@ pub enum ChallengeP2PMessage {
 
     /// Response with decrypted API key
     DecryptApiKeyResponse(DecryptApiKeyResponse),
+
+    /// Real-time evaluation progress update (broadcast during evaluation)
+    ProgressUpdate(EvaluationProgressMessage),
+
+    /// Request current progress for an agent from all validators
+    RequestProgress(RequestProgressMessage),
+
+    /// Response with progress from a validator
+    ProgressResponse(ProgressResponseMessage),
 }
 
 /// Evaluation result message
@@ -133,6 +142,72 @@ pub struct DecryptApiKeyResponse {
     pub api_key: Option<String>,
     /// Error message (only if !success)
     pub error: Option<String>,
+}
+
+/// Real-time evaluation progress update
+/// Broadcast during evaluation so all validators know current state
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvaluationProgressMessage {
+    /// Challenge ID
+    pub challenge_id: String,
+    /// Agent hash being evaluated
+    pub agent_hash: String,
+    /// Validator performing the evaluation
+    pub validator_hotkey: String,
+    /// Validator stake
+    pub validator_stake: u64,
+    /// Evaluation ID (unique per evaluation run)
+    pub evaluation_id: String,
+    /// Current status: "pending", "running", "completed", "failed"
+    pub status: String,
+    /// Total tasks in evaluation
+    pub total_tasks: u32,
+    /// Number of completed tasks
+    pub completed_tasks: u32,
+    /// Number of passed tasks
+    pub passed_tasks: u32,
+    /// Number of failed tasks
+    pub failed_tasks: u32,
+    /// Current score (running average)
+    pub current_score: f64,
+    /// Timestamp (unix seconds)
+    pub timestamp: u64,
+    /// Final score (only set when status = "completed")
+    pub final_score: Option<f64>,
+    /// Error message (only set when status = "failed")
+    pub error: Option<String>,
+}
+
+/// Request progress for an agent from all validators
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RequestProgressMessage {
+    /// Challenge ID
+    pub challenge_id: String,
+    /// Agent hash to get progress for
+    pub agent_hash: String,
+    /// Requesting validator
+    pub requester: Hotkey,
+    /// Request ID for correlation
+    pub request_id: String,
+}
+
+/// Response with validator's progress for an agent
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProgressResponseMessage {
+    /// Challenge ID
+    pub challenge_id: String,
+    /// Agent hash
+    pub agent_hash: String,
+    /// Request ID for correlation
+    pub request_id: String,
+    /// Validator hotkey
+    pub validator_hotkey: String,
+    /// Validator stake
+    pub validator_stake: u64,
+    /// Current progress (None if not evaluating this agent)
+    pub progress: Option<EvaluationProgressMessage>,
+    /// Final result (if completed)
+    pub final_result: Option<ValidatorEvaluation>,
 }
 
 /// Handler for P2P messages in a challenge
