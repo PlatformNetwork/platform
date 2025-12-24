@@ -256,7 +256,7 @@ impl ChallengeOrchestrator {
     ///
     /// Called periodically to prevent Docker from accumulating orphaned containers.
     pub async fn cleanup_stale_task_containers(&self) -> anyhow::Result<CleanupResult> {
-        // Clean up term-challenge task containers older than 30 minutes
+        // Clean up term-challenge task containers older than 2 hours
         // Exclude:
         // - challenge-* (main challenge containers managed by orchestrator)
         // - platform-* (validator, watchtower)
@@ -264,7 +264,7 @@ impl ChallengeOrchestrator {
             .docker
             .cleanup_stale_containers(
                 "term-challenge-",
-                30, // 30 minutes old
+                120, // 2 hours old
                 &["challenge-term-challenge", "platform-"],
             )
             .await?;
