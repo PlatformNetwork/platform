@@ -425,11 +425,9 @@ impl NetworkNode {
                     peer_id,
                     topic.as_str()
                 );
-                // Now that the peer has subscribed, add them as explicit peer to ensure mesh membership
-                self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .add_explicit_peer(&peer_id);
+                // NOTE: Do NOT call add_explicit_peer here!
+                // Explicit peers become "direct peers" that bypass the mesh entirely.
+                // Let gossipsub handle mesh formation automatically via GRAFT/PRUNE.
             }
             MiniChainBehaviourEvent::Gossipsub(gossipsub::Event::Unsubscribed { peer_id, topic }) => {
                 info!(
@@ -449,20 +447,13 @@ impl NetworkNode {
             MiniChainBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
                 for (peer_id, addr) in list {
                     info!("mDNS discovered peer: {} at {}", peer_id, addr);
-                    self.swarm
-                        .behaviour_mut()
-                        .gossipsub
-                        .add_explicit_peer(&peer_id);
+                    // Just dial the peer - gossipsub will handle mesh formation
                     let _ = self.swarm.dial(addr);
                 }
             }
             MiniChainBehaviourEvent::Mdns(mdns::Event::Expired(list)) => {
                 for (peer_id, _) in list {
                     debug!("mDNS peer expired: {}", peer_id);
-                    self.swarm
-                        .behaviour_mut()
-                        .gossipsub
-                        .remove_explicit_peer(&peer_id);
                 }
             }
             MiniChainBehaviourEvent::RequestResponse(request_response::Event::Message {
@@ -510,9 +501,12 @@ impl NetworkNode {
                     })
                     .await;
 
-                // Note: Mesh membership is handled in Gossipsub::Event::Subscribed
-                // which fires when the peer subscribes to our topic via gossipsub protocol.
-                // add_explicit_peer is called there, not here, to avoid duplicate calls.
+                // NOTE: Do NOT call add_explicit_peer here!
+                // Explicit peers become "direct peers" that bypass the gossipsub mesh.
+                // The mesh should form automatically via the gossipsub protocol:
+                // 1. Connection established -> gossipsub protocol negotiated
+                // 2. SUBSCRIBE messages exchanged -> peers know each other's topics
+                // 3. GRAFT/PRUNE in heartbeats -> mesh forms naturally
 
                 // Also connect to other peers they know about through their observed addr
                 // This helps with peer discovery in small networks

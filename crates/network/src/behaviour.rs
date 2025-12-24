@@ -45,10 +45,10 @@ impl MiniChainBehaviour {
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(1))
             .validation_mode(ValidationMode::Strict)
-            .mesh_n(8) // Target mesh size (good for networks up to 64 nodes)
-            .mesh_n_low(2) // Minimum mesh size before adding peers
-            .mesh_n_high(16) // Maximum mesh size before pruning
-            .mesh_outbound_min(2) // Require outbound peers for proper bidirectional mesh
+            .mesh_n(6) // Target mesh size
+            .mesh_n_low(1) // Allow mesh with just 1 peer (important for small networks)
+            .mesh_n_high(12) // Maximum mesh size before pruning
+            .mesh_outbound_min(0) // No outbound requirement (bootnode has only inbound connections)
             .gossip_lazy(6) // Peers to gossip to outside mesh
             .gossip_factor(0.25) // Fraction of peers to gossip to
             .do_px() // Enable peer exchange on PRUNE for discovery
