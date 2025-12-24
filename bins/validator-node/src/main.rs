@@ -1695,13 +1695,18 @@ async fn run_validator() -> Result<()> {
                                     }
                                     for msg_value in messages {
                                         // Parse the outbox message
-                                        if let (Some(message), target) = (
-                                            msg_value.get("message"),
-                                            msg_value.get("target").and_then(|t| t.as_str()),
-                                        ) {
-                                            // Check if this is a DecryptApiKeyRequest - handle locally
-                                            if let Ok(platform_challenge_sdk::ChallengeP2PMessage::DecryptApiKeyRequest(req)) =
-                                                serde_json::from_value::<platform_challenge_sdk::ChallengeP2PMessage>(message.clone()) {
+                                        let message = match msg_value.get("message") {
+                                            Some(m) => m,
+                                            None => {
+                                                warn!("Outbox message missing 'message' field: {:?}", msg_value);
+                                                continue;
+                                            }
+                                        };
+                                        let target = msg_value.get("target").and_then(|t| t.as_str());
+                                        
+                                        // Check if this is a DecryptApiKeyRequest - handle locally
+                                        if let Ok(platform_challenge_sdk::ChallengeP2PMessage::DecryptApiKeyRequest(req)) =
+                                            serde_json::from_value::<platform_challenge_sdk::ChallengeP2PMessage>(message.clone()) {
                                                     // Decrypt the API key locally and send response back to container
                                                     // Use public key (hotkey bytes) - the encryption uses SHA256(domain || pubkey || salt)
                                                     let response = match platform_challenge_sdk::decrypt_api_key(
@@ -1756,43 +1761,39 @@ async fn run_validator() -> Result<()> {
                                                     .unwrap_or_default(),
                                             };
 
-                                            let network_msg =
-                                                NetworkMessage::ChallengeMessage(challenge_msg);
-                                            if let Ok(signed) = SignedNetworkMessage::new(
-                                                network_msg,
-                                                &keypair_for_outbox,
-                                            ) {
-                                                if let Some(ref target_hotkey) = target {
-                                                    // Targeted send: broadcast but log the intended target
-                                                    // All validators see the message for consensus, but the
-                                                    // payload may contain target info for selective processing
-                                                    debug!(
-                                                        "Broadcasting P2P message (target: {})",
-                                                        &target_hotkey[..16.min(target_hotkey.len())]
-                                                    );
-                                                    if let Err(e) = net_cmd_tx_for_outbox
-                                                        .send(NetworkCommand::Broadcast(signed))
-                                                        .await
-                                                    {
-                                                        debug!("Failed to broadcast targeted message: {}", e);
+                                        let network_msg =
+                                            NetworkMessage::ChallengeMessage(challenge_msg);
+                                        match SignedNetworkMessage::new(
+                                            network_msg,
+                                            &keypair_for_outbox,
+                                        ) {
+                                            Ok(signed) => {
+                                                let result = net_cmd_tx_for_outbox
+                                                    .send(NetworkCommand::Broadcast(signed))
+                                                    .await;
+                                                match result {
+                                                    Ok(_) => {
+                                                        info!(
+                                                            "Broadcast P2P message from challenge {} to network{}",
+                                                            config.name,
+                                                            target.map(|t| format!(" (target: {})", &t[..16.min(t.len())])).unwrap_or_default()
+                                                        );
                                                     }
-                                                } else {
-                                                    // Broadcast to all
-                                                    if let Err(e) = net_cmd_tx_for_outbox
-                                                        .send(NetworkCommand::Broadcast(signed))
-                                                        .await
-                                                    {
-                                                        debug!("Failed to broadcast outbox message: {}", e);
+                                                    Err(e) => {
+                                                        error!("Failed to send broadcast command: {}", e);
                                                     }
                                                 }
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to sign P2P message: {}", e);
                                             }
                                         }
                                     }
 
                                     let count = messages.len();
                                     if count > 0 {
-                                        debug!(
-                                            "Broadcast {} P2P messages from container '{}'",
+                                        info!(
+                                            "Processed {} P2P messages from container '{}'",
                                             count, config.name
                                         );
                                     }
