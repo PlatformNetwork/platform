@@ -158,6 +158,39 @@ impl DockerClient {
         anyhow::bail!("Not running in a Docker container or unable to determine container ID")
     }
 
+    /// Get a suitable suffix for container naming
+    /// Priority: VALIDATOR_NAME env var > detected container ID > short hash of hostname
+    fn get_validator_suffix() -> String {
+        // 1. Check for explicit VALIDATOR_NAME override
+        if let Ok(name) = std::env::var("VALIDATOR_NAME") {
+            if !name.is_empty() {
+                return name.to_lowercase().replace(['-', ' ', '_'], "");
+            }
+        }
+
+        // 2. Try to detect container ID (works when running in Docker)
+        if let Ok(container_id) = Self::get_container_id_static() {
+            // Container IDs are 12+ hex chars, use first 12
+            let suffix = if container_id.len() > 12 {
+                &container_id[..12]
+            } else {
+                &container_id
+            };
+            return suffix.to_lowercase();
+        }
+
+        // 3. Fall back to short hash of hostname (for non-Docker environments)
+        let hostname = std::env::var("HOSTNAME")
+            .unwrap_or_else(|_| format!("{:x}", std::process::id()));
+        
+        // Create a short hash of the hostname for uniqueness using std hash
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        hostname.hash(&mut hasher);
+        format!("{:012x}", hasher.finish()) // 12 hex chars
+    }
+
     /// Ensure the Docker network exists
     pub async fn ensure_network(&self) -> anyhow::Result<()> {
         let networks = self.docker.list_networks::<String>(None).await?;
@@ -384,18 +417,19 @@ impl DockerClient {
         // Ensure network exists
         self.ensure_network().await?;
 
-        // Generate container name with validator identifier for dev mode
-        // In dev mode with shared Docker socket, each validator needs unique container names
-        let validator_suffix = std::env::var("VALIDATOR_NAME")
-            .or_else(|_| std::env::var("HOSTNAME"))
-            .unwrap_or_else(|_| format!("{:x}", std::process::id()));
+        // Generate container name with validator identifier
+        // Use container ID if running in Docker, otherwise fall back to VALIDATOR_NAME or short hostname hash
+        let validator_suffix = Self::get_validator_suffix();
         let container_name = format!(
             "challenge-{}-{}",
             config.name.to_lowercase().replace(' ', "-"),
             validator_suffix
-                .to_lowercase()
-                .replace("-", "")
-                .replace(" ", "")
+        );
+        
+        info!(
+            container_name = %container_name,
+            validator_suffix = %validator_suffix,
+            "Generated challenge container name"
         );
 
         // Remove existing container if any
