@@ -1655,6 +1655,11 @@ async fn run_validator() -> Result<()> {
                     endpoints_for_outbox.read().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
                 };
 
+                if endpoints.is_empty() {
+                    debug!("P2P outbox poll: no challenge endpoints registered yet");
+                    continue;
+                }
+
                 // Also get configs for challenge metadata
                 let configs: std::collections::HashMap<String, ChallengeContainerConfig> = {
                     let state = state_for_outbox.read();
@@ -1664,11 +1669,15 @@ async fn run_validator() -> Result<()> {
                 for (challenge_id, endpoint) in endpoints {
                     // Use the real endpoint (includes suffix like challenge-term-challenge-4133b3431b1c)
                     let outbox_url = format!("{}/p2p/outbox", endpoint);
+                    debug!("Polling outbox: {} -> {}", challenge_id, outbox_url);
                     
                     // Get config for this challenge
                     let config = match configs.get(&challenge_id) {
                         Some(c) => c.clone(),
-                        None => continue, // Skip if no config found
+                        None => {
+                            debug!("No config found for challenge {}, skipping", challenge_id);
+                            continue;
+                        }
                     };
 
                     match client.get(&outbox_url).send().await {
@@ -1786,11 +1795,11 @@ async fn run_validator() -> Result<()> {
                                 }
                             }
                         }
-                        Ok(_) => {
-                            // Container might not be ready yet, silently ignore
+                        Ok(resp) => {
+                            debug!("Outbox poll failed for {}: HTTP {}", challenge_id, resp.status());
                         }
-                        Err(_) => {
-                            // Container might not be running, silently ignore
+                        Err(e) => {
+                            debug!("Outbox poll error for {}: {}", challenge_id, e);
                         }
                     }
                 }
