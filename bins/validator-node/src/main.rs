@@ -2267,41 +2267,43 @@ async fn run_validator() -> Result<()> {
                                     None, // IP extracted separately if needed
                                 );
 
-                                // Check if we have a validator with sufficient stake
-                                let (has_sufficient_stake, actual_stake_tao) = {
+                                // FIRST: Check if sender is subnet owner (sudo) - bypass ALL stake checks
+                                // During bootstrap, owner can send any message without stake validation
+                                let is_sudo = {
                                     let state = chain_state_clone.read();
-                                    if let Some(validator) = state.get_validator(signed.signer()) {
-                                        let actual = validator.stake.0 as f64 / 1e9;
-                                        (validator.stake.0 >= min_stake_rao, Some(actual))
-                                    } else {
-                                        // Unknown validator - check against cached stake
-                                        match protection.check_cached_stake(&signer_hex) {
-                                            Some(platform_network::StakeValidation::Valid { stake_tao }) => {
-                                                (true, Some(stake_tao))
-                                            }
-                                            Some(platform_network::StakeValidation::Insufficient { stake_tao, .. }) => {
-                                                (false, Some(stake_tao))
-                                            }
-                                            _ => {
-                                                // Not in metagraph at all
-                                                (false, None)
-                                            }
-                                        }
-                                    }
+                                    state.is_sudo(signed.signer())
                                 };
 
-                                if has_sufficient_stake {
-                                    // Forward all messages to consensus handler
+                                if is_sudo {
+                                    // Subnet owner bypasses all stake checks - forward immediately
+                                    debug!("Accepting message from subnet owner {} (stake check bypassed)", &signer_hex[..16]);
                                     handle_message(&consensus, signed, &chain_state_clone, challenge_orchestrator.as_ref(), challenge_routes_for_p2p.as_ref(), endpoints_for_p2p.as_ref(), db_for_p2p.as_ref(), keypair_for_p2p.as_ref(), auth_sessions_for_p2p.as_ref()).await;
                                 } else {
-                                    // Allow Sudo to bypass stake check for bootstrapping and upgrades
-                                    let is_sudo = {
+                                    // Non-owner: validate stake normally
+                                    let (has_sufficient_stake, actual_stake_tao) = {
                                         let state = chain_state_clone.read();
-                                        state.is_sudo(signed.signer())
+                                        if let Some(validator) = state.get_validator(signed.signer()) {
+                                            let actual = validator.stake.0 as f64 / 1e9;
+                                            (validator.stake.0 >= min_stake_rao, Some(actual))
+                                        } else {
+                                            // Unknown validator - check against cached stake
+                                            match protection.check_cached_stake(&signer_hex) {
+                                                Some(platform_network::StakeValidation::Valid { stake_tao }) => {
+                                                    (true, Some(stake_tao))
+                                                }
+                                                Some(platform_network::StakeValidation::Insufficient { stake_tao, .. }) => {
+                                                    (false, Some(stake_tao))
+                                                }
+                                                _ => {
+                                                    // Not in metagraph at all
+                                                    (false, None)
+                                                }
+                                            }
+                                        }
                                     };
 
-                                    if is_sudo {
-                                        info!("Bypassing stake check for Sudo message from {}", &signer_hex[..16]);
+                                    if has_sufficient_stake {
+                                        // Forward all messages to consensus handler
                                         handle_message(&consensus, signed, &chain_state_clone, challenge_orchestrator.as_ref(), challenge_routes_for_p2p.as_ref(), endpoints_for_p2p.as_ref(), db_for_p2p.as_ref(), keypair_for_p2p.as_ref(), auth_sessions_for_p2p.as_ref()).await;
                                     } else {
                                         // Show actual stake if known, otherwise indicate not in metagraph
