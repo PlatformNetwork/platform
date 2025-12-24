@@ -376,6 +376,10 @@ impl RpcHandler {
             // Dev namespace (for local testing)
             ["dev", "addChallenge"] => self.dev_add_challenge(req.id, req.params),
 
+            // Monitor namespace (for csudo monitoring)
+            ["monitor", "getChallengeHealth"] => self.monitor_get_challenge_health(req.id),
+            ["monitor", "getChallengeLogs"] => self.monitor_get_challenge_logs(req.id, req.params),
+
             _ => {
                 warn!("Unknown RPC method: {}", req.method);
                 JsonRpcResponse::error(
@@ -417,7 +421,9 @@ impl RpcHandler {
                     // Epoch
                     "epoch_current", "epoch_getPhase",
                     // RPC
-                    "rpc_methods"
+                    "rpc_methods",
+                    // Monitor
+                    "monitor_getChallengeHealth", "monitor_getChallengeLogs"
                 ]
             }),
         )
@@ -1640,6 +1646,91 @@ impl RpcHandler {
                 "routesRegistered": 6,
                 "routePath": format!("/challenge/{}/", name),
                 "message": "Challenge added with routes (dev mode - no P2P consensus)"
+            }),
+        )
+    }
+
+    // ==================== Monitor Namespace ====================
+
+    /// Get challenge container health status for this validator
+    fn monitor_get_challenge_health(&self, id: Value) -> JsonRpcResponse {
+        let chain = self.chain_state.read();
+        
+        // Get validator info from first validator in state
+        let (hotkey, ss58) = if let Some(v) = chain.validators.values().next() {
+            (v.hotkey.to_string(), v.hotkey.to_string())
+        } else {
+            ("unknown".to_string(), "unknown".to_string())
+        };
+        
+        // Get challenges from state
+        let mut challenges = Vec::new();
+        let mut healthy_count = 0;
+        let mut unhealthy_count = 0;
+        
+        for (challenge_id, config) in &chain.challenge_configs {
+            // Check if we have routes registered for this challenge (indicates it's running)
+            let has_routes = self.challenge_routes.read().contains_key(&config.name);
+            
+            let status = if has_routes { "Running" } else { "Unknown" };
+            let health = if has_routes { "Healthy" } else { "Unknown" };
+            
+            if has_routes {
+                healthy_count += 1;
+            } else {
+                unhealthy_count += 1;
+            }
+            
+            challenges.push(json!({
+                "challenge_id": challenge_id.to_string(),
+                "challenge_name": config.name,
+                "container_id": null,
+                "container_name": format!("challenge-{}", config.name),
+                "status": status,
+                "health": health,
+                "uptime_secs": null,
+                "endpoint": format!("http://challenge-{}:8080", config.name)
+            }));
+        }
+        
+        let total_challenges = challenges.len();
+        
+        JsonRpcResponse::result(
+            id,
+            json!({
+                "validator_hotkey": hotkey,
+                "validator_ss58": ss58,
+                "challenges": challenges,
+                "total_challenges": total_challenges,
+                "healthy_challenges": healthy_count,
+                "unhealthy_challenges": unhealthy_count
+            }),
+        )
+    }
+
+    /// Get logs from a challenge container
+    fn monitor_get_challenge_logs(&self, id: Value, params: Value) -> JsonRpcResponse {
+        let challenge_name = match self.get_param_str(&params, 0, "challengeName") {
+            Some(n) => n,
+            None => {
+                return JsonRpcResponse::error(
+                    id,
+                    INVALID_PARAMS,
+                    "Missing 'challengeName' parameter",
+                )
+            }
+        };
+
+        let _lines = self.get_param_u64(&params, 1, "lines").unwrap_or(100) as u32;
+
+        // Note: Real implementation would need access to Docker client
+        // For now, return a placeholder message
+        JsonRpcResponse::result(
+            id,
+            json!({
+                "challengeName": challenge_name,
+                "logs": format!("[Note: Docker logs access requires orchestrator integration]\n\nTo view logs for '{}', use:\n  docker logs challenge-{}", challenge_name, challenge_name),
+                "linesRequested": _lines
             }),
         )
     }

@@ -105,6 +105,10 @@ enum Commands {
     /// Refresh challenges (re-pull images and restart containers on all validators)
     #[command(subcommand)]
     Refresh(RefreshCommands),
+
+    /// Monitor challenges and validators (requires sudo)
+    #[command(subcommand)]
+    Monitor(MonitorCommands),
 }
 
 #[derive(Subcommand, Debug)]
@@ -221,6 +225,55 @@ enum RefreshCommands {
         /// Challenge ID (optional - select from list if not provided)
         id: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum MonitorCommands {
+    /// Show challenge container status across all validators
+    Challenges,
+    /// Show health status of a specific validator's challenges
+    Validator {
+        /// Validator hotkey (hex, optional - select from list)
+        hotkey: Option<String>,
+    },
+    /// Get logs from a challenge container
+    Logs {
+        /// Challenge name (e.g., "term-challenge")
+        #[arg(short, long)]
+        challenge: Option<String>,
+        /// Number of lines to tail (default: 100)
+        #[arg(short = 'n', long, default_value = "100")]
+        lines: u32,
+        /// Validator RPC URL (optional - use default if not provided)
+        #[arg(short, long)]
+        validator_rpc: Option<String>,
+    },
+    /// Show overall health status
+    Health,
+}
+
+// ==================== Monitor Data Structures ====================
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ChallengeContainerStatus {
+    challenge_id: String,
+    challenge_name: String,
+    container_id: Option<String>,
+    container_name: Option<String>,
+    status: String,
+    health: String,
+    uptime_secs: Option<u64>,
+    endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ValidatorChallengeHealth {
+    validator_hotkey: String,
+    validator_ss58: String,
+    challenges: Vec<ChallengeContainerStatus>,
+    total_challenges: usize,
+    healthy_challenges: usize,
+    unhealthy_challenges: usize,
 }
 
 // ==================== State Fetching ====================
@@ -419,6 +472,183 @@ async fn fetch_chain_state(rpc_url: &str) -> Result<ChainStateData> {
     }
 
     Ok(data)
+}
+
+// ==================== Monitor Functions ====================
+
+async fn fetch_challenge_health(rpc_url: &str) -> Result<ValidatorChallengeHealth> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/rpc", rpc_url.trim_end_matches('/'));
+
+    let response = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "monitor_getChallengeHealth",
+            "params": [],
+            "id": 1
+        }))
+        .send()
+        .await?;
+
+    let result: serde_json::Value = response.json().await?;
+
+    if let Some(error) = result.get("error") {
+        anyhow::bail!("RPC Error: {}", error);
+    }
+
+    let health = result
+        .get("result")
+        .ok_or_else(|| anyhow::anyhow!("No result"))?;
+
+    Ok(serde_json::from_value(health.clone())?)
+}
+
+async fn fetch_validator_challenge_health(rpc_url: &str, _hotkey: &str) -> Result<ValidatorChallengeHealth> {
+    // For now, this just fetches the local validator's health
+    // In the future, this could query a specific validator via P2P
+    fetch_challenge_health(rpc_url).await
+}
+
+async fn fetch_challenge_logs(rpc_url: &str, challenge_name: &str, lines: u32) -> Result<String> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/rpc", rpc_url.trim_end_matches('/'));
+
+    let response = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "monitor_getChallengeLogs",
+            "params": {
+                "challengeName": challenge_name,
+                "lines": lines
+            },
+            "id": 1
+        }))
+        .send()
+        .await?;
+
+    let result: serde_json::Value = response.json().await?;
+
+    if let Some(error) = result.get("error") {
+        anyhow::bail!("RPC Error: {}", error);
+    }
+
+    let logs = result
+        .get("result")
+        .and_then(|r| r.get("logs"))
+        .and_then(|l| l.as_str())
+        .unwrap_or("No logs available");
+
+    Ok(logs.to_string())
+}
+
+fn display_challenge_health(health: &ValidatorChallengeHealth) {
+    println!(
+        "  {} {}",
+        "Validator:".bright_white(),
+        health.validator_ss58.cyan()
+    );
+    println!(
+        "  {} {} / {} healthy",
+        "Challenges:".bright_white(),
+        health.healthy_challenges.to_string().green(),
+        health.total_challenges.to_string().cyan()
+    );
+    
+    if health.challenges.is_empty() {
+        println!("{}", "  No challenge containers running.".yellow());
+        return;
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("Challenge").fg(Color::Cyan),
+            Cell::new("Container").fg(Color::Cyan),
+            Cell::new("Status").fg(Color::Cyan),
+            Cell::new("Health").fg(Color::Cyan),
+            Cell::new("Uptime").fg(Color::Cyan),
+        ]);
+
+    for c in &health.challenges {
+        let status_color = match c.status.as_str() {
+            "Running" => Color::Green,
+            "Starting" => Color::Yellow,
+            _ => Color::Red,
+        };
+        let health_color = match c.health.as_str() {
+            "Healthy" => Color::Green,
+            "Starting" => Color::Yellow,
+            _ => Color::Red,
+        };
+        let uptime = c.uptime_secs
+            .map(|s| format_duration(s))
+            .unwrap_or_else(|| "-".to_string());
+        
+        table.add_row(vec![
+            Cell::new(&c.challenge_name).fg(Color::Green),
+            Cell::new(c.container_name.as_deref().unwrap_or("-")),
+            Cell::new(&c.status).fg(status_color),
+            Cell::new(&c.health).fg(health_color),
+            Cell::new(uptime),
+        ]);
+    }
+
+    println!("{table}");
+}
+
+fn display_validator_health(health: &ValidatorChallengeHealth) {
+    display_challenge_health(health);
+}
+
+fn display_health_summary(health: &ValidatorChallengeHealth) {
+    let healthy_pct = if health.total_challenges > 0 {
+        (health.healthy_challenges as f64 / health.total_challenges as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    let status_icon = if healthy_pct >= 100.0 {
+        "✓".green()
+    } else if healthy_pct >= 50.0 {
+        "⚠".yellow()
+    } else {
+        "✗".red()
+    };
+    
+    println!("\n{} Overall Health: {:.0}%", status_icon, healthy_pct);
+    println!(
+        "  {} Total Challenges: {}",
+        "📦".to_string(),
+        health.total_challenges
+    );
+    println!(
+        "  {} Healthy: {}",
+        "✓".green(),
+        health.healthy_challenges
+    );
+    println!(
+        "  {} Unhealthy: {}",
+        "✗".red(),
+        health.unhealthy_challenges
+    );
+    
+    display_challenge_health(health);
+}
+
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if secs < 86400 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+    }
 }
 
 // ==================== Display Functions ====================
@@ -1325,6 +1555,80 @@ async fn main() -> Result<()> {
                         },
                     )
                     .await?;
+                }
+            }
+        }
+
+        Commands::Monitor(cmd) => {
+            match cmd {
+                MonitorCommands::Challenges => {
+                    print_section("Challenge Container Status");
+                    let health = fetch_challenge_health(&args.rpc).await?;
+                    display_challenge_health(&health);
+                }
+                MonitorCommands::Validator { hotkey } => {
+                    let state = fetch_chain_state(&args.rpc).await?;
+                    
+                    let selected_hotkey = if let Some(hk) = hotkey {
+                        hk
+                    } else {
+                        if state.validators.is_empty() {
+                            println!("{}", "No validators registered.".yellow());
+                            return Ok(());
+                        }
+                        
+                        let options: Vec<String> = state
+                            .validators
+                            .iter()
+                            .map(|v| format!("{} ({:.2} TAO)", &v.hotkey[..16], v.stake_tao))
+                            .collect();
+
+                        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                            .with_prompt("Select validator to inspect")
+                            .items(&options)
+                            .interact()?;
+
+                        state.validators[selection].hotkey.clone()
+                    };
+                    
+                    print_section(&format!("Validator: {}", &selected_hotkey[..16]));
+                    let health = fetch_validator_challenge_health(&args.rpc, &selected_hotkey).await?;
+                    display_validator_health(&health);
+                }
+                MonitorCommands::Logs { challenge, lines, validator_rpc } => {
+                    let state = fetch_chain_state(&args.rpc).await?;
+                    
+                    let challenge_name = if let Some(name) = challenge {
+                        name
+                    } else {
+                        if state.challenges.is_empty() {
+                            println!("{}", "No challenges registered.".yellow());
+                            return Ok(());
+                        }
+                        
+                        let options: Vec<String> = state
+                            .challenges
+                            .iter()
+                            .map(|c| c.name.clone())
+                            .collect();
+
+                        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                            .with_prompt("Select challenge to view logs")
+                            .items(&options)
+                            .interact()?;
+
+                        state.challenges[selection].name.clone()
+                    };
+                    
+                    let rpc_url = validator_rpc.as_ref().unwrap_or(&args.rpc);
+                    print_section(&format!("Logs: {} (last {} lines)", challenge_name, lines));
+                    let logs = fetch_challenge_logs(rpc_url, &challenge_name, lines).await?;
+                    println!("{}", logs);
+                }
+                MonitorCommands::Health => {
+                    print_section("Network Health Overview");
+                    let health = fetch_challenge_health(&args.rpc).await?;
+                    display_health_summary(&health);
                 }
             }
         }
