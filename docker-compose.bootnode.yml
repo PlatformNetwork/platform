@@ -1,0 +1,94 @@
+version: "3.8"
+
+# =============================================================================
+# Platform Network - Bootnode Configuration
+# =============================================================================
+# Run this validator as the network bootnode (no --bootstrap argument)
+# Other validators connect to this node via bootnode.platform.network:9000
+#
+# Usage:
+#   export VALIDATOR_SECRET_KEY="your-hotkey-mnemonic-or-hex-seed"
+#   docker compose -f docker-compose.bootnode.yml up -d
+# =============================================================================
+
+services:
+  # ==========================================================================
+  # Platform Bootnode Validator
+  # ==========================================================================
+  validator:
+    image: ghcr.io/platformnetwork/platform:latest
+    container_name: platform-validator
+    restart: unless-stopped
+    privileged: true
+    
+    # Enable Watchtower auto-update
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    ports:
+      - "8080:8080"   # RPC API
+      - "9000:9000"   # P2P Network (bootnode listens here)
+    
+    volumes:
+      - validator-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    
+    environment:
+      - RUST_LOG=info,platform_chain=debug,platform_rpc=info,platform_consensus=debug,challenge_orchestrator=info,validator_node=debug
+      - RUST_BACKTRACE=1
+      - DATA_DIR=/data
+      - VALIDATOR_SECRET_KEY=${VALIDATOR_SECRET_KEY:?VALIDATOR_SECRET_KEY is required}
+      - VALIDATOR_NAME=platform-bootnode
+      - SENTRY_DSN=${SENTRY_DSN:-}
+    
+    # No --bootstrap = this IS the bootnode
+    # Other validators will connect to bootnode.platform.network:9000
+    command: >
+      /app/validator-node
+      --data-dir /data
+      --rpc-port 8080
+      --listen /ip4/0.0.0.0/tcp/9000
+      --netuid 100
+      --subtensor-endpoint wss://entrypoint-finney.opentensor.ai:443
+      --epoch-length 360
+      --sudo-key 50780547322a1ceba67ea8c552c9bc6c686f8698ac9a8cafab7cd15a1db19859
+    
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    networks:
+      - platform-network
+
+  # ==========================================================================
+  # Watchtower - Auto-update platform container
+  # ==========================================================================
+  watchtower:
+    image: nickfedor/watchtower@sha256:053e7ecba848b77eb5b966d236c2f4f2e1155e05007c9ef52418b4b7e255484b
+    container_name: platform-watchtower
+    restart: unless-stopped
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_SCHEDULE=0 */5 * * * *
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_LOG_LEVEL=info
+    
+    networks:
+      - platform-network
+
+volumes:
+  validator-data:
+    driver: local
+
+networks:
+  platform-network:
+    driver: bridge
+    name: platform-network
