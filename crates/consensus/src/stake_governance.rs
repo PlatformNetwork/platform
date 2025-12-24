@@ -62,8 +62,8 @@ pub fn is_trusted_bootstrap_source(source_hotkey: &Hotkey, current_block: u64) -
     }
 }
 
-/// Minimum stake threshold for consensus (50% + epsilon for security)
-pub const STAKE_THRESHOLD_PERCENT: f64 = 50.0;
+/// Minimum stake threshold for consensus (33% for partial network tolerance)
+pub const STAKE_THRESHOLD_PERCENT: f64 = 33.0;
 
 /// Proposal timeout in seconds (24 hours)
 pub const PROPOSAL_TIMEOUT_SECS: i64 = 86400;

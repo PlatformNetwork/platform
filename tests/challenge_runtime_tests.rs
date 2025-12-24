@@ -379,7 +379,7 @@ mod p2p_broadcast {
     #[test]
     fn test_quorum_calculation() {
         let total_stake = 100_000_000_000u64; // 100 TAO total
-        let required_stake = total_stake / 2; // 50% quorum
+        let required_stake = total_stake / 3; // 33% quorum
 
         let acks = vec![
             (30_000_000_000u64, true), // 30 TAO

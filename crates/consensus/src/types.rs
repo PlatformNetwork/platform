@@ -120,7 +120,7 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            threshold: 0.50,
+            threshold: 0.33, // 33% for partial network tolerance
             round_timeout_secs: 30,
             max_rounds: 3,
         }
