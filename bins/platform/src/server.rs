@@ -20,8 +20,28 @@ use axum::{
     routing::{any, get, post},
     Json, Router,
 };
-use tower_http::cors::{Any, CorsLayer};
+use serde::Deserialize;
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+
+/// Simple registration request (for dev/testing without signatures)
+#[derive(Debug, Deserialize)]
+struct SimpleRegisterRequest {
+    id: String,
+    name: String,
+    docker_image: String,
+    #[serde(default = "default_mechanism_id")]
+    mechanism_id: u8,
+    #[serde(default = "default_emission_weight")]
+    emission_weight: f64,
+}
+
+fn default_mechanism_id() -> u8 {
+    1
+}
+fn default_emission_weight() -> f64 {
+    1.0
+}
 
 /// Default owner hotkey (Platform Network subnet owner)
 const DEFAULT_OWNER_HOTKEY: &str = "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At";
@@ -121,6 +141,29 @@ pub async fn run(args: ServerArgs) -> Result<()> {
         .route("/api/v1/data/results", post(data_api::write_result))
         .route("/api/v1/data/results", get(data_api::get_results))
         .route("/api/v1/data/snapshot", get(data_api::get_snapshot))
+        // Submissions API
+        .route(
+            "/api/v1/submissions",
+            get(api::submissions::list_submissions),
+        )
+        .route("/api/v1/submissions", post(api::submissions::submit_agent))
+        .route(
+            "/api/v1/submissions/:id",
+            get(api::submissions::get_submission),
+        )
+        .route(
+            "/api/v1/submissions/:id/source",
+            get(api::submissions::get_submission_source),
+        )
+        // Evaluations API
+        .route(
+            "/api/v1/evaluations",
+            post(api::evaluations::submit_evaluation),
+        )
+        .route(
+            "/api/v1/evaluations",
+            get(api::evaluations::get_evaluations),
+        )
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
@@ -172,22 +215,25 @@ async fn get_challenge(
 
 async fn register_challenge(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<models::RegisterChallengeRequest>,
+    Json(req): Json<SimpleRegisterRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let challenge = models::RegisteredChallenge::new(&req.id, &req.name, &req.docker_image);
+    let mut challenge = models::RegisteredChallenge::new(&req.id, &req.name, &req.docker_image);
+    challenge.mechanism_id = req.mechanism_id;
+    challenge.emission_weight = req.emission_weight;
 
     db::queries::register_challenge(&state.db, &challenge)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     info!(
-        "Challenge registered: {} ({})",
-        challenge.id, challenge.docker_image
+        "Challenge registered: {} ({}) mechanism={}",
+        challenge.id, challenge.docker_image, challenge.mechanism_id
     );
 
     Ok(Json(serde_json::json!({
         "success": true,
-        "challenge_id": challenge.id
+        "challenge_id": challenge.id,
+        "mechanism_id": challenge.mechanism_id
     })))
 }
 
