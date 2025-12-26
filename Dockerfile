@@ -71,13 +71,13 @@ COPY --from=final-builder /app/target/release/platform /usr/local/bin/platform
 COPY --from=final-builder /app/target/release/validator-node /usr/local/bin/validator-node
 COPY --from=final-builder /app/target/release/csudo /usr/local/bin/csudo
 
-# Create non-root user
-RUN useradd -m -u 1000 platform
-USER platform
+# Create data directory
+RUN mkdir -p /data && chmod 777 /data
 
-# Default to showing help
-ENTRYPOINT ["platform"]
-CMD ["--help"]
+# Default: run validator-node (reads VALIDATOR_SECRET_KEY from env)
+# Validators can use their existing docker-compose without changes
+ENTRYPOINT ["validator-node"]
+CMD ["--data-dir", "/data", "--platform-server", "https://chain.platform.network"]
 
 # Labels
 LABEL org.opencontainers.image.source="https://github.com/PlatformNetwork/platform"
