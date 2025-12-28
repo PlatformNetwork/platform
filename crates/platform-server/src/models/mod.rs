@@ -531,3 +531,11 @@ fn default_cpu() -> f64 {
 fn default_memory() -> u64 {
     4096
 }
+
+/// Request to start/stop a challenge (requires owner signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeActionRequest {
+    pub owner_hotkey: String,
+    pub signature: String,
+    pub timestamp: i64,
+}

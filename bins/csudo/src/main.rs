@@ -259,7 +259,19 @@ impl PlatformClient {
 
     async fn start_challenge(&self, id: &str) -> Result<ApiResponse> {
         let url = format!("{}/api/v1/challenges/{}/start", self.base_url, id);
-        let resp = self.client.post(&url).send().await?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        let message = format!("start_challenge:{}:{}", id, timestamp);
+        let signature = self.sign(&message);
+
+        let body = serde_json::json!({
+            "owner_hotkey": self.hotkey(),
+            "signature": signature,
+            "timestamp": timestamp
+        });
+
+        let resp = self.client.post(&url).json(&body).send().await?;
 
         if !resp.status().is_success() {
             let text = resp.text().await?;
@@ -271,7 +283,19 @@ impl PlatformClient {
 
     async fn stop_challenge(&self, id: &str) -> Result<ApiResponse> {
         let url = format!("{}/api/v1/challenges/{}/stop", self.base_url, id);
-        let resp = self.client.post(&url).send().await?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        let message = format!("stop_challenge:{}:{}", id, timestamp);
+        let signature = self.sign(&message);
+
+        let body = serde_json::json!({
+            "owner_hotkey": self.hotkey(),
+            "signature": signature,
+            "timestamp": timestamp
+        });
+
+        let resp = self.client.post(&url).json(&body).send().await?;
 
         if !resp.status().is_success() {
             let text = resp.text().await?;
@@ -283,7 +307,19 @@ impl PlatformClient {
 
     async fn remove_challenge(&self, id: &str) -> Result<ApiResponse> {
         let url = format!("{}/api/v1/challenges/{}", self.base_url, id);
-        let resp = self.client.delete(&url).send().await?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        let message = format!("remove_challenge:{}:{}", id, timestamp);
+        let signature = self.sign(&message);
+
+        let body = serde_json::json!({
+            "owner_hotkey": self.hotkey(),
+            "signature": signature,
+            "timestamp": timestamp
+        });
+
+        let resp = self.client.delete(&url).json(&body).send().await?;
 
         if !resp.status().is_success() {
             let text = resp.text().await?;

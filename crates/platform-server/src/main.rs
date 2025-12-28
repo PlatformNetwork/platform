@@ -339,7 +339,28 @@ async fn register_challenge(
 async fn start_challenge(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Json(req): Json<models::ChallengeActionRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Verify timestamp is recent (within 5 minutes)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    if (now - req.timestamp).abs() > 300 {
+        return Err((StatusCode::BAD_REQUEST, "Timestamp too old".to_string()));
+    }
+
+    // Verify owner signature
+    let message = format!("start_challenge:{}:{}", id, req.timestamp);
+    if !api::auth::verify_signature(&req.owner_hotkey, &message, &req.signature) {
+        return Err((StatusCode::UNAUTHORIZED, "Invalid signature".to_string()));
+    }
+
+    // Verify owner
+    if state.owner_hotkey.as_ref() != Some(&req.owner_hotkey) {
+        return Err((StatusCode::FORBIDDEN, "Not the subnet owner".to_string()));
+    }
+
     let manager = state.challenge_manager.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Orchestrator not available".to_string(),
@@ -354,6 +375,8 @@ async fn start_challenge(
         .start_challenge(&challenge)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    info!("Challenge {} started by owner {}", id, req.owner_hotkey);
 
     // Broadcast to validators
     state
@@ -374,7 +397,28 @@ async fn start_challenge(
 async fn stop_challenge(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Json(req): Json<models::ChallengeActionRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Verify timestamp is recent (within 5 minutes)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    if (now - req.timestamp).abs() > 300 {
+        return Err((StatusCode::BAD_REQUEST, "Timestamp too old".to_string()));
+    }
+
+    // Verify owner signature
+    let message = format!("stop_challenge:{}:{}", id, req.timestamp);
+    if !api::auth::verify_signature(&req.owner_hotkey, &message, &req.signature) {
+        return Err((StatusCode::UNAUTHORIZED, "Invalid signature".to_string()));
+    }
+
+    // Verify owner
+    if state.owner_hotkey.as_ref() != Some(&req.owner_hotkey) {
+        return Err((StatusCode::FORBIDDEN, "Not the subnet owner".to_string()));
+    }
+
     let manager = state.challenge_manager.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Orchestrator not available".to_string(),
@@ -384,6 +428,8 @@ async fn stop_challenge(
         .stop_challenge(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    info!("Challenge {} stopped by owner {}", id, req.owner_hotkey);
 
     // Broadcast to validators
     state
