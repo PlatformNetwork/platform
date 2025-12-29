@@ -222,6 +222,8 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/jobs/:job_id/complete",
             post(api::jobs::complete_job),
         )
+        // === CENTRALIZED LLM PROXY ===
+        .route("/api/v1/llm/chat", post(api::llm::chat))
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()

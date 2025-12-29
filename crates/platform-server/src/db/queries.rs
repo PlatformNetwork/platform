@@ -1176,3 +1176,32 @@ pub async fn get_miner_submission_count(
         .await?;
     Ok(row.get(0))
 }
+
+// ============================================================================
+// LLM COST TRACKING
+// ============================================================================
+
+/// Add cost to an agent's total (for LLM usage tracking)
+pub async fn add_agent_cost(pool: &Pool, agent_hash: &str, cost_usd: f64) -> Result<()> {
+    let client = pool.get().await?;
+    client
+        .execute(
+            "UPDATE submissions SET total_cost_usd = COALESCE(total_cost_usd, 0) + $2 
+             WHERE agent_hash = $1",
+            &[&agent_hash, &cost_usd],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Get agent's total LLM cost
+pub async fn get_agent_cost(pool: &Pool, agent_hash: &str) -> Result<f64> {
+    let client = pool.get().await?;
+    let row = client
+        .query_one(
+            "SELECT COALESCE(total_cost_usd, 0) FROM submissions WHERE agent_hash = $1",
+            &[&agent_hash],
+        )
+        .await?;
+    Ok(row.get(0))
+}
