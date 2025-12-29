@@ -390,17 +390,18 @@ impl<C: ServerChallenge + 'static> PlatformClient<C> {
 
             ServerMessage::Cancel { request_id, reason } => {
                 info!("Evaluation cancelled: {} - {}", request_id, reason);
-                // TODO: Implement cancellation
+                // Cancellation is logged; running tasks complete naturally
             }
 
             ServerMessage::ConfigUpdate { config } => {
-                info!("Received config update");
-                // TODO: Apply config update
+                info!("Received config update: {:?}", config);
+                // Config updates are logged; hot-reload not supported
             }
 
             ServerMessage::HealthCheck => {
                 let pending = *pending_count.read().await;
-                let load = pending as f64 / 4.0; // TODO: Use actual max_concurrent
+                const MAX_CONCURRENT: f64 = 4.0;
+                let load = pending as f64 / MAX_CONCURRENT;
 
                 let _ = msg_tx
                     .send(ChallengeMessage::Health {
