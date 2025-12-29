@@ -536,7 +536,23 @@ impl ChallengeRuntime {
     ///
     /// This is the primary method for event-driven weight submission.
     /// Called when Bittensor CommitWindowOpen event fires.
+    ///
+    /// # Arguments
+    /// * `hotkey_to_uid` - Optional mapping from SS58 hotkey to Bittensor UID.
+    ///   If None, weights are returned with sequential UIDs (for testing only).
+    ///   In production, pass the metagraph mapping from SubtensorClient::get_uids_for_hotkeys().
     pub async fn collect_and_get_weights(&self) -> Vec<(u8, Vec<u16>, Vec<u16>)> {
+        self.collect_and_get_weights_with_mapping(None).await
+    }
+
+    /// Collect weights with explicit hotkey->UID mapping from metagraph
+    ///
+    /// # Arguments
+    /// * `hotkey_to_uid` - Mapping from SS58 hotkey to Bittensor UID from metagraph
+    pub async fn collect_and_get_weights_with_mapping(
+        &self,
+        hotkey_to_uid: Option<&HashMap<String, u16>>,
+    ) -> Vec<(u8, Vec<u16>, Vec<u16>)> {
         let epoch = self.epoch_manager.current_epoch();
         info!("Collecting weights for epoch {} (event-driven)", epoch);
 
@@ -577,14 +593,41 @@ impl ChallengeRuntime {
                     );
 
                     // Convert to Bittensor format (uid, weight as u16)
-                    // For now, use placeholder UIDs - actual UID mapping would come from metagraph
-                    let uids: Vec<u16> = (0..weights.len() as u16).collect();
-                    let weight_values: Vec<u16> = weights
-                        .iter()
-                        .map(|w| (w.weight.clamp(0.0, 1.0) * 65535.0) as u16)
-                        .collect();
+                    let (uids, weight_values): (Vec<u16>, Vec<u16>) = if let Some(mapping) =
+                        hotkey_to_uid
+                    {
+                        // Use metagraph mapping to convert hotkeys to UIDs
+                        weights
+                            .iter()
+                            .filter_map(|w| {
+                                mapping.get(&w.hotkey).map(|uid| {
+                                    let weight_u16 = (w.weight.clamp(0.0, 1.0) * 65535.0) as u16;
+                                    (*uid, weight_u16)
+                                })
+                            })
+                            .unzip()
+                    } else {
+                        // Fallback: use sequential UIDs (for testing only)
+                        warn!(
+                            "No hotkey->UID mapping provided, using sequential UIDs (testing mode)"
+                        );
+                        let uids: Vec<u16> = (0..weights.len() as u16).collect();
+                        let weight_values: Vec<u16> = weights
+                            .iter()
+                            .map(|w| (w.weight.clamp(0.0, 1.0) * 65535.0) as u16)
+                            .collect();
+                        (uids, weight_values)
+                    };
 
-                    result.push((mechanism_id, uids, weight_values));
+                    if !uids.is_empty() {
+                        result.push((mechanism_id, uids, weight_values));
+                    } else {
+                        warn!(
+                            "Challenge {} has {} weights but no valid UIDs found in mapping",
+                            challenge_id,
+                            weights.len()
+                        );
+                    }
                 }
                 Err(e) => {
                     error!(

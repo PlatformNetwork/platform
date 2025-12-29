@@ -42,9 +42,12 @@ pub type HotkeyUidMap = HashMap<String, u16>;
 impl MechanismWeights {
     /// Create new MechanismWeights with emission-based distribution
     ///
+    /// WARNING: This method creates weights without hotkey->UID mapping.
+    /// All weights will go to UID 0 (burn) since no hotkeys can be resolved.
+    /// For production use, prefer `with_hotkey_mapping()` with metagraph data.
+    ///
     /// - emission_weight: fraction of total emissions this challenge controls (0.0 - 1.0)
     /// - assignments: raw scores from challenge (will be scaled by emission_weight)
-    /// - hotkey_to_uid: mapping from hotkey (SS58) to UID from metagraph
     /// - Remaining weight goes to UID 0 (burn)
     pub fn new(
         mechanism_id: u8,
@@ -52,7 +55,10 @@ impl MechanismWeights {
         assignments: Vec<WeightAssignment>,
         emission_weight: f64,
     ) -> Self {
-        // No hotkey mapping - use placeholder UIDs
+        warn!(
+            "MechanismWeights::new() called without hotkey mapping - \
+             all weights will go to UID 0 (burn). Use with_hotkey_mapping() in production."
+        );
         Self::with_hotkey_mapping(
             mechanism_id,
             challenge_id,
