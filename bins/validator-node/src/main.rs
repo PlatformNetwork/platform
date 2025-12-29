@@ -234,7 +234,7 @@ async fn main() -> Result<()> {
     // Challenge orchestrator
     let _orchestrator = if args.docker_challenges {
         match ChallengeOrchestrator::new(OrchestratorConfig {
-            network_name: "platform-challenges".to_string(),
+            network_name: "platform-network".to_string(),
             health_check_interval: Duration::from_secs(30),
             stop_timeout: Duration::from_secs(30),
             registry: None,

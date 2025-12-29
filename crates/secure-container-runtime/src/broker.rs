@@ -60,7 +60,7 @@ impl ContainerBroker {
         Ok(Self {
             docker,
             policy,
-            network_name: "platform-challenges".to_string(),
+            network_name: "platform-network".to_string(),
             containers_by_challenge: Arc::new(RwLock::new(HashMap::new())),
             containers_by_owner: Arc::new(RwLock::new(HashMap::new())),
             audit_log: Arc::new(RwLock::new(Vec::new())),

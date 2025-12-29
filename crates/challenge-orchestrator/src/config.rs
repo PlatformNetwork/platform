@@ -24,7 +24,7 @@ pub struct OrchestratorConfig {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            network_name: "platformchain".to_string(),
+            network_name: "platform-network".to_string(),
             health_check_interval: Duration::from_secs(30),
             stop_timeout: Duration::from_secs(30),
             registry: None,
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = OrchestratorConfig::default();
-        assert_eq!(config.network_name, "platformchain");
+        assert_eq!(config.network_name, "platform-network");
         assert_eq!(config.health_check_interval, Duration::from_secs(30));
     }
 }

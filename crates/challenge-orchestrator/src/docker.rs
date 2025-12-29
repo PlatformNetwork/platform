@@ -33,7 +33,7 @@ impl DockerClient {
 
         Ok(Self {
             docker,
-            network_name: "platformchain".to_string(),
+            network_name: "platform-network".to_string(),
         })
     }
 
