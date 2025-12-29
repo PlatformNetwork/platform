@@ -462,7 +462,7 @@ impl DockerClient {
         // Use container_name (includes validator suffix) so each validator has its own data
         let volume_name = format!("{}-data", container_name);
 
-        // Create volume if it doesn't exist (Docker will auto-create on mount, but explicit is clearer)
+        // Create volumes if they don't exist (Docker will auto-create on mount, but explicit is clearer)
         let volume_opts = bollard::volume::CreateVolumeOptions {
             name: volume_name.as_str(),
             driver: "local",
@@ -471,6 +471,17 @@ impl DockerClient {
         if let Err(e) = self.docker.create_volume(volume_opts).await {
             // Volume might already exist, which is fine
             debug!("Volume creation result for {}: {:?}", volume_name, e);
+        }
+
+        // Create cache volume for downloaded datasets
+        let cache_volume_name = format!("{}-cache", volume_name);
+        let cache_volume_opts = bollard::volume::CreateVolumeOptions {
+            name: cache_volume_name.as_str(),
+            driver: "local",
+            ..Default::default()
+        };
+        if let Err(e) = self.docker.create_volume(cache_volume_opts).await {
+            debug!("Volume creation result for {}: {:?}", cache_volume_name, e);
         }
 
         // Build host config with resource limits
@@ -487,6 +498,7 @@ impl DockerClient {
                 "/tmp/platform-tasks:/app/data/tasks:rw".to_string(), // Override internal tasks
                 "/tmp/platform-tasks:/tmp/platform-tasks:rw".to_string(), // For DinD path mapping
                 format!("{}:/data:rw", volume_name), // Named volume for persistent state
+                format!("{}-cache:/root/.cache:rw", volume_name), // Cache for downloaded datasets
             ]),
             ..Default::default()
         };
