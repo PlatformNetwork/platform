@@ -61,6 +61,12 @@ impl ChallengeOrchestrator {
         // Ensure the detected network exists (creates it if running outside Docker)
         docker.ensure_network().await?;
 
+        // Connect the validator container to the platform network
+        // This allows the validator to communicate with challenge containers by hostname
+        if let Err(e) = docker.connect_self_to_network().await {
+            tracing::warn!("Could not connect validator to platform network: {}", e);
+        }
+
         let challenges = Arc::new(RwLock::new(HashMap::new()));
         let health_monitor = HealthMonitor::new(challenges.clone(), config.health_check_interval);
 
