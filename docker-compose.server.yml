@@ -27,7 +27,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - RUST_LOG=info,platform_server=debug
+      # Verbose logging: set VERBOSE=true to enable debug for all components
+      - RUST_LOG=${VERBOSE:+debug,hyper=info,h2=info,tower=info}${VERBOSE:-info,platform_server=debug,platform=debug,challenge_orchestrator=debug}
+      - RUST_BACKTRACE=${VERBOSE:+1}${VERBOSE:-0}
       - VALIDATOR_NAME=server
     dns:
       - 8.8.8.8
