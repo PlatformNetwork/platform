@@ -101,6 +101,7 @@ pub async fn run(args: ServerArgs) -> Result<()> {
         db,
         Some(args.owner_hotkey.clone()),
         challenge_manager.clone(),
+        None, // metagraph - not needed for this server
     ));
 
     // Build router

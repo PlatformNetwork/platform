@@ -110,12 +110,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conn_id: Uuid, q
         conn_id, query.hotkey, query.role
     );
 
-    // Register validator in DB when they connect with a hotkey (updates last_seen)
+    // Register validator in DB when they connect with a hotkey
+    // Lookup stake from metagraph (not from client - can't trust client-provided stake)
     if let Some(ref hotkey) = query.hotkey {
-        if let Err(e) = queries::upsert_validator(&state.db, hotkey, 0).await {
+        let stake = state.get_validator_stake(hotkey);
+        if let Err(e) = queries::upsert_validator(&state.db, hotkey, stake).await {
             warn!("Failed to register validator {}: {}", hotkey, e);
         } else {
-            info!("Validator {} registered/updated last_seen", hotkey);
+            info!(
+                "Validator {} registered (stake: {} TAO from metagraph)",
+                &hotkey[..16.min(hotkey.len())],
+                stake / 1_000_000_000 // Convert RAO to TAO for logging
+            );
         }
     }
 

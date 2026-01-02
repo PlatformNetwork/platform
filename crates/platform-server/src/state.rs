@@ -6,6 +6,8 @@ use crate::models::{AuthSession, TaskLease, WsEvent};
 use crate::orchestration::ChallengeManager;
 use crate::websocket::events::EventBroadcaster;
 use dashmap::DashMap;
+use parking_lot::RwLock;
+use platform_bittensor::Metagraph;
 use std::sync::Arc;
 
 pub struct AppState {
@@ -19,6 +21,8 @@ pub struct AppState {
     pub challenge_manager: Option<Arc<ChallengeManager>>,
     /// Active task leases (task_id -> lease info)
     pub task_leases: DashMap<String, TaskLease>,
+    /// Metagraph for validator stake lookups
+    pub metagraph: RwLock<Option<Metagraph>>,
 }
 
 impl AppState {
@@ -38,6 +42,7 @@ impl AppState {
             challenge_proxy: Some(challenge_proxy),
             challenge_manager: None,
             task_leases: DashMap::new(),
+            metagraph: RwLock::new(None),
         }
     }
 
@@ -46,6 +51,7 @@ impl AppState {
         db: DbPool,
         owner_hotkey: Option<String>,
         challenge_manager: Option<Arc<ChallengeManager>>,
+        metagraph: Option<Metagraph>,
     ) -> Self {
         Self {
             db,
@@ -56,7 +62,28 @@ impl AppState {
             challenge_proxy: None,
             challenge_manager,
             task_leases: DashMap::new(),
+            metagraph: RwLock::new(metagraph),
         }
+    }
+
+    /// Get validator stake from metagraph (returns 0 if not found)
+    pub fn get_validator_stake(&self, hotkey: &str) -> u64 {
+        use sp_core::crypto::Ss58Codec;
+        let mg = self.metagraph.read();
+        if let Some(ref metagraph) = *mg {
+            for (_uid, neuron) in &metagraph.neurons {
+                if neuron.hotkey.to_ss58check() == hotkey {
+                    // Stake is u128, convert to u64 (saturating)
+                    return neuron.stake.min(u64::MAX as u128) as u64;
+                }
+            }
+        }
+        0
+    }
+
+    /// Update metagraph
+    pub fn set_metagraph(&self, metagraph: Metagraph) {
+        *self.metagraph.write() = Some(metagraph);
     }
 
     pub async fn broadcast_event(&self, event: WsEvent) {

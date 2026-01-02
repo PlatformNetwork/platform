@@ -5767,6 +5767,7 @@ dependencies = [
  "futures",
  "hex",
  "parking_lot 0.12.5",
+ "platform-bittensor",
  "platform-challenge-sdk",
  "platform-core",
  "postgres-types",

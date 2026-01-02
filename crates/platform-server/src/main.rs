@@ -72,6 +72,18 @@ struct Args {
         default_value = "postgres://postgres:postgres@localhost:5432"
     )]
     database_url: String,
+
+    /// Subtensor WebSocket endpoint
+    #[arg(
+        long,
+        env = "SUBTENSOR_ENDPOINT",
+        default_value = "wss://entrypoint-finney.opentensor.ai:443"
+    )]
+    subtensor_endpoint: String,
+
+    /// Subnet UID for metagraph sync
+    #[arg(long, env = "NETUID", default_value = "100")]
+    netuid: u16,
 }
 
 #[tokio::main]
@@ -106,6 +118,32 @@ async fn main() -> anyhow::Result<()> {
     let db = db::init_db(&args.database_url).await?;
     info!("  Database: platform_server");
 
+    // Sync metagraph BEFORE accepting connections (blocking)
+    info!("");
+    info!("  Syncing metagraph (netuid={})...", args.netuid);
+    let metagraph = match platform_bittensor::BittensorClient::new(&args.subtensor_endpoint).await {
+        Ok(client) => match platform_bittensor::sync_metagraph(&client, args.netuid).await {
+            Ok(mg) => {
+                info!("  Metagraph synced: {} neurons", mg.n);
+                Some(mg)
+            }
+            Err(e) => {
+                warn!(
+                    "  Metagraph sync failed: {} (validators will have stake=0)",
+                    e
+                );
+                None
+            }
+        },
+        Err(e) => {
+            warn!(
+                "  Could not connect to subtensor: {} (validators will have stake=0)",
+                e
+            );
+            None
+        }
+    };
+
     // Initialize challenge orchestrator (loads challenges from DB)
     info!("");
     info!("  Initializing Challenge Orchestrator...");
@@ -129,6 +167,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         Some(args.owner_hotkey.clone()),
         challenge_manager.clone(),
+        metagraph,
     ));
 
     // Build router
