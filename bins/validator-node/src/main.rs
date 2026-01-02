@@ -420,13 +420,28 @@ async fn main() -> Result<()> {
     }
 
     // Build challenge URL map for WebSocket event handler
-    // Maps challenge_id -> local container URL (e.g., "term-challenge" -> "http://term-challenge:8080")
+    // Maps challenge name -> local container endpoint from orchestrator
     let challenge_urls: Arc<RwLock<HashMap<String, String>>> =
         Arc::new(RwLock::new(HashMap::new()));
-    for ch in &challenges {
-        let url = format!("http://{}:8080", ch.id);
-        challenge_urls.write().insert(ch.id.clone(), url.clone());
-        info!("Challenge URL registered: {} -> {}", ch.id, url);
+    if let Some(ref orch) = orchestrator {
+        for ch in &challenges {
+            // Generate same deterministic UUID used when starting the container
+            let challenge_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, ch.id.as_bytes());
+            let challenge_id = platform_core::ChallengeId(challenge_uuid);
+
+            // Get the actual endpoint from the orchestrator
+            if let Some(instance) = orch.get_challenge(&challenge_id) {
+                challenge_urls
+                    .write()
+                    .insert(ch.id.clone(), instance.endpoint.clone());
+                info!(
+                    "Challenge URL registered: {} -> {}",
+                    ch.id, instance.endpoint
+                );
+            } else {
+                warn!("Challenge {} not found in orchestrator", ch.id);
+            }
+        }
     }
 
     // Start WebSocket listener for platform-server events
