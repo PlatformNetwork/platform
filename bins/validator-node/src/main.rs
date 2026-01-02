@@ -861,7 +861,38 @@ async fn connect_to_websocket(
                         "Received challenge_started event for: {} at {}",
                         event.id, event.endpoint
                     );
-                    // Could auto-start container here if needed
+                    // Start the challenge container locally
+                    if let Some(ref orch) = orchestrator {
+                        let docker_image = format!("ghcr.io/platformnetwork/{}:latest", event.id);
+                        let challenge_uuid =
+                            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, event.id.as_bytes());
+                        let config = challenge_orchestrator::ChallengeContainerConfig {
+                            challenge_id: platform_core::ChallengeId(challenge_uuid),
+                            name: event.id.clone(),
+                            docker_image,
+                            mechanism_id: 0, // Default mechanism
+                            emission_weight: 100.0,
+                            timeout_secs: 3600,
+                            cpu_cores: 2.0,
+                            memory_mb: 4096,
+                            gpu_required: false,
+                        };
+
+                        match orch.add_challenge(config).await {
+                            Ok(_) => {
+                                info!("Challenge container started locally: {}", event.id);
+                                // Add to URL map
+                                challenge_urls
+                                    .write()
+                                    .insert(event.id.clone(), event.endpoint.clone());
+                            }
+                            Err(e) => {
+                                error!("Failed to start challenge container {}: {}", event.id, e)
+                            }
+                        }
+                    } else {
+                        warn!("No orchestrator available to start challenge: {}", event.id);
+                    }
                 }
                 Ok(WsEvent::Ping) => {
                     debug!("Received ping from server");

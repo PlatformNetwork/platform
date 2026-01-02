@@ -310,6 +310,18 @@ async fn start_challenge(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    info!("Challenge {} started at {}", id, endpoint);
+
+    // Broadcast to all validators so they start their local containers
+    state
+        .broadcast_event(models::WsEvent::ChallengeStarted(
+            models::ChallengeStartedEvent {
+                id: id.clone(),
+                endpoint: endpoint.clone(),
+            },
+        ))
+        .await;
+
     Ok(Json(serde_json::json!({
         "success": true,
         "endpoint": endpoint
