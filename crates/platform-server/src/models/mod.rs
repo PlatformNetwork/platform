@@ -459,6 +459,17 @@ pub struct ChallengeRegisteredEvent {
 pub struct ChallengeStartedEvent {
     pub id: String,
     pub endpoint: String,
+    pub docker_image: String,
+    pub mechanism_id: u8,
+    pub emission_weight: f64,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_cpu")]
+    pub cpu_cores: f64,
+    #[serde(default = "default_memory")]
+    pub memory_mb: u64,
+    #[serde(default)]
+    pub gpu_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

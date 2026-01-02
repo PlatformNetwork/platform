@@ -217,6 +217,27 @@ pub struct ChallengeStoppedEvent {
 pub struct ChallengeStartedEvent {
     pub id: String,
     pub endpoint: String,
+    pub docker_image: String,
+    pub mechanism_id: u8,
+    pub emission_weight: f64,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_cpu")]
+    pub cpu_cores: f64,
+    #[serde(default = "default_memory")]
+    pub memory_mb: u64,
+    #[serde(default)]
+    pub gpu_required: bool,
+}
+
+fn default_timeout() -> u64 {
+    3600
+}
+fn default_cpu() -> f64 {
+    2.0
+}
+fn default_memory() -> u64 {
+    4096
 }
 
 /// Custom event from a challenge
@@ -858,24 +879,23 @@ async fn connect_to_websocket(
                 }
                 Ok(WsEvent::ChallengeStarted(event)) => {
                     info!(
-                        "Received challenge_started event for: {} at {}",
-                        event.id, event.endpoint
+                        "Received challenge_started event for: {} at {} (image: {}, emission: {})",
+                        event.id, event.endpoint, event.docker_image, event.emission_weight
                     );
-                    // Start the challenge container locally
+                    // Start the challenge container locally using values from the event
                     if let Some(ref orch) = orchestrator {
-                        let docker_image = format!("ghcr.io/platformnetwork/{}:latest", event.id);
                         let challenge_uuid =
                             uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, event.id.as_bytes());
                         let config = challenge_orchestrator::ChallengeContainerConfig {
                             challenge_id: platform_core::ChallengeId(challenge_uuid),
                             name: event.id.clone(),
-                            docker_image,
-                            mechanism_id: 0, // Default mechanism
-                            emission_weight: 100.0,
-                            timeout_secs: 3600,
-                            cpu_cores: 2.0,
-                            memory_mb: 4096,
-                            gpu_required: false,
+                            docker_image: event.docker_image.clone(),
+                            mechanism_id: event.mechanism_id,
+                            emission_weight: event.emission_weight,
+                            timeout_secs: event.timeout_secs,
+                            cpu_cores: event.cpu_cores,
+                            memory_mb: event.memory_mb,
+                            gpu_required: event.gpu_required,
                         };
 
                         match orch.add_challenge(config).await {

@@ -318,6 +318,13 @@ async fn start_challenge(
             models::ChallengeStartedEvent {
                 id: id.clone(),
                 endpoint: endpoint.clone(),
+                docker_image: challenge.docker_image.clone(),
+                mechanism_id: challenge.mechanism_id as u8,
+                emission_weight: challenge.emission_weight,
+                timeout_secs: 3600,
+                cpu_cores: 2.0,
+                memory_mb: 4096,
+                gpu_required: false,
             },
         ))
         .await;
