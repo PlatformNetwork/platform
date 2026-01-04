@@ -577,18 +577,23 @@ impl DockerClient {
                 env.push(format!("DATABASE_URL={}/{}", db_url, challenge_db_name));
             }
         }
-        // Pass Platform URL for metagraph verification
-        // Use VALIDATOR_NAME to determine if we're server or validator
+        // Local hostname for broker (always local)
         let platform_host = std::env::var("VALIDATOR_NAME")
             .map(|name| format!("platform-{}", name))
             .unwrap_or_else(|_| {
                 std::env::var("VALIDATOR_CONTAINER_NAME")
                     .unwrap_or_else(|_| "platform-server".to_string())
             });
-        env.push(format!("PLATFORM_URL=http://{}:8080", platform_host));
+
+        // Pass Platform URL for metagraph verification and API calls
+        // Priority: PLATFORM_PUBLIC_URL (for validators to reach owner's server) > local
+        let platform_url = std::env::var("PLATFORM_PUBLIC_URL")
+            .unwrap_or_else(|_| format!("http://{}:8080", platform_host));
+        env.push(format!("PLATFORM_URL={}", platform_url));
 
         // Pass Container Broker WebSocket URL for secure container spawning
         // Challenges connect to this broker instead of using Docker socket directly
+        // Note: Broker is always local, not affected by PLATFORM_PUBLIC_URL
         let broker_port = std::env::var("BROKER_WS_PORT").unwrap_or_else(|_| "8090".to_string());
         env.push(format!(
             "CONTAINER_BROKER_WS_URL=ws://{}:{}",
