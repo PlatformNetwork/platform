@@ -31,12 +31,14 @@ impl WsContainerClient {
 
     /// Create client from environment variables
     /// Requires: CONTAINER_BROKER_WS_URL, CONTAINER_BROKER_JWT
-    /// Optional: CHALLENGE_ID, VALIDATOR_HOTKEY (for owner_id)
+    /// Optional: CHALLENGE_UUID (preferred), CHALLENGE_ID, VALIDATOR_HOTKEY (for owner_id)
     pub fn from_env() -> Option<Self> {
         let ws_url = std::env::var("CONTAINER_BROKER_WS_URL").ok()?;
         let jwt_token = std::env::var("CONTAINER_BROKER_JWT").ok()?;
-        let challenge_id =
-            std::env::var("CHALLENGE_ID").unwrap_or_else(|_| "unknown-challenge".to_string());
+        // Prefer CHALLENGE_UUID (matches JWT token) over CHALLENGE_ID (human-readable name)
+        let challenge_id = std::env::var("CHALLENGE_UUID")
+            .or_else(|_| std::env::var("CHALLENGE_ID"))
+            .unwrap_or_else(|_| "unknown-challenge".to_string());
         let owner_id =
             std::env::var("VALIDATOR_HOTKEY").unwrap_or_else(|_| "unknown-owner".to_string());
         Some(Self::new(&ws_url, &jwt_token, &challenge_id, &owner_id))

@@ -520,6 +520,8 @@ impl DockerClient {
         let mut env: Vec<String> = Vec::new();
         // Use challenge NAME (not UUID) so validators can match events by name
         env.push(format!("CHALLENGE_ID={}", config.name));
+        // Also pass the UUID for broker authentication (JWT token uses UUID)
+        env.push(format!("CHALLENGE_UUID={}", config.challenge_id));
         env.push(format!("MECHANISM_ID={}", config.mechanism_id));
         // Pass through important environment variables from image defaults
         env.push("TASKS_DIR=/app/data/tasks".to_string());
