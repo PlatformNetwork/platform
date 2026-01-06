@@ -72,6 +72,17 @@ pub enum Request {
     /// Pull an image
     Pull { image: String, request_id: String },
 
+    /// Build an image from Dockerfile
+    Build {
+        /// Tag for the image (e.g. "term-compiler:latest")
+        tag: String,
+        /// Dockerfile content (base64 encoded)
+        dockerfile: String,
+        /// Build context (optional tar.gz, base64 encoded)
+        context: Option<String>,
+        request_id: String,
+    },
+
     /// Health check
     Ping { request_id: String },
 
@@ -108,6 +119,7 @@ impl Request {
             Request::List { request_id, .. } => request_id,
             Request::Logs { request_id, .. } => request_id,
             Request::Pull { request_id, .. } => request_id,
+            Request::Build { request_id, .. } => request_id,
             Request::Ping { request_id, .. } => request_id,
             Request::CopyFrom { request_id, .. } => request_id,
             Request::CopyTo { request_id, .. } => request_id,
@@ -126,6 +138,7 @@ impl Request {
             Request::List { .. } => "list",
             Request::Logs { .. } => "logs",
             Request::Pull { .. } => "pull",
+            Request::Build { .. } => "build",
             Request::Ping { .. } => "ping",
             Request::CopyFrom { .. } => "copy_from",
             Request::CopyTo { .. } => "copy_to",
@@ -206,6 +219,13 @@ pub enum Response {
     /// Image pulled
     Pulled { image: String, request_id: String },
 
+    /// Image built
+    Built {
+        image_id: String,
+        logs: String,
+        request_id: String,
+    },
+
     /// Pong response
     Pong { version: String, request_id: String },
 
@@ -240,6 +260,7 @@ impl Response {
             Response::ContainerList { request_id, .. } => request_id,
             Response::LogsResult { request_id, .. } => request_id,
             Response::Pulled { request_id, .. } => request_id,
+            Response::Built { request_id, .. } => request_id,
             Response::Pong { request_id, .. } => request_id,
             Response::CopyFromResult { request_id, .. } => request_id,
             Response::CopyToResult { request_id, .. } => request_id,

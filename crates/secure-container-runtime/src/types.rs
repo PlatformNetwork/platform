@@ -219,6 +219,7 @@ pub enum AuditAction {
     ContainerRemove,
     ContainerExec,
     ImagePull,
+    ImageBuild,
     PolicyViolation,
 }
 

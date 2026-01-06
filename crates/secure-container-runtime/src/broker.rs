@@ -228,6 +228,16 @@ impl ContainerBroker {
 
             Request::Pull { image, request_id } => self.pull_image(&image, request_id).await,
 
+            Request::Build {
+                tag,
+                dockerfile,
+                context,
+                request_id,
+            } => {
+                self.build_image(&tag, &dockerfile, context, request_id)
+                    .await
+            }
+
             Request::CopyFrom {
                 container_id,
                 path,
@@ -855,6 +865,171 @@ impl ContainerBroker {
 
         Response::Pulled {
             image: image.to_string(),
+            request_id,
+        }
+    }
+
+    /// Build an image from Dockerfile
+    async fn build_image(
+        &self,
+        tag: &str,
+        dockerfile_b64: &str,
+        context_b64: Option<String>,
+        request_id: String,
+    ) -> Response {
+        use base64::Engine;
+        use bollard::image::BuildImageOptions;
+
+        // Verify policy allows building this tag
+        // For now, only allow term-compiler images or specific tags
+        // This is a basic check, could be expanded in SecurityPolicy
+        if !tag.starts_with("term-compiler:") && !tag.starts_with("ghcr.io/") {
+            let err = format!("Image tag not allowed: {}", tag);
+            self.audit(
+                AuditAction::ImageBuild,
+                "",
+                "",
+                None,
+                false,
+                Some(err.clone()),
+            )
+            .await;
+            return Response::error(request_id, ContainerError::PolicyViolation(err));
+        }
+
+        // Prepare build context (tar archive)
+        let mut tar_buffer = Vec::new();
+
+        // 1. If context provided, decode it (expecting tar/tar.gz)
+        if let Some(ctx) = context_b64 {
+            match base64::engine::general_purpose::STANDARD.decode(ctx) {
+                Ok(data) => {
+                    tar_buffer = data;
+                }
+                Err(e) => {
+                    return Response::error(
+                        request_id,
+                        ContainerError::InvalidConfig(format!("Invalid base64 context: {}", e)),
+                    );
+                }
+            }
+        }
+
+        // 2. Add Dockerfile to context if not empty
+        // If tar_buffer is empty, create new tar. If not, we append or overwrite Dockerfile?
+        // Simpler approach: Create a new tar containing just the Dockerfile if context is None.
+        // If context is provided, assume it contains everything needed OR inject Dockerfile.
+        // For term-compiler, we just need Dockerfile mostly.
+
+        // Let's decode Dockerfile
+        let dockerfile_content =
+            match base64::engine::general_purpose::STANDARD.decode(dockerfile_b64) {
+                Ok(d) => d,
+                Err(e) => {
+                    return Response::error(
+                        request_id,
+                        ContainerError::InvalidConfig(format!("Invalid base64 dockerfile: {}", e)),
+                    );
+                }
+            };
+
+        // If no context provided, create a tar with just the Dockerfile
+        if tar_buffer.is_empty() {
+            let mut builder = tar::Builder::new(Vec::new());
+
+            let mut header = tar::Header::new_gnu();
+            header.set_size(dockerfile_content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+
+            if let Err(e) =
+                builder.append_data(&mut header, "Dockerfile", dockerfile_content.as_slice())
+            {
+                return Response::error(
+                    request_id,
+                    ContainerError::InternalError(format!("Failed to create tar: {}", e)),
+                );
+            }
+
+            if let Err(e) = builder.finish() {
+                return Response::error(
+                    request_id,
+                    ContainerError::InternalError(format!("Failed to finish tar: {}", e)),
+                );
+            }
+
+            tar_buffer = builder.into_inner().unwrap_or_default();
+        }
+        // NOTE: If context IS provided, we assume it's a valid tar that contains Dockerfile
+        // or we rely on the Dockerfile string being ignored?
+        // Actually bollard/Docker API takes "dockerfile" option to specify filename,
+        // but typically expects the file inside the tar.
+        // For this implementation, we'll assume:
+        // - If context is None: create tar with Dockerfile content named "Dockerfile"
+        // - If context is Some: use it as is, ignore dockerfile_content (or expect client to have put it in context)
+        // BUT the API has `dockerfile` param. Let's support the simple case first (no context).
+
+        let options = BuildImageOptions {
+            t: tag,
+            dockerfile: "Dockerfile",
+            rm: true,
+            forcerm: true,
+            ..Default::default()
+        };
+
+        info!(tag = %tag, size = tar_buffer.len(), "Starting image build");
+
+        let mut stream = self
+            .docker
+            .build_image(options, None, Some(tar_buffer.into()));
+        let mut logs = String::new();
+        let mut image_id = String::new();
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(info) => {
+                    if let Some(stream) = info.stream {
+                        logs.push_str(&stream);
+                    }
+                    if let Some(aux) = info.aux {
+                        if let Some(id) = aux.id {
+                            image_id = id;
+                        }
+                    }
+                    if let Some(error) = info.error {
+                        logs.push_str(&format!("\nERROR: {}", error));
+                        self.audit(
+                            AuditAction::ImageBuild,
+                            "",
+                            "",
+                            None,
+                            false,
+                            Some(error.clone()),
+                        )
+                        .await;
+                        return Response::error(
+                            request_id,
+                            ContainerError::DockerError(format!("Build failed: {}", error)),
+                        );
+                    }
+                }
+                Err(e) => {
+                    return Response::error(
+                        request_id,
+                        ContainerError::DockerError(format!("Build error: {}", e)),
+                    );
+                }
+            }
+        }
+
+        info!(tag = %tag, id = %image_id, "Image built successfully");
+
+        self.audit(AuditAction::ImageBuild, "", "", Some(&image_id), true, None)
+            .await;
+
+        Response::Built {
+            image_id,
+            logs,
             request_id,
         }
     }
