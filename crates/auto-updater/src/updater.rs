@@ -107,15 +107,15 @@ impl AutoUpdater {
         // If mandatory, exit to trigger restart
         if requirement.mandatory {
             info!("Mandatory update - initiating graceful shutdown");
-                // Give time for cleanup
-                tokio::time::sleep(Duration::from_secs(SHUTDOWN_DELAY_SECS)).await;
-                // Exit with code 0 - systemd/Docker will restart with new image
-                #[cfg(not(test))]
-                std::process::exit(0);
-                #[cfg(test)]
-                {
-                    return Ok(());
-                }
+            // Give time for cleanup
+            tokio::time::sleep(Duration::from_secs(SHUTDOWN_DELAY_SECS)).await;
+            // Exit with code 0 - systemd/Docker will restart with new image
+            #[cfg(not(test))]
+            std::process::exit(0);
+            #[cfg(test)]
+            {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -229,6 +229,7 @@ mod tests {
     use super::*;
     use anyhow::anyhow;
     use std::sync::Mutex;
+    use tokio::time::{sleep, timeout};
 
     #[test]
     fn test_restart_signal() {
@@ -252,13 +253,52 @@ mod tests {
         assert!(rx.try_recv().is_ok());
     }
 
+    #[test]
+    fn test_graceful_shutdown_default() {
+        let shutdown: GracefulShutdown = Default::default();
+        let mut rx = shutdown.subscribe();
+        shutdown.trigger();
+        assert!(rx.try_recv().is_ok());
+    }
+
+    fn make_test_docker() -> bollard::Docker {
+        bollard::Docker::connect_with_local_defaults().unwrap()
+    }
+
+    fn make_test_watcher() -> Arc<crate::VersionWatcher> {
+        Arc::new(crate::VersionWatcher::new(Duration::from_secs(60)))
+    }
+
+    #[tokio::test]
+    async fn test_auto_updater_new_initializes_restart_sender() {
+        let watcher = make_test_watcher();
+        let updater = AutoUpdater::new(watcher).await.expect("should construct");
+        assert_eq!(updater.restart_sender.receiver_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_restart_receives_signal() {
+        let watcher = make_test_watcher();
+        let updater = AutoUpdater::new(watcher).await.expect("should construct");
+        let mut rx = updater.subscribe_restart();
+
+        let signal = RestartSignal {
+            new_version: Version::new(1, 0, 0),
+            image: "test/image:1.0.0".to_string(),
+            mandatory: false,
+        };
+        updater.restart_sender.send(signal.clone()).unwrap();
+
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.image, signal.image);
+        assert_eq!(received.new_version, signal.new_version);
+    }
+
     #[tokio::test]
     async fn test_current_image_format() {
-        let watcher = Arc::new(crate::VersionWatcher::new(std::time::Duration::from_secs(
-            60,
-        )));
+        let watcher = make_test_watcher();
         let updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher: watcher.clone(),
             restart_sender: tokio::sync::broadcast::channel(1).0,
             pull_hook: None,
@@ -269,36 +309,56 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_and_update_no_update() {
-        let watcher = Arc::new(crate::VersionWatcher::new(std::time::Duration::from_secs(
-            60,
-        )));
+        let watcher = make_test_watcher();
         let updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher: watcher.clone(),
             restart_sender: tokio::sync::broadcast::channel(1).0,
             pull_hook: None,
         };
         let result = updater.check_and_update().await.unwrap();
-        matches!(
+        assert!(matches!(
             result,
             UpdateResult::NoUpdateAvailable | UpdateResult::AlreadyUpToDate
-        );
+        ));
     }
 
     #[tokio::test]
-    async fn test_handle_update_already_up_to_date() {
-        let watcher = Arc::new(crate::VersionWatcher::new(std::time::Duration::from_secs(
-            60,
-        )));
+    async fn test_check_and_update_returns_already_up_to_date() {
+        let watcher = make_test_watcher();
         let updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher: watcher.clone(),
             restart_sender: tokio::sync::broadcast::channel(1).0,
             pull_hook: None,
         };
-        let req = crate::UpdateRequirement {
-            min_version: crate::Version::current(),
-            recommended_version: crate::Version::current(),
+
+        let requirement = UpdateRequirement {
+            min_version: Version::current(),
+            recommended_version: Version::current(),
+            docker_image: "same/version:latest".to_string(),
+            mandatory: false,
+            deadline_block: None,
+            release_notes: None,
+        };
+        watcher.on_version_update(requirement);
+
+        let result = updater.check_and_update().await.unwrap();
+        assert!(matches!(result, UpdateResult::AlreadyUpToDate));
+    }
+
+    #[tokio::test]
+    async fn test_handle_update_already_up_to_date() {
+        let watcher = make_test_watcher();
+        let updater = AutoUpdater {
+            docker: make_test_docker(),
+            watcher: watcher.clone(),
+            restart_sender: tokio::sync::broadcast::channel(1).0,
+            pull_hook: None,
+        };
+        let req = UpdateRequirement {
+            min_version: Version::current(),
+            recommended_version: Version::current(),
             docker_image: "test-image:latest".to_string(),
             mandatory: false,
             deadline_block: None,
@@ -335,10 +395,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_update_triggers_restart_signal() {
-        let watcher = Arc::new(crate::VersionWatcher::new(Duration::from_secs(60)));
+        let watcher = make_test_watcher();
         let (sender, _) = broadcast::channel(4);
         let mut updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher,
             restart_sender: sender,
             pull_hook: None,
@@ -372,10 +432,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_and_update_reports_updated() {
-        let watcher = Arc::new(crate::VersionWatcher::new(Duration::from_secs(60)));
+        let watcher = make_test_watcher();
         let (sender, _) = broadcast::channel(4);
         let mut updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher: watcher.clone(),
             restart_sender: sender,
             pull_hook: None,
@@ -414,10 +474,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_update_mandatory_triggers_shutdown() {
-        let watcher = Arc::new(crate::VersionWatcher::new(Duration::from_secs(60)));
+        let watcher = make_test_watcher();
         let (sender, _) = broadcast::channel(4);
         let mut updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher,
             restart_sender: sender,
             pull_hook: None,
@@ -450,10 +510,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_update_propagates_pull_error() {
-        let watcher = Arc::new(crate::VersionWatcher::new(Duration::from_secs(60)));
+        let watcher = make_test_watcher();
         let (sender, _) = broadcast::channel(4);
         let mut updater = AutoUpdater {
-            docker: bollard::Docker::connect_with_local_defaults().unwrap(),
+            docker: make_test_docker(),
             watcher,
             restart_sender: sender,
             pull_hook: None,
@@ -466,5 +526,73 @@ mod tests {
         let requirement = make_future_requirement("test/image:error", false);
         let result = updater.handle_update(requirement).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_pull_image_uses_test_hook() {
+        let watcher = make_test_watcher();
+        let (sender, _) = broadcast::channel(1);
+        let mut updater = AutoUpdater {
+            docker: make_test_docker(),
+            watcher,
+            restart_sender: sender,
+            pull_hook: None,
+        };
+
+        let pull_calls = Arc::new(Mutex::new(Vec::new()));
+        let hook_calls = pull_calls.clone();
+        updater.pull_hook = Some(Arc::new(move |image: &str| {
+            let hook_calls = hook_calls.clone();
+            let image = image.to_string();
+            Box::pin(async move {
+                hook_calls.lock().unwrap().push(image);
+                Ok(())
+            })
+        }));
+
+        updater.pull_image("hook/test:1.0.0").await.unwrap();
+        assert_eq!(pull_calls.lock().unwrap().as_slice(), ["hook/test:1.0.0"]);
+    }
+
+    #[tokio::test]
+    async fn test_start_processes_incoming_requirements() {
+        let watcher = make_test_watcher();
+        let (sender, _) = broadcast::channel(4);
+        let mut updater = AutoUpdater {
+            docker: make_test_docker(),
+            watcher: watcher.clone(),
+            restart_sender: sender,
+            pull_hook: None,
+        };
+
+        let pull_calls = Arc::new(Mutex::new(Vec::new()));
+        let hook_calls = pull_calls.clone();
+        updater.pull_hook = Some(Arc::new(move |image: &str| {
+            let hook_calls = hook_calls.clone();
+            let image = image.to_string();
+            Box::pin(async move {
+                hook_calls.lock().unwrap().push(image);
+                Ok(())
+            })
+        }));
+
+        let updater = Arc::new(updater);
+        let mut rx = updater.subscribe_restart();
+        let requirement = make_future_requirement("start/test:1.0", false);
+
+        let updater_clone = updater.clone();
+        tokio::spawn(async move {
+            updater_clone.start().await;
+        });
+
+        sleep(Duration::from_millis(10)).await;
+        watcher.on_version_update(requirement.clone());
+
+        let received = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("restart signal in time")
+            .expect("channel open");
+        assert_eq!(received.image, requirement.docker_image);
+        assert_eq!(pull_calls.lock().unwrap().len(), 1);
     }
 }
