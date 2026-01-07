@@ -338,7 +338,7 @@ impl DockerClient {
         // Priority: user-defined bridge > any bridge > host
         let mut best_network: Option<String> = None;
 
-        for (name, _settings) in networks {
+        for name in networks.keys() {
             // Skip host and none networks
             if name == "host" || name == "none" {
                 continue;
@@ -919,10 +919,13 @@ impl DockerClient {
         let challenge_id = config.name.to_string();
         let owner_id = std::env::var("VALIDATOR_HOTKEY").unwrap_or_else(|_| "unknown".to_string());
 
-        // Use secure_container_runtime to generate token (3600s = 1 hour TTL)
-        if let Ok(token) =
-            secure_container_runtime::generate_token(&challenge_id, &owner_id, &jwt_secret, 3600)
-        {
+        // Use secure_container_runtime to generate token (10 years TTL - effectively infinite for container lifetime)
+        if let Ok(token) = secure_container_runtime::generate_token(
+            &challenge_id,
+            &owner_id,
+            &jwt_secret,
+            315360000,
+        ) {
             env.push(format!("CONTAINER_BROKER_JWT={}", token));
             debug!(challenge = %config.name, "Generated broker JWT token");
         } else {
@@ -1134,8 +1137,10 @@ impl DockerClient {
         let mut result = CleanupResult::default();
 
         // List ALL containers (including stopped)
-        let mut options: ListContainersOptions<String> = Default::default();
-        options.all = true;
+        let options: ListContainersOptions<String> = ListContainersOptions {
+            all: true,
+            ..Default::default()
+        };
 
         let containers = self
             .docker
