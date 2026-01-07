@@ -43,6 +43,7 @@ pub use health::*;
 pub use lifecycle::*;
 use parking_lot::RwLock;
 use platform_core::ChallengeId;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -805,6 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_new_uses_injected_docker_client() {
         let bridge = TestDockerBridge::default();
         let docker = DockerClient::with_bridge(bridge.clone(), PLATFORM_NETWORK);
