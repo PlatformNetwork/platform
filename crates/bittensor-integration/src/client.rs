@@ -4,6 +4,7 @@ use crate::BittensorConfig;
 use anyhow::Result;
 use bittensor_rs::chain::{signer_from_seed, BittensorClient, BittensorSigner};
 use bittensor_rs::metagraph::{sync_metagraph, Metagraph};
+use std::collections::HashMap;
 use tracing::info;
 
 /// Wrapper around bittensor-rs client for Mini-Chain
@@ -12,6 +13,7 @@ pub struct SubtensorClient {
     client: Option<BittensorClient>,
     signer: Option<BittensorSigner>,
     metagraph: Option<Metagraph>,
+    uid_overrides: HashMap<String, u16>,
 }
 
 impl SubtensorClient {
@@ -22,6 +24,7 @@ impl SubtensorClient {
             client: None,
             signer: None,
             metagraph: None,
+            uid_overrides: HashMap::new(),
         }
     }
 
@@ -92,21 +95,10 @@ impl SubtensorClient {
 
     /// Get UID for a hotkey from cached metagraph
     pub fn get_uid_for_hotkey(&self, hotkey: &str) -> Option<u16> {
-        let metagraph = self.metagraph.as_ref()?;
-
-        // Parse hotkey to AccountId32
-        use sp_core::crypto::Ss58Codec;
-        let account = sp_core::crypto::AccountId32::from_ss58check(hotkey).ok()?;
-        let account_bytes: &[u8; 32] = account.as_ref();
-
-        // Find neuron with matching hotkey
-        for (uid, neuron) in &metagraph.neurons {
-            let neuron_hotkey: &[u8; 32] = neuron.hotkey.as_ref();
-            if neuron_hotkey == account_bytes {
-                return Some(*uid as u16);
-            }
+        if let Some(uid) = self.uid_overrides.get(hotkey) {
+            return Some(*uid);
         }
-        None
+        self.lookup_uid_in_metagraph(hotkey)
     }
 
     /// Get UIDs for a list of hotkeys
@@ -118,6 +110,27 @@ impl SubtensorClient {
             }
         }
         results
+    }
+
+    fn lookup_uid_in_metagraph(&self, hotkey: &str) -> Option<u16> {
+        let metagraph = self.metagraph.as_ref()?;
+
+        use sp_core::crypto::Ss58Codec;
+        let account = sp_core::crypto::AccountId32::from_ss58check(hotkey).ok()?;
+        let account_bytes: &[u8; 32] = account.as_ref();
+
+        for (uid, neuron) in &metagraph.neurons {
+            let neuron_hotkey: &[u8; 32] = neuron.hotkey.as_ref();
+            if neuron_hotkey == account_bytes {
+                return Some(*uid as u16);
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
+    pub fn set_uid_overrides(&mut self, entries: Vec<(String, u16)>) {
+        self.uid_overrides = entries.into_iter().collect();
     }
 
     /// Get the number of mechanisms for the subnet
@@ -160,5 +173,62 @@ impl SubtensorClient {
         use bittensor_rs::blocks::EpochPhase;
         let info = self.get_current_epoch_info().await?;
         Ok(matches!(info.phase, EpochPhase::RevealWindow))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BittensorConfig;
+
+    #[test]
+    fn test_set_signer_initializes_signer_field() {
+        let mut client = SubtensorClient::new(BittensorConfig::local(33));
+        client.set_signer("//Alice").expect("set signer");
+        assert!(client.get_signer().is_some());
+    }
+
+    #[test]
+    fn test_client_returns_error_when_not_connected() {
+        let client = SubtensorClient::new(BittensorConfig::local(9));
+        assert!(client.client().is_err());
+        assert!(client.signer().is_err());
+        assert_eq!(client.netuid(), 9);
+        assert!(!client.use_commit_reveal());
+    }
+
+    #[test]
+    fn test_version_key_reflects_config() {
+        let config = BittensorConfig {
+            endpoint: "ws://node".into(),
+            netuid: 12,
+            use_commit_reveal: false,
+            version_key: 99,
+        };
+        let client = SubtensorClient::new(config.clone());
+        assert_eq!(client.version_key(), 99);
+        assert_eq!(client.netuid(), config.netuid);
+        assert_eq!(client.use_commit_reveal(), config.use_commit_reveal);
+    }
+
+    #[test]
+    fn test_get_uid_for_hotkey_uses_overrides() {
+        let mut client = SubtensorClient::new(BittensorConfig::local(2));
+        client.set_uid_overrides(vec![("hk-a".to_string(), 5), ("hk-b".to_string(), 7)]);
+
+        assert_eq!(client.get_uid_for_hotkey("hk-a"), Some(5));
+        assert_eq!(client.get_uid_for_hotkey("hk-b"), Some(7));
+        assert!(client.get_uid_for_hotkey("missing").is_none());
+    }
+
+    #[test]
+    fn test_get_uids_for_hotkeys_filters_missing() {
+        let mut client = SubtensorClient::new(BittensorConfig::local(4));
+        client.set_uid_overrides(vec![("hk".to_string(), 11)]);
+
+        let pairs = client.get_uids_for_hotkeys(&vec!["hk".to_string(), "unknown".to_string()]);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0], ("hk".to_string(), 11));
     }
 }

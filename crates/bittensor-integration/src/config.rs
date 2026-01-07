@@ -58,3 +58,18 @@ impl BittensorConfig {
         Self::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mainnet_returns_default_config() {
+        let cfg = BittensorConfig::mainnet();
+        let default = BittensorConfig::default();
+        assert_eq!(cfg.endpoint, default.endpoint);
+        assert_eq!(cfg.netuid, DEFAULT_NETUID);
+        assert_eq!(cfg.use_commit_reveal, default.use_commit_reveal);
+        assert_eq!(cfg.version_key, default.version_key);
+    }
+}

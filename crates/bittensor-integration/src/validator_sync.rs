@@ -280,7 +280,10 @@ pub enum SyncError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_core::{Keypair, NetworkConfig};
+    use crate::BittensorConfig;
+    use platform_core::{Keypair, NetworkConfig, Stake};
+    use std::sync::Arc;
+    use tokio::sync::Mutex as TokioMutex;
 
     #[test]
     fn test_sync_result() {
@@ -307,5 +310,131 @@ mod tests {
         };
 
         assert_eq!(status.netuid, 1);
+    }
+
+    #[test]
+    fn test_validator_sync_needs_sync_respects_interval() {
+        let client = Arc::new(TokioMutex::new(SubtensorClient::new(
+            BittensorConfig::local(1),
+        )));
+        let sync = ValidatorSync::new(client, 1, 1_000_000_000);
+
+        assert!(!sync.needs_sync(50));
+        assert!(sync.needs_sync(100));
+        assert!(sync.needs_sync(150));
+    }
+
+    #[test]
+    fn test_validator_sync_with_sync_interval_customizes_threshold() {
+        let client = Arc::new(TokioMutex::new(SubtensorClient::new(
+            BittensorConfig::local(1),
+        )));
+        let sync = ValidatorSync::new(client, 1, 1_000_000_000).with_sync_interval(10);
+
+        assert!(!sync.needs_sync(9));
+        assert!(sync.needs_sync(10));
+    }
+
+    fn sample_metagraph_validator(hotkey: Hotkey, stake: u64) -> MetagraphValidator {
+        MetagraphValidator {
+            hotkey,
+            uid: 1,
+            stake,
+            active: true,
+            incentive: 0.5,
+            trust: 0.5,
+            consensus: 0.5,
+        }
+    }
+
+    #[test]
+    fn test_update_state_skips_banned_validators() {
+        let client = Arc::new(TokioMutex::new(SubtensorClient::new(
+            BittensorConfig::local(1),
+        )));
+        let sync = ValidatorSync::new(client, 1, 1_000_000_000);
+        let state = Arc::new(RwLock::new(ChainState::default()));
+
+        let hotkey = Hotkey([7u8; 32]);
+        let banned = std::collections::HashSet::from([hotkey.to_hex()]);
+        let validators = vec![sample_metagraph_validator(hotkey.clone(), 2_000_000_000)];
+
+        let result = sync.update_state(&state, validators, Some(&banned));
+
+        assert_eq!(result.added, 0);
+        assert_eq!(result.skipped_banned, 1);
+        assert!(state.read().validators.is_empty());
+    }
+
+    #[test]
+    fn test_update_state_removes_and_updates_validators() {
+        let client = Arc::new(TokioMutex::new(SubtensorClient::new(
+            BittensorConfig::local(1),
+        )));
+        let sync = ValidatorSync::new(client, 1, 1_000_000_000);
+        let state = Arc::new(RwLock::new(ChainState::default()));
+
+        let keep_hotkey = Hotkey([1u8; 32]);
+        let remove_hotkey = Hotkey([2u8; 32]);
+
+        {
+            let mut guard = state.write();
+            guard
+                .add_validator(ValidatorInfo::new(
+                    keep_hotkey.clone(),
+                    Stake::new(1_500_000_000),
+                ))
+                .unwrap();
+            guard
+                .add_validator(ValidatorInfo::new(
+                    remove_hotkey.clone(),
+                    Stake::new(1_500_000_000),
+                ))
+                .unwrap();
+        }
+
+        let bt_validators = vec![MetagraphValidator {
+            hotkey: keep_hotkey.clone(),
+            uid: 9,
+            stake: 3_000_000_000,
+            active: false,
+            incentive: 0.4,
+            trust: 0.3,
+            consensus: 0.2,
+        }];
+
+        let result = sync.update_state(&state, bt_validators, None);
+
+        assert_eq!(result.removed, 1);
+        assert_eq!(result.updated, 1);
+        assert_eq!(result.total, 1);
+
+        let guard = state.read();
+        assert!(guard.validators.get(&remove_hotkey).is_none());
+        let updated = guard.validators.get(&keep_hotkey).unwrap();
+        assert_eq!(updated.stake, Stake::new(3_000_000_000));
+        assert!(!updated.is_active);
+    }
+
+    #[test]
+    fn test_update_state_adds_new_validator() {
+        let client = Arc::new(TokioMutex::new(SubtensorClient::new(
+            BittensorConfig::local(1),
+        )));
+        let sync = ValidatorSync::new(client, 1, 1_000_000_000);
+        let state = Arc::new(RwLock::new(ChainState::default()));
+
+        let new_hotkey = Hotkey([9u8; 32]);
+        let validators = vec![sample_metagraph_validator(
+            new_hotkey.clone(),
+            2_500_000_000,
+        )];
+
+        let result = sync.update_state(&state, validators, None);
+
+        assert_eq!(result.added, 1);
+        assert_eq!(result.total, 1);
+        let guard = state.read();
+        assert!(guard.validators.contains_key(&new_hotkey));
     }
 }

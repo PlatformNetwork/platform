@@ -796,6 +796,361 @@ pub struct MechanismWeightManager {
     pending_mechanism_commits: HashMap<u8, PendingMechanismCommitV2>,
 }
 
+fn convert_assignments_with_lookup(
+    weights: &[WeightAssignment],
+    uid_lookup: &HashMap<String, u16>,
+) -> (Vec<u64>, Vec<u16>, Vec<String>) {
+    let mut uids = Vec::new();
+    let mut weight_values = Vec::new();
+    let mut unresolved = Vec::new();
+
+    for assignment in weights {
+        if let Some(uid) = uid_lookup.get(&assignment.hotkey) {
+            uids.push(*uid as u64);
+            let w_u16 = (assignment.weight.clamp(0.0, 1.0) * 65535.0) as u16;
+            weight_values.push(w_u16);
+        } else {
+            unresolved.push(assignment.hotkey.clone());
+        }
+    }
+
+    (uids, weight_values, unresolved)
+}
+
+fn fill_with_burn(mut uids: Vec<u64>, mut weight_values: Vec<u16>) -> (Vec<u64>, Vec<u16>) {
+    const TARGET_SUM: u32 = 65535;
+
+    if uids.is_empty() {
+        info!("No valid weights, defaulting to UID 0");
+        return (vec![0], vec![TARGET_SUM as u16]);
+    }
+
+    let sum: u32 = weight_values.iter().map(|w| *w as u32).sum();
+    if sum < TARGET_SUM {
+        let remaining = (TARGET_SUM - sum) as u16;
+        if remaining > 0 {
+            if let Some(pos) = uids.iter().position(|u| *u == 0) {
+                weight_values[pos] = weight_values[pos].saturating_add(remaining);
+            } else {
+                uids.push(0);
+                weight_values.push(remaining);
+            }
+            info!(
+                "Adding {} weight to UID 0 to fill to sum=1",
+                remaining as f64 / 65535.0
+            );
+        }
+    }
+
+    (uids, weight_values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BittensorConfig;
+    use std::collections::HashMap;
+
+    fn sample_pending_mechanism_commit() -> PendingMechanismCommit {
+        PendingMechanismCommit {
+            mechanism_id: 1,
+            hash: "abc".to_string(),
+            uids: vec![1, 2],
+            weights: vec![10, 20],
+            salt_hex: PendingMechanismCommit::salt_to_hex(&[1, 2, 3]),
+            version_key: 7,
+            epoch: 9,
+        }
+    }
+
+    fn sample_pending_commit_v2() -> PendingCommitV2 {
+        PendingCommitV2 {
+            hash: "def".to_string(),
+            uids: vec![3, 4],
+            weights: vec![30, 40],
+            salt_hex: PendingCommitV2::salt_to_hex(&[4, 5]),
+            version_key: 11,
+            epoch: 10,
+        }
+    }
+
+    #[test]
+    fn test_persisted_commit_state_round_trip() {
+        let mut state = PersistedCommitState::default();
+        state.committed_epoch = Some(5);
+        state
+            .pending_mechanism_commits
+            .insert(1, sample_pending_mechanism_commit());
+        state.pending_commit = Some(sample_pending_commit_v2());
+        state.last_revealed_epoch.insert(1, 4);
+
+        let path = std::env::temp_dir().join(format!(
+            "commit_state_test_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        state.save(&path).expect("should save state");
+        let loaded = PersistedCommitState::load(&path);
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(loaded.committed_epoch, Some(5));
+        assert!(loaded.pending_mechanism_commits.contains_key(&1));
+        assert!(loaded.pending_commit.is_some());
+        assert_eq!(loaded.last_revealed_epoch.get(&1), Some(&4));
+    }
+
+    #[test]
+    fn test_new_epoch_clears_old_commits() {
+        let mut state = PersistedCommitState::default();
+        state.committed_epoch = Some(1);
+        state
+            .pending_mechanism_commits
+            .insert(1, sample_pending_mechanism_commit());
+        state.pending_commit = Some(sample_pending_commit_v2());
+
+        state.new_epoch(2);
+
+        assert!(state.pending_mechanism_commits.is_empty());
+        assert!(state.pending_commit.is_none());
+    }
+
+    #[test]
+    fn test_new_epoch_same_epoch_preserves_commits() {
+        let mut state = PersistedCommitState::default();
+        state.committed_epoch = Some(7);
+        state
+            .pending_mechanism_commits
+            .insert(1, sample_pending_mechanism_commit());
+
+        state.new_epoch(7);
+
+        assert!(!state.pending_mechanism_commits.is_empty());
+    }
+
+    #[test]
+    fn test_pending_mechanism_commit_salt_round_trip() {
+        let salt = vec![1, 65535, 42];
+        let hex = PendingMechanismCommit::salt_to_hex(&salt);
+        let commit = PendingMechanismCommit {
+            salt_hex: hex,
+            ..sample_pending_mechanism_commit()
+        };
+
+        assert_eq!(commit.get_salt(), salt);
+    }
+
+    #[test]
+    fn test_pending_commit_v2_salt_round_trip() {
+        let salt = vec![100, 200];
+        let hex = PendingCommitV2::salt_to_hex(&salt);
+        let commit = PendingCommitV2 {
+            salt_hex: hex,
+            ..sample_pending_commit_v2()
+        };
+
+        assert_eq!(commit.get_salt(), salt);
+    }
+
+    #[test]
+    fn test_has_commits_for_epoch() {
+        let mut state = PersistedCommitState::default();
+        state.committed_epoch = Some(3);
+        state
+            .pending_mechanism_commits
+            .insert(1, sample_pending_mechanism_commit());
+
+        assert!(state.has_commits_for_epoch(3));
+        assert!(!state.has_commits_for_epoch(4));
+    }
+
+    #[test]
+    fn test_has_revealed_for_epoch_tracks_state() {
+        let mut state = PersistedCommitState::default();
+        assert!(!state.has_revealed_for_epoch(2, 5));
+
+        state.last_revealed_epoch.insert(2, 10);
+        assert!(state.has_revealed_for_epoch(2, 9));
+        assert!(state.has_revealed_for_epoch(2, 10));
+        assert!(!state.has_revealed_for_epoch(2, 11));
+    }
+
+    #[test]
+    fn test_convert_assignments_with_lookup_resolves_and_clamps() {
+        let assignments = vec![
+            WeightAssignment::new("hk1".to_string(), 0.25),
+            WeightAssignment::new("hk2".to_string(), 1.5),
+        ];
+
+        let mut lookup = HashMap::new();
+        lookup.insert("hk1".to_string(), 5);
+        lookup.insert("hk2".to_string(), 7);
+
+        let (uids, weights, unresolved) = convert_assignments_with_lookup(&assignments, &lookup);
+
+        assert_eq!(uids, vec![5_u64, 7_u64]);
+        assert_eq!(weights.len(), 2);
+        assert_eq!(weights[1], 65535);
+        assert!(unresolved.is_empty());
+    }
+
+    #[test]
+    fn test_convert_assignments_with_lookup_tracks_unresolved() {
+        let assignments = vec![
+            WeightAssignment::new("known".to_string(), 0.4),
+            WeightAssignment::new("missing".to_string(), 0.6),
+        ];
+
+        let mut lookup = HashMap::new();
+        lookup.insert("known".to_string(), 9);
+
+        let (uids, weights, unresolved) = convert_assignments_with_lookup(&assignments, &lookup);
+
+        assert_eq!(uids, vec![9_u64]);
+        assert_eq!(weights.len(), 1);
+        assert_eq!(unresolved, vec!["missing".to_string()]);
+    }
+
+    #[test]
+    fn test_convert_assignments_with_lookup_clamps_negative_weights() {
+        let assignments = vec![
+            WeightAssignment::new("known".to_string(), -0.4),
+            WeightAssignment::new("extra".to_string(), 0.3),
+        ];
+
+        let mut lookup = HashMap::new();
+        lookup.insert("known".to_string(), 11);
+
+        let (uids, weights, unresolved) = convert_assignments_with_lookup(&assignments, &lookup);
+
+        assert_eq!(uids, vec![11_u64]);
+        assert_eq!(weights, vec![0]);
+        assert_eq!(unresolved, vec!["extra".to_string()]);
+    }
+
+    #[test]
+    fn test_fill_with_burn_defaults_to_uid_zero() {
+        let (uids, weights) = fill_with_burn(vec![], vec![]);
+        assert_eq!(uids, vec![0]);
+        assert_eq!(weights, vec![65535]);
+    }
+
+    #[test]
+    fn test_fill_with_burn_adds_new_burn_entry() {
+        let (uids, weights) = fill_with_burn(vec![2], vec![20000]);
+        assert_eq!(uids.len(), 2);
+        assert!(uids.contains(&0));
+        let burn_index = uids.iter().position(|u| *u == 0).unwrap();
+        assert_eq!(weights[burn_index] as u32 + 20000, 65535);
+    }
+
+    #[test]
+    fn test_fill_with_burn_updates_existing_burn_entry() {
+        let (uids, weights) = fill_with_burn(vec![0, 3], vec![1000, 2000]);
+        assert_eq!(uids[0], 0);
+        assert_eq!(weights[0] as u32 + weights[1] as u32, 65535);
+    }
+
+    #[test]
+    fn test_fill_with_burn_noop_when_sum_already_complete() {
+        let (uids, weights) = fill_with_burn(vec![2], vec![65535]);
+        assert_eq!(uids, vec![2]);
+        assert_eq!(weights, vec![65535]);
+    }
+
+    #[test]
+    fn test_mechanism_weight_manager_pending_helpers() {
+        let config = BittensorConfig::local(1);
+        let client = SubtensorClient::new(config);
+        let mut manager = MechanismWeightManager::new(client);
+
+        assert!(!manager.has_pending_commits());
+        assert!(manager.pending_mechanism_ids().is_empty());
+
+        manager.pending_mechanism_commits.insert(
+            3,
+            PendingMechanismCommitV2 {
+                mechanism_id: 3,
+                hash: "hash".to_string(),
+                uids: vec![1, 2],
+                weights: vec![10, 20],
+                salt: vec![7, 8],
+                version_key: 11,
+                epoch: 9,
+            },
+        );
+
+        assert!(manager.has_pending_commits());
+        assert_eq!(manager.pending_mechanism_ids(), vec![3]);
+
+        manager.last_weight_epoch.insert(5, 6);
+        manager.reset_epoch_tracking();
+        assert!(manager.last_weight_epoch.is_empty());
+    }
+
+    #[test]
+    fn test_weight_submitter_epoch_transition_clears_pending_commits() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "weight_submitter_epoch_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let config = BittensorConfig::local(1);
+        let client = SubtensorClient::new(config);
+        let mut submitter = WeightSubmitter::new(client, Some(temp_dir.clone()));
+
+        submitter
+            .state
+            .pending_mechanism_commits
+            .insert(1, sample_pending_mechanism_commit());
+        submitter.state.pending_commit = Some(sample_pending_commit_v2());
+        submitter.state.committed_epoch = Some(1);
+
+        submitter.set_epoch(2);
+
+        assert!(submitter.state.pending_mechanism_commits.is_empty());
+        assert!(submitter.state.pending_commit.is_none());
+
+        let _ = std::fs::remove_file(temp_dir.join(DEFAULT_COMMITS_FILE));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_persisted_commit_state_load_returns_default_on_error() {
+        let path = std::env::temp_dir().join("commit_state_invalid.json");
+        std::fs::write(&path, "not-json").unwrap();
+
+        let loaded = PersistedCommitState::load(&path);
+        assert!(loaded.committed_epoch.is_none());
+        assert!(loaded.pending_mechanism_commits.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_pending_mechanism_commit_get_salt_handles_partial_chunk() {
+        let mut commit = sample_pending_mechanism_commit();
+        commit.salt_hex = "010203".to_string(); // 3 bytes -> last chunk has len 1
+        let salt = commit.get_salt();
+        assert_eq!(salt.len(), 2);
+        assert_eq!(salt[1], 0x03);
+    }
+
+    #[test]
+    fn test_pending_commit_v2_get_salt_handles_partial_chunk() {
+        let mut commit = sample_pending_commit_v2();
+        commit.salt_hex = "0a0b0c".to_string();
+        let salt = commit.get_salt();
+        assert_eq!(salt.len(), 2);
+        assert_eq!(salt[1], 0x0c);
+    }
+}
+
 /// Pending mechanism commit data using subtensor-compatible format (v2)
 #[derive(Clone, Debug)]
 struct PendingMechanismCommitV2 {
@@ -1008,56 +1363,24 @@ impl MechanismWeightManager {
         &self,
         weights: &[WeightAssignment],
     ) -> Result<(Vec<u64>, Vec<u16>)> {
-        let (mut uids, mut weight_values) = self.prepare_weights(weights)?;
-
-        // If no weights, put everything on UID 0
-        if uids.is_empty() {
-            info!("No valid weights, defaulting to UID 0");
-            return Ok((vec![0], vec![65535])); // 100% to UID 0
-        }
-
-        // Calculate sum and check if we need to fill
-        let sum: u32 = weight_values.iter().map(|w| *w as u32).sum();
-        let target_sum: u32 = 65535;
-
-        if sum < target_sum {
-            let remaining = (target_sum - sum) as u16;
-
-            // Check if UID 0 is already in the list
-            if let Some(pos) = uids.iter().position(|u| *u == 0) {
-                // Add remaining to existing UID 0
-                weight_values[pos] = weight_values[pos].saturating_add(remaining);
-            } else {
-                // Add UID 0 with remaining weight
-                uids.push(0);
-                weight_values.push(remaining);
-                info!(
-                    "Adding {} weight to UID 0 to fill to sum=1",
-                    remaining as f64 / 65535.0
-                );
-            }
-        }
-
-        Ok((uids, weight_values))
+        let (uids, weight_values) = self.prepare_weights(weights)?;
+        Ok(fill_with_burn(uids, weight_values))
     }
 
     /// Prepare weights for submission (convert hotkeys to UIDs)
     fn prepare_weights(&self, weights: &[WeightAssignment]) -> Result<(Vec<u64>, Vec<u16>)> {
         let hotkeys: Vec<String> = weights.iter().map(|w| w.hotkey.clone()).collect();
 
-        let uid_map = self.client.get_uids_for_hotkeys(&hotkeys);
+        let uid_lookup: HashMap<String, u16> = self
+            .client
+            .get_uids_for_hotkeys(&hotkeys)
+            .into_iter()
+            .collect();
+        let (uids, weight_values, unresolved) =
+            convert_assignments_with_lookup(weights, &uid_lookup);
 
-        let mut uids = Vec::new();
-        let mut weight_values = Vec::new();
-
-        for weight in weights {
-            if let Some((_, uid)) = uid_map.iter().find(|(h, _)| h == &weight.hotkey) {
-                uids.push(*uid as u64);
-                let w_u16 = (weight.weight.clamp(0.0, 1.0) * 65535.0) as u16;
-                weight_values.push(w_u16);
-            } else {
-                warn!("No UID found for hotkey: {}", weight.hotkey);
-            }
+        for hotkey in unresolved {
+            warn!("No UID found for hotkey: {}", hotkey);
         }
 
         debug!(

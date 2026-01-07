@@ -183,96 +183,18 @@ impl BlockSync {
 
                 match block_rx.recv().await {
                     Ok(event) => {
-                        match event {
-                            BlockEvent::NewBlock {
-                                block_number,
-                                epoch_info,
-                            } => {
-                                // Update state
-                                *current_block.write().await = block_number;
-                                *current_epoch.write().await = epoch_info.epoch_number;
-                                *current_phase.write().await = epoch_info.phase;
+                        let should_break = BlockSync::handle_block_event(
+                            event,
+                            &event_tx,
+                            &current_block,
+                            &current_epoch,
+                            &current_phase,
+                            &mut was_disconnected,
+                        )
+                        .await;
 
-                                // Forward event
-                                let _ = event_tx
-                                    .send(BlockSyncEvent::NewBlock {
-                                        block_number,
-                                        epoch_info,
-                                    })
-                                    .await;
-
-                                if was_disconnected {
-                                    was_disconnected = false;
-                                    let _ = event_tx.send(BlockSyncEvent::Reconnected).await;
-                                }
-                            }
-                            BlockEvent::EpochTransition(EpochTransition::NewEpoch {
-                                old_epoch,
-                                new_epoch,
-                                block,
-                            }) => {
-                                info!(
-                                    "Bittensor epoch transition: {} -> {} at block {}",
-                                    old_epoch, new_epoch, block
-                                );
-                                let _ = event_tx
-                                    .send(BlockSyncEvent::EpochTransition {
-                                        old_epoch,
-                                        new_epoch,
-                                        block,
-                                    })
-                                    .await;
-                            }
-                            BlockEvent::PhaseChange {
-                                block_number,
-                                old_phase,
-                                new_phase,
-                                epoch,
-                            } => {
-                                info!(
-                                    "Bittensor phase change: {} -> {} at block {} (epoch {})",
-                                    old_phase, new_phase, block_number, epoch
-                                );
-
-                                let _ = event_tx
-                                    .send(BlockSyncEvent::PhaseChange {
-                                        block_number,
-                                        old_phase,
-                                        new_phase,
-                                        epoch,
-                                    })
-                                    .await;
-
-                                // Emit specific events for commit/reveal windows
-                                match new_phase {
-                                    EpochPhase::CommitWindow => {
-                                        let _ = event_tx
-                                            .send(BlockSyncEvent::CommitWindowOpen {
-                                                epoch,
-                                                block: block_number,
-                                            })
-                                            .await;
-                                    }
-                                    EpochPhase::RevealWindow => {
-                                        let _ = event_tx
-                                            .send(BlockSyncEvent::RevealWindowOpen {
-                                                epoch,
-                                                block: block_number,
-                                            })
-                                            .await;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            BlockEvent::ConnectionError(e) => {
-                                warn!("Bittensor connection error: {}", e);
-                                was_disconnected = true;
-                                let _ = event_tx.send(BlockSyncEvent::Disconnected(e)).await;
-                            }
-                            BlockEvent::Stopped => {
-                                info!("Block listener stopped");
-                                break;
-                            }
+                        if should_break {
+                            break;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -287,6 +209,106 @@ impl BlockSync {
         });
 
         Ok(())
+    }
+
+    async fn handle_block_event(
+        event: BlockEvent,
+        event_tx: &mpsc::Sender<BlockSyncEvent>,
+        current_block: &Arc<RwLock<u64>>,
+        current_epoch: &Arc<RwLock<u64>>,
+        current_phase: &Arc<RwLock<EpochPhase>>,
+        was_disconnected: &mut bool,
+    ) -> bool {
+        match event {
+            BlockEvent::NewBlock {
+                block_number,
+                epoch_info,
+            } => {
+                *current_block.write().await = block_number;
+                *current_epoch.write().await = epoch_info.epoch_number;
+                *current_phase.write().await = epoch_info.phase;
+
+                let _ = event_tx
+                    .send(BlockSyncEvent::NewBlock {
+                        block_number,
+                        epoch_info,
+                    })
+                    .await;
+
+                if *was_disconnected {
+                    *was_disconnected = false;
+                    let _ = event_tx.send(BlockSyncEvent::Reconnected).await;
+                }
+            }
+            BlockEvent::EpochTransition(EpochTransition::NewEpoch {
+                old_epoch,
+                new_epoch,
+                block,
+            }) => {
+                info!(
+                    "Bittensor epoch transition: {} -> {} at block {}",
+                    old_epoch, new_epoch, block
+                );
+                let _ = event_tx
+                    .send(BlockSyncEvent::EpochTransition {
+                        old_epoch,
+                        new_epoch,
+                        block,
+                    })
+                    .await;
+            }
+            BlockEvent::PhaseChange {
+                block_number,
+                old_phase,
+                new_phase,
+                epoch,
+            } => {
+                info!(
+                    "Bittensor phase change: {} -> {} at block {} (epoch {})",
+                    old_phase, new_phase, block_number, epoch
+                );
+
+                let _ = event_tx
+                    .send(BlockSyncEvent::PhaseChange {
+                        block_number,
+                        old_phase,
+                        new_phase,
+                        epoch,
+                    })
+                    .await;
+
+                match new_phase {
+                    EpochPhase::CommitWindow => {
+                        let _ = event_tx
+                            .send(BlockSyncEvent::CommitWindowOpen {
+                                epoch,
+                                block: block_number,
+                            })
+                            .await;
+                    }
+                    EpochPhase::RevealWindow => {
+                        let _ = event_tx
+                            .send(BlockSyncEvent::RevealWindowOpen {
+                                epoch,
+                                block: block_number,
+                            })
+                            .await;
+                    }
+                    _ => {}
+                }
+            }
+            BlockEvent::ConnectionError(e) => {
+                warn!("Bittensor connection error: {}", e);
+                *was_disconnected = true;
+                let _ = event_tx.send(BlockSyncEvent::Disconnected(e)).await;
+            }
+            BlockEvent::Stopped => {
+                info!("Block listener stopped");
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Stop the block sync
@@ -324,3 +346,238 @@ impl BlockSync {
 }
 
 // Re-export types from bittensor_rs for convenience (already imported at top)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_block_sync_config_default() {
+        let config = BlockSyncConfig::default();
+        assert_eq!(config.netuid, 1);
+        assert_eq!(config.channel_capacity, 100);
+    }
+
+    #[tokio::test]
+    async fn test_block_sync_initial_state() {
+        let mut sync = BlockSync::new(BlockSyncConfig {
+            netuid: 42,
+            channel_capacity: 8,
+        });
+
+        assert!(!sync.is_connected());
+        assert!(!sync.is_running().await);
+        assert_eq!(sync.current_block().await, 0);
+        assert_eq!(sync.current_epoch().await, 0);
+        assert!(matches!(sync.current_phase().await, EpochPhase::Evaluation));
+
+        let first_receiver = sync.take_event_receiver();
+        assert!(first_receiver.is_some());
+        assert!(sync.take_event_receiver().is_none());
+    }
+
+    fn sample_epoch_info(block: u64, epoch: u64, phase: EpochPhase) -> EpochInfo {
+        EpochInfo {
+            current_block: block,
+            tempo: 360,
+            epoch_start_block: epoch * 360,
+            next_epoch_start_block: epoch * 360 + 360,
+            blocks_remaining: 10,
+            epoch_number: epoch,
+            phase,
+            commit_reveal_enabled: true,
+            reveal_period_epochs: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_new_block_emits_reconnect() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = true;
+
+        let epoch_info = sample_epoch_info(123, 9, EpochPhase::CommitWindow);
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::NewBlock {
+                block_number: 123,
+                epoch_info: epoch_info.clone(),
+            },
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(!should_break);
+        assert_eq!(*current_block.read().await, 123);
+        assert_eq!(*current_epoch.read().await, 9);
+        assert!(matches!(
+            *current_phase.read().await,
+            EpochPhase::CommitWindow
+        ));
+
+        let first = rx.recv().await.unwrap();
+        assert!(matches!(first, BlockSyncEvent::NewBlock { .. }));
+        let second = rx.recv().await.unwrap();
+        assert!(matches!(second, BlockSyncEvent::Reconnected));
+        assert!(!was_disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_phase_change_emits_windows() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::PhaseChange {
+                block_number: 200,
+                old_phase: EpochPhase::Evaluation,
+                new_phase: EpochPhase::CommitWindow,
+                epoch: 7,
+            },
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(!should_break);
+        assert_eq!(*current_epoch.read().await, 0); // unchanged for phase events
+        assert!(matches!(
+            *current_phase.read().await,
+            EpochPhase::Evaluation
+        ));
+
+        let phase_event = rx.recv().await.unwrap();
+        assert!(matches!(phase_event, BlockSyncEvent::PhaseChange { .. }));
+        let window_event = rx.recv().await.unwrap();
+        assert!(matches!(
+            window_event,
+            BlockSyncEvent::CommitWindowOpen { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_stopped_breaks_loop() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::Stopped,
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(should_break);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_epoch_transition_emits_event() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        BlockSync::handle_block_event(
+            BlockEvent::EpochTransition(EpochTransition::NewEpoch {
+                old_epoch: 5,
+                new_epoch: 6,
+                block: 1234,
+            }),
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        let evt = rx.recv().await.unwrap();
+        assert!(matches!(
+            evt,
+            BlockSyncEvent::EpochTransition {
+                old_epoch: 5,
+                new_epoch: 6,
+                block: 1234
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_reveal_window_emits_open_event() {
+        let (tx, mut rx) = mpsc::channel(3);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        BlockSync::handle_block_event(
+            BlockEvent::PhaseChange {
+                block_number: 500,
+                old_phase: EpochPhase::CommitWindow,
+                new_phase: EpochPhase::RevealWindow,
+                epoch: 11,
+            },
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        let phase_event = rx.recv().await.unwrap();
+        assert!(matches!(phase_event, BlockSyncEvent::PhaseChange { .. }));
+        let reveal_event = rx.recv().await.unwrap();
+        assert!(matches!(
+            reveal_event,
+            BlockSyncEvent::RevealWindowOpen {
+                epoch: 11,
+                block: 500
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_connection_error_sets_flag() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::ConnectionError("network wobble".into()),
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(!should_break);
+        assert!(was_disconnected);
+        let evt = rx.recv().await.unwrap();
+        assert!(matches!(evt, BlockSyncEvent::Disconnected(_)));
+    }
+}
