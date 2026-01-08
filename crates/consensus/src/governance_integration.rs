@@ -500,7 +500,6 @@ impl MetagraphGovernanceSync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_core::ChallengeConfig;
 
     #[test]
     fn test_sudo_action_conversion() {
@@ -1093,6 +1092,8 @@ mod tests {
 
         let (required, threshold) = gov_pbft.stake_for_consensus();
         assert_eq!(threshold, crate::stake_governance::STAKE_THRESHOLD_PERCENT);
+        // With zero stake, required should be 0
+        assert_eq!(required.0, 0);
     }
 
     #[tokio::test]

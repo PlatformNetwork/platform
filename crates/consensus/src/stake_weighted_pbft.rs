@@ -1598,7 +1598,7 @@ mod tests {
 
         // Check timeouts should find and remove it
         let timeouts = engine.check_timeouts();
-        assert!(timeouts.len() > 0);
+        assert!(!timeouts.is_empty());
         assert!(!engine.rounds.read().contains_key(&proposal_id));
     }
 }

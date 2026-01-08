@@ -2205,6 +2205,8 @@ mod tests {
         let (kp, _) = create_test_validator(0);
 
         // Create proposal without any validators having stake
+        // Note: Direct field access used here because create_proposal would fail
+        // due to the no-stake validation check, which is what we're testing
         let proposal_id = uuid::Uuid::new_v4();
         let proposal = GovernanceProposal::new(
             GovernanceActionType::UpdateConfig,
@@ -2357,6 +2359,7 @@ mod tests {
         let gov = create_test_governance();
 
         let hotkey = Hotkey([1u8; 32]);
+        // Direct test of private method to verify rate limiting internals
         gov.increment_proposal_count(&hotkey);
 
         let counts = gov.proposal_counts.read();
@@ -2420,9 +2423,8 @@ mod tests {
             )
             .unwrap();
 
-        // Mark as cancelled
-        proposal.cancelled = true;
-        gov.proposals.write().insert(proposal.id, proposal.clone());
+        // Mark as cancelled using helper
+        gov.mark_cancelled_for_test(proposal.id);
 
         let result = gov.check_consensus(proposal.id).unwrap();
         assert!(matches!(result, StakeConsensusResult::Cancelled { .. }));
@@ -2447,9 +2449,8 @@ mod tests {
             )
             .unwrap();
 
-        // Expire the proposal
-        proposal.expires_at = chrono::Utc::now() - chrono::Duration::hours(1);
-        gov.proposals.write().insert(proposal.id, proposal.clone());
+        // Expire the proposal using helper
+        gov.mark_expired_for_test(proposal.id);
 
         let result = gov.check_consensus(proposal.id).unwrap();
         assert!(matches!(result, StakeConsensusResult::Expired { .. }));
