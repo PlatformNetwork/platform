@@ -323,7 +323,6 @@ impl Default for CommitRevealManager {
 mod tests {
     use super::*;
     use platform_core::Keypair;
-    use std::sync::Arc;
 
     fn create_test_commitment(
         validator: &Keypair,
