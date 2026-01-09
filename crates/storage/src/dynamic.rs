@@ -295,10 +295,21 @@ impl DynamicStorage {
         value: StorageValue,
         writer: Option<Hotkey>,
     ) -> Result<usize> {
-        let mut list = self
-            .get_value(key)?
-            .and_then(|v| v.as_list().cloned())
-            .unwrap_or_default();
+        let existing = self.get_value(key)?;
+
+        let mut list = match existing {
+            None => Vec::new(),
+            Some(v) => {
+                if let Some(l) = v.as_list() {
+                    l.clone()
+                } else {
+                    return Err(MiniChainError::TypeMismatch(format!(
+                        "Cannot push to non-list value at key {:?}. Existing value is not a list.",
+                        key
+                    )));
+                }
+            }
+        };
 
         list.push(value);
         let len = list.len();
@@ -315,10 +326,21 @@ impl DynamicStorage {
         value: StorageValue,
         writer: Option<Hotkey>,
     ) -> Result<()> {
-        let mut map = self
-            .get_value(key)?
-            .and_then(|v| v.as_map().cloned())
-            .unwrap_or_default();
+        let existing = self.get_value(key)?;
+
+        let mut map = match existing {
+            None => HashMap::new(),
+            Some(v) => {
+                if let Some(m) = v.as_map() {
+                    m.clone()
+                } else {
+                    return Err(MiniChainError::TypeMismatch(format!(
+                        "Cannot set map field on non-map value at key {:?}. Existing value is not a map.",
+                        key
+                    )));
+                }
+            }
+        };
 
         map.insert(field.into(), value);
         self.set(key.clone(), StorageValue::Map(map), writer)
@@ -819,13 +841,17 @@ mod tests {
             .set(key.clone(), StorageValue::U64(42), None)
             .unwrap();
 
-        // Pushing to non-list creates a new list
-        let len = storage.list_push(&key, StorageValue::U64(1), None).unwrap();
-        assert_eq!(len, 1);
+        // Pushing to non-list should return TypeMismatch error
+        let result = storage.list_push(&key, StorageValue::U64(1), None);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            MiniChainError::TypeMismatch(_)
+        ));
 
-        // Verify it's now a list
+        // Verify original value is unchanged
         let value = storage.get_value(&key).unwrap().unwrap();
-        assert!(value.as_list().is_some());
+        assert_eq!(value.as_u64(), Some(42));
     }
 
     #[test]
@@ -864,18 +890,17 @@ mod tests {
             .set(key.clone(), StorageValue::U64(42), None)
             .unwrap();
 
-        // Setting map field on non-map creates a new map
-        storage
-            .map_set(&key, "field", StorageValue::U64(1), None)
-            .unwrap();
+        // Setting map field on non-map should return TypeMismatch error
+        let result = storage.map_set(&key, "field", StorageValue::U64(1), None);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            MiniChainError::TypeMismatch(_)
+        ));
 
-        // Verify it's now a map
+        // Verify original value is unchanged
         let value = storage.get_value(&key).unwrap().unwrap();
-        assert!(value.as_map().is_some());
-        assert_eq!(
-            value.as_map().unwrap().get("field").unwrap().as_u64(),
-            Some(1)
-        );
+        assert_eq!(value.as_u64(), Some(42));
     }
 
     #[test]

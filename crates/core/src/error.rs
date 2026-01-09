@@ -46,6 +46,9 @@ pub enum MiniChainError {
 
     #[error("Rate limited: {0}")]
     RateLimited(String),
+
+    #[error("Type mismatch: {0}")]
+    TypeMismatch(String),
 }
 
 impl From<std::io::Error> for MiniChainError {
