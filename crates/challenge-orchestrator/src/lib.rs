@@ -26,6 +26,7 @@
 //! Default broker socket: `/var/run/platform/broker.sock`
 
 pub mod backend;
+pub mod circuit_breaker;
 pub mod config;
 pub mod docker;
 pub mod evaluator;
@@ -36,6 +37,7 @@ pub use backend::{
     create_backend, is_development_mode, is_secure_mode, ContainerBackend, DirectDockerBackend,
     SecureBackend, DEFAULT_BROKER_SOCKET,
 };
+pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager, CircuitOpenError, CircuitState, CircuitStats};
 pub use config::*;
 pub use docker::{ChallengeDocker, CleanupResult, DockerClient};
 pub use evaluator::*;
