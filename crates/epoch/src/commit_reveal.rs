@@ -6,8 +6,8 @@ use crate::{FinalizedWeights, WeightCommitment, WeightReveal};
 use parking_lot::RwLock;
 use platform_challenge_sdk::{weights, ChallengeId, WeightAssignment};
 use platform_core::Hotkey;
-use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use std::collections::{HashMap, HashSet};
+use tracing::{debug, error, info, warn};
 
 /// Commit-reveal state for a single epoch
 pub struct CommitRevealState {
@@ -141,13 +141,20 @@ impl CommitRevealState {
             });
         }
 
+        // Validate that all submissions are consistent
         // All validators read from shared chain DB, so submissions should be identical
-        // Just take the first one and normalize
-        let aggregated = submissions
-            .into_iter()
-            .next()
-            .map(|w| weights::normalize_weights(w))
-            .unwrap_or_default();
+        let first = &submissions[0];
+        let divergence_detected = self.check_submission_divergence(&submissions);
+
+        if divergence_detected {
+            error!(
+                "Epoch {}: Weight submissions diverged across {} validators! Using first submission.",
+                self.epoch,
+                submissions.len()
+            );
+        }
+
+        let aggregated = weights::normalize_weights(first.clone());
 
         let participating: Vec<Hotkey> = self.reveals.keys().cloned().collect();
         let mut excluded = self.missing_reveals.clone();
@@ -190,6 +197,68 @@ impl CommitRevealState {
     /// Check if validator has revealed
     pub fn has_revealed(&self, validator: &Hotkey) -> bool {
         self.reveals.contains_key(validator)
+    }
+
+    /// Check if submissions from different validators have diverged.
+    /// Returns true if divergence is detected.
+    fn check_submission_divergence(&self, submissions: &[Vec<WeightAssignment>]) -> bool {
+        if submissions.len() <= 1 {
+            return false;
+        }
+
+        let first = &submissions[0];
+
+        // Build a map of hotkey -> weight for the first submission
+        let first_weights: HashMap<&str, f64> = first
+            .iter()
+            .map(|w| (w.hotkey.as_str(), w.weight))
+            .collect();
+
+        // Tolerance for floating-point comparison (0.1% difference allowed)
+        const WEIGHT_TOLERANCE: f64 = 0.001;
+
+        for (idx, submission) in submissions.iter().enumerate().skip(1) {
+            // Check if same number of weight assignments
+            if submission.len() != first.len() {
+                warn!(
+                    "Epoch {}: Submission {} has {} weights, first has {}",
+                    self.epoch,
+                    idx,
+                    submission.len(),
+                    first.len()
+                );
+                return true;
+            }
+
+            // Check if same hotkeys with similar weights
+            for weight in submission {
+                match first_weights.get(weight.hotkey.as_str()) {
+                    None => {
+                        warn!(
+                            "Epoch {}: Submission {} has hotkey {} not in first submission",
+                            self.epoch, idx, &weight.hotkey[..16.min(weight.hotkey.len())]
+                        );
+                        return true;
+                    }
+                    Some(&first_weight) => {
+                        let diff = (weight.weight - first_weight).abs();
+                        if diff > WEIGHT_TOLERANCE {
+                            warn!(
+                                "Epoch {}: Weight divergence for hotkey {}: {} vs {} (diff: {:.4})",
+                                self.epoch,
+                                &weight.hotkey[..16.min(weight.hotkey.len())],
+                                first_weight,
+                                weight.weight,
+                                diff
+                            );
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 }
 
