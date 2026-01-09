@@ -603,43 +603,49 @@ fn sha256_hex(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::{HealthConfig, RecoveryConfig};
-    use platform_core::Keypair;
+    use platform_core::{Keypair, Stake, ValidatorInfo};
     use tempfile::tempdir;
 
-    fn create_test_executor() -> (CommandExecutor, tempfile::TempDir) {
-        let dir = tempdir().unwrap();
-        let keypair = Keypair::generate();
-        let sudo_key = keypair.hotkey();
-
+    fn build_executor_with_sudo(dir: &tempfile::TempDir, sudo_key: Hotkey) -> CommandExecutor {
+        let data_dir = dir.path().to_path_buf();
         let state = Arc::new(RwLock::new(ChainState::new(
             sudo_key.clone(),
             platform_core::NetworkConfig::default(),
         )));
-        let updates = Arc::new(RwLock::new(UpdateManager::new(dir.path().to_path_buf())));
+        let updates = Arc::new(RwLock::new(UpdateManager::new(data_dir.clone())));
         let snapshots = Arc::new(RwLock::new(
-            SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap(),
+            SnapshotManager::new(data_dir.clone(), 3).unwrap(),
         ));
         let health = Arc::new(RwLock::new(HealthMonitor::new(HealthConfig::default())));
         let recovery = Arc::new(RwLock::new(RecoveryManager::new(
             RecoveryConfig::default(),
-            dir.path().to_path_buf(),
+            data_dir.clone(),
             snapshots.clone(),
             updates.clone(),
         )));
-
         let bans = Arc::new(RwLock::new(BanList::new()));
 
-        let executor = CommandExecutor::new(
+        CommandExecutor::new(
             sudo_key,
-            dir.path().to_path_buf(),
+            data_dir,
             updates,
             snapshots,
             recovery,
             health,
             state,
             bans,
-        );
+        )
+    }
 
+    fn create_executor_with_keypair() -> (CommandExecutor, tempfile::TempDir, Keypair) {
+        let dir = tempdir().unwrap();
+        let keypair = Keypair::generate();
+        let executor = build_executor_with_sudo(&dir, keypair.hotkey());
+        (executor, dir, keypair)
+    }
+
+    fn create_test_executor() -> (CommandExecutor, tempfile::TempDir) {
+        let (executor, dir, _) = create_executor_with_keypair();
         (executor, dir)
     }
 
@@ -693,6 +699,69 @@ mod tests {
             // Verify it deserializes
             let _ = serde_json::to_string(&decoded).unwrap();
         }
+    }
+
+    #[test]
+    fn test_verify_signature_accepts_sudo_key() {
+        let (executor, _dir, keypair) = create_executor_with_keypair();
+        let cmd = SubnetCommand::ListChallenges;
+        let signed = keypair.sign_data(&cmd).unwrap();
+
+        assert!(executor.verify_signature(&signed));
+    }
+
+    #[test]
+    fn test_verify_signature_rejects_wrong_signer() {
+        let (executor, _dir, _keypair) = create_executor_with_keypair();
+        let other = Keypair::generate();
+        let cmd = SubnetCommand::ListChallenges;
+        let signed = other.sign_data(&cmd).unwrap();
+
+        assert!(!executor.verify_signature(&signed));
+    }
+
+    #[test]
+    fn test_verify_signature_invalid_signature_bytes() {
+        let (executor, _dir, keypair) = create_executor_with_keypair();
+        let cmd = SubnetCommand::ListChallenges;
+        let mut signed = keypair.sign_data(&cmd).unwrap();
+        signed.signature = vec![1, 2, 3];
+
+        assert!(!executor.verify_signature(&signed));
+    }
+
+    #[tokio::test]
+    async fn test_execute_rejects_invalid_signature() {
+        let (executor, _dir, _keypair) = create_executor_with_keypair();
+        let other = Keypair::generate();
+        let cmd = SubnetCommand::ListChallenges;
+        let signed = other.sign_data(&cmd).unwrap();
+
+        let result = executor.execute(&signed).await;
+        assert!(!result.success);
+        assert!(result.message.contains("Invalid signature"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_deserialize_failure() {
+        let (executor, _dir, keypair) = create_executor_with_keypair();
+        let signed = keypair.sign_data(&123u64).unwrap();
+
+        let result = executor.execute(&signed).await;
+        assert!(!result.success);
+        assert!(result
+            .message
+            .contains("Failed to deserialize command"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_succeeds_with_valid_signed_command() {
+        let (executor, _dir, keypair) = create_executor_with_keypair();
+        let cmd = SubnetCommand::ListChallenges;
+        let signed = keypair.sign_data(&cmd).unwrap();
+
+        let result = executor.execute(&signed).await;
+        assert!(result.success);
     }
 
     #[tokio::test]
@@ -762,6 +831,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_snapshot_error_path() {
+        let (executor, _dir) = create_test_executor();
+
+        // Remove the snapshots directory to force SnapshotManager::create_snapshot to fail
+        let snapshots_dir = executor.data_dir.join("snapshots");
+        std::fs::remove_dir_all(&snapshots_dir).unwrap();
+
+        let result = executor.execute_command(&SubnetCommand::CreateSnapshot {
+            name: "Broken Snapshot".into(),
+            reason: "Force failure".into(),
+        }).await;
+
+        assert!(!result.success);
+        assert!(result.message.contains("Failed to create snapshot"));
+    }
+
+    #[tokio::test]
+    async fn test_rollback_to_snapshot_error_path() {
+        let (executor, _dir) = create_test_executor();
+        let fake_id = uuid::Uuid::new_v4();
+
+        let result = executor
+            .execute_command(&SubnetCommand::RollbackToSnapshot { snapshot_id: fake_id })
+            .await;
+
+        assert!(!result.success);
+        assert!(result.message.contains("Failed to restore snapshot"));
+    }
+
+    #[tokio::test]
     async fn test_update_config_command() {
         let (executor, _dir) = create_test_executor();
         
@@ -787,6 +886,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_epoch_length_updates_config() {
+        let (executor, dir) = create_test_executor();
+        let config_path = dir.path().join("subnet_config.json");
+
+        let mut config = SubnetConfig::default();
+        config.epoch_length = 500;
+        config.save(&config_path).unwrap();
+
+        let new_length = 4321u64;
+        let result = executor.execute_command(&SubnetCommand::SetEpochLength {
+            blocks: new_length,
+        }).await;
+        assert!(result.success);
+        assert!(result.message.contains("Epoch length set"));
+
+        let updated = SubnetConfig::load(&config_path).unwrap();
+        assert_eq!(updated.epoch_length, new_length);
+    }
+
+    #[tokio::test]
     async fn test_set_min_stake_command() {
         let (executor, _dir) = create_test_executor();
         
@@ -794,6 +913,26 @@ mod tests {
             amount: 10000,
         }).await;
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_set_min_stake_updates_config() {
+        let (executor, dir) = create_test_executor();
+        let config_path = dir.path().join("subnet_config.json");
+
+        let mut config = SubnetConfig::default();
+        config.min_stake = 5_000;
+        config.save(&config_path).unwrap();
+
+        let new_amount = 42_000u64;
+        let result = executor.execute_command(&SubnetCommand::SetMinStake {
+            amount: new_amount,
+        }).await;
+        assert!(result.success);
+        assert!(result.message.contains("Min stake set"));
+
+        let updated = SubnetConfig::load(&config_path).unwrap();
+        assert_eq!(updated.min_stake, new_amount);
     }
 
     #[tokio::test]
@@ -1004,6 +1143,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_kick_validator_when_exists() {
+        let (executor, _dir) = create_test_executor();
+        let hotkey = Hotkey([5u8; 32]);
+
+        {
+            let mut state = executor.state.write();
+            state.validators.insert(
+                hotkey.clone(),
+                ValidatorInfo::new(hotkey.clone(), Stake::new(1_000_000_000)),
+            );
+        }
+
+        let result = executor.execute_command(&SubnetCommand::KickValidator {
+            hotkey: hotkey.clone(),
+            reason: "cleanup".into(),
+        }).await;
+
+        assert!(result.success);
+        let state = executor.state.read();
+        assert!(!state.validators.contains_key(&hotkey));
+    }
+
+    #[tokio::test]
     async fn test_sync_validators_command() {
         let (executor, _dir) = create_test_executor();
         
@@ -1019,6 +1181,21 @@ mod tests {
             action: RecoveryAction::ClearJobQueue,
         }).await;
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_recovery_error_path() {
+        let (executor, _dir) = create_test_executor();
+        let missing_snapshot = uuid::Uuid::new_v4();
+
+        let result = executor
+            .execute_command(&SubnetCommand::TriggerRecovery {
+                action: RecoveryAction::RollbackToSnapshot(missing_snapshot),
+            })
+            .await;
+
+        assert!(!result.success);
+        assert!(result.message.contains("Recovery failed"));
     }
 
     #[tokio::test]
