@@ -165,19 +165,7 @@ pub struct DiffEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_core::Hotkey;
-
-    fn create_test_tx() -> Transaction {
-        let sender = Hotkey::from_bytes(&[1u8; 32]).unwrap();
-        Transaction::new(
-            sender,
-            crate::Operation::Put {
-                collection: "test".to_string(),
-                key: b"key".to_vec(),
-                value: b"value".to_vec(),
-            },
-        )
-    }
+    use crate::test_utils::*;
 
     #[test]
     fn test_state_history() {

@@ -470,14 +470,8 @@ impl QueryEntry {
 mod tests {
     use super::*;
     use crate::storage::RocksStorage;
+    use crate::test_utils::*;
     use tempfile::tempdir;
-
-    fn create_test_index_manager() -> (IndexManager, Arc<RocksStorage>, tempfile::TempDir) {
-        let dir = tempdir().unwrap();
-        let storage = Arc::new(RocksStorage::open(dir.path()).unwrap());
-        let indexes = IndexManager::new(storage.clone()).unwrap();
-        (indexes, storage, dir)
-    }
 
     #[test]
     fn test_indexing() {

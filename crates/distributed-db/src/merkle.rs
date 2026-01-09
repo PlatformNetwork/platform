@@ -347,7 +347,7 @@ mod tests {
         trie.insert(b"key3", b"value3");
 
         let mut entries: Vec<_> = trie.iter().collect();
-        entries.sort_by_key(|(k, _)| k.clone());
+        entries.sort_by_key(|(k, _)| (*k).clone());
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0], (&b"key1".to_vec(), &b"value1".to_vec()));

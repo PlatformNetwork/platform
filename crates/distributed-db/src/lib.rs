@@ -37,6 +37,9 @@ pub mod storage;
 pub mod sync;
 pub mod transactions;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use indexes::*;
 pub use merkle::*;
 pub use merkle_verification::*;
@@ -306,11 +309,8 @@ impl SyncData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::*;
     use tempfile::tempdir;
-
-    fn create_test_validator(val: u8) -> Hotkey {
-        Hotkey::from_bytes(&[val; 32]).unwrap()
-    }
 
     #[test]
     fn test_basic_operations() {
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn test_db_open() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator).unwrap();
         assert_eq!(db.current_block(), 0);
         assert_eq!(db.state_root(), [0u8; 32]);
@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn test_state_root() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
 
         let root1 = db.state_root();
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn test_current_block() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
 
         assert_eq!(db.current_block(), 0);
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_confirm_block() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
 
         // Apply multiple transactions
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn test_query_operations() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator).unwrap();
 
         // Insert JSON data
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn test_delete_operation() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
 
         let tx = Transaction::new(
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn test_batch_put_operation() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
 
         let tx = Transaction::new(
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_get_sync_state() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
 
         let tx = Transaction::new(
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_apply_sync_data() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator).unwrap();
 
         let sync_data = SyncData {
@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn test_rebuild_merkle_trie() {
         let dir = tempdir().unwrap();
-        let validator = create_test_validator(1);
+        let validator = create_test_hotkey(1);
         let db = DistributedDB::open(dir.path(), validator).unwrap();
 
         db.put("challenges", b"key1", b"value1").unwrap();

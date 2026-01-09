@@ -338,14 +338,7 @@ pub struct GlobalStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-
-    fn create_test_db() -> (tempfile::TempDir, DistributedDB) {
-        let dir = tempdir().unwrap();
-        let validator = Hotkey::from_bytes(&[1u8; 32]).unwrap();
-        let db = DistributedDB::open(dir.path(), validator).unwrap();
-        (dir, db)
-    }
+    use crate::test_utils::*;
 
     #[test]
     fn test_challenge_operations() {

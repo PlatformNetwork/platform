@@ -268,10 +268,7 @@ impl Default for TransactionPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn create_test_hotkey(val: u8) -> Hotkey {
-        Hotkey::from_bytes(&[val; 32]).unwrap()
-    }
+    use crate::test_utils::*;
 
     fn create_tx_with_nonce(sender: Hotkey, operation: Operation, nonce: u64) -> Transaction {
         let timestamp = chrono::Utc::now().timestamp_millis() as u64;
@@ -285,8 +282,9 @@ mod tests {
             signature: Vec::new(),
         };
 
-        // Compute the ID using private method by calling validate which accesses it
+        // Compute the ID
         let mut hasher = sha2::Sha256::new();
+        use sha2::Digest;
         hasher.update(tx.sender.as_bytes());
         hasher.update(bincode::serialize(&tx.operation).unwrap_or_default());
         hasher.update(tx.timestamp.to_le_bytes());

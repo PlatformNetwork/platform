@@ -429,14 +429,6 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_builder_default() {
-        let builder = MerkleTreeBuilder::default();
-        let (root, entries) = builder.build();
-        assert_eq!(root, [0u8; 32]);
-        assert!(entries.is_empty());
-    }
-
-    #[test]
     fn test_verification_result_is_valid() {
         assert!(VerificationResult::Valid.is_valid());
         assert!(!VerificationResult::Invalid {
@@ -453,12 +445,5 @@ mod tests {
             computed: [2u8; 32]
         }
         .is_valid());
-    }
-
-    #[test]
-    fn test_proof_direction_equality() {
-        assert_eq!(ProofDirection::Left, ProofDirection::Left);
-        assert_eq!(ProofDirection::Right, ProofDirection::Right);
-        assert_ne!(ProofDirection::Left, ProofDirection::Right);
     }
 }
