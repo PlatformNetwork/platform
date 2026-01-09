@@ -1544,4 +1544,170 @@ mod tests {
         let result2 = config.validate();
         assert!(result2.is_err());
     }
+
+    #[test]
+    fn test_task_progress_message_new() {
+        let msg = TaskProgressMessage::new(
+            "test-challenge".to_string(),
+            "agent-hash".to_string(),
+            "eval-123".to_string(),
+            "task-1".to_string(),
+            1,
+            10,
+            true,
+            0.95,
+            1500,
+            0.002,
+            None,
+            "validator-key".to_string(),
+        );
+        assert_eq!(msg.challenge_id, "test-challenge");
+        assert_eq!(msg.task_index, 1);
+        assert_eq!(msg.total_tasks, 10);
+        assert!(msg.passed);
+        assert_eq!(msg.score, 0.95);
+        assert!(msg.timestamp > 0);
+    }
+
+    #[test]
+    fn test_challenge_container_config_with_resources() {
+        let config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 1, 0.5)
+                .with_resources(4.0, 8192, true);
+
+        assert_eq!(config.cpu_cores, 4.0);
+        assert_eq!(config.memory_mb, 8192);
+        assert!(config.gpu_required);
+    }
+
+    #[test]
+    fn test_challenge_container_config_with_timeout() {
+        let config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 1, 0.5)
+                .with_timeout(7200);
+
+        assert_eq!(config.timeout_secs, 7200);
+    }
+
+    #[test]
+    fn test_mechanism_weight_config_new() {
+        let config = MechanismWeightConfig::new(5);
+        assert_eq!(config.mechanism_id, 5);
+        assert_eq!(config.base_burn_rate, 0.0);
+        assert!(config.equal_distribution);
+        assert!(config.active);
+    }
+
+    #[test]
+    fn test_mechanism_weight_config_with_burn_rate() {
+        let config = MechanismWeightConfig::new(1).with_burn_rate(0.15);
+        assert_eq!(config.base_burn_rate, 0.15);
+    }
+
+    #[test]
+    fn test_mechanism_weight_config_with_max_cap() {
+        let config = MechanismWeightConfig::new(1).with_max_cap(0.8);
+        assert_eq!(config.max_weight_cap, 0.8);
+    }
+
+    #[test]
+    fn test_challenge_weight_allocation_new() {
+        let challenge_id = ChallengeId::new();
+        let allocation = ChallengeWeightAllocation::new(challenge_id.clone(), 1, 0.7);
+        assert_eq!(allocation.challenge_id, challenge_id);
+        assert_eq!(allocation.mechanism_id, 1);
+        assert_eq!(allocation.weight_ratio, 0.7);
+        assert!(allocation.active);
+    }
+
+    #[test]
+    fn test_challenge_config_validate_empty_docker_image() {
+        let config = ChallengeContainerConfig::new(
+            "Test", "", // Empty docker image
+            1, 0.5,
+        );
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Docker image cannot be empty"));
+    }
+
+    #[test]
+    fn test_challenge_config_validate_timeout_too_short() {
+        let mut config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 1, 0.5);
+        config.timeout_secs = 30; // Less than 60
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("at least 60 seconds"));
+    }
+
+    #[test]
+    fn test_challenge_config_validate_timeout_too_long() {
+        let mut config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 1, 0.5);
+        config.timeout_secs = 90000; // More than 86400
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot exceed 24 hours"));
+    }
+
+    #[test]
+    fn test_challenge_config_validate_cpu_cores_invalid() {
+        let mut config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 1, 0.5);
+        config.cpu_cores = 0.1; // Less than 0.5
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("CPU cores"));
+
+        config.cpu_cores = 100.0; // More than 64
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("CPU cores"));
+    }
+
+    #[test]
+    fn test_challenge_config_validate_memory_invalid() {
+        let mut config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 1, 0.5);
+        config.memory_mb = 256; // Less than 512
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Memory"));
+
+        config.memory_mb = 200000; // More than 131072
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Memory"));
+    }
+
+    #[test]
+    fn test_is_development_mode() {
+        // Test the development mode check
+        // Save current state and test both paths
+        let original = std::env::var("DEVELOPMENT_MODE").ok();
+
+        // Test with DEVELOPMENT_MODE unset
+        std::env::remove_var("DEVELOPMENT_MODE");
+        assert!(!is_development_mode());
+
+        // Test with DEVELOPMENT_MODE set
+        std::env::set_var("DEVELOPMENT_MODE", "1");
+        assert!(is_development_mode());
+
+        // Restore original state
+        match original {
+            Some(val) => std::env::set_var("DEVELOPMENT_MODE", val),
+            None => std::env::remove_var("DEVELOPMENT_MODE"),
+        }
+    }
+
+    #[test]
+    fn test_mechanism_weight_config_default() {
+        let config = MechanismWeightConfig::default();
+        assert_eq!(config.mechanism_id, 0);
+        assert_eq!(config.base_burn_rate, 0.0);
+        assert!(config.equal_distribution);
+        assert!(config.active);
+    }
 }

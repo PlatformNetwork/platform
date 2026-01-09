@@ -230,4 +230,13 @@ mod tests {
         assert_eq!(meta.name, challenge.name);
         assert_eq!(meta.code_hash, challenge.code_hash);
     }
+
+    #[test]
+    fn test_challenge_config_with_mechanism() {
+        let config = ChallengeConfig::with_mechanism(5);
+        assert_eq!(config.mechanism_id, 5);
+        assert_eq!(config.timeout_secs, 300); // Should have other defaults
+        assert_eq!(config.max_memory_mb, 512);
+        assert_eq!(config.emission_weight, 1.0);
+    }
 }

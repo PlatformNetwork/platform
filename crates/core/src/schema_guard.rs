@@ -371,4 +371,123 @@ mod tests {
         assert_eq!(state.validators.len(), loaded.validators.len());
         assert_eq!(state.block_height, loaded.block_height);
     }
+
+    #[test]
+    fn test_validator_info_schema_description() {
+        let desc = <crate::ValidatorInfo as SchemaHash>::schema_description();
+        assert!(desc.contains("ValidatorInfo"));
+        assert!(desc.contains("hotkey"));
+        assert!(desc.contains("stake"));
+    }
+
+    #[test]
+    fn test_chain_state_schema_description() {
+        let desc = <crate::ChainState as SchemaHash>::schema_description();
+        assert!(desc.contains("ChainState"));
+        assert!(desc.contains("block_height"));
+    }
+
+    #[test]
+    fn test_schema_error_fmt() {
+        let err = SchemaError::SchemaMismatch {
+            type_name: "TestType",
+            expected_hash: 12345,
+            actual_hash: 67890,
+            current_version: 1,
+            hint: "Test hint".to_string(),
+        };
+        let formatted = format!("{}", err);
+        assert!(formatted.contains("SCHEMA CHANGE DETECTED"));
+        assert!(formatted.contains("TestType"));
+    }
+
+    #[test]
+    fn test_schema_error_missing_version_fmt() {
+        let err = SchemaError::MissingVersion {
+            version: 5,
+            hint: "Add version entry".to_string(),
+        };
+        let formatted = format!("{}", err);
+        assert!(formatted.contains("MISSING VERSION ENTRY"));
+        assert!(formatted.contains("5"));
+    }
+
+    #[test]
+    fn test_expected_schema_hashes_registry() {
+        let registry = expected_schema_hashes();
+        assert!(registry.contains_key(&1));
+        assert!(registry.contains_key(&2));
+        assert!(registry.contains_key(&3));
+
+        // Each version should have different descriptions
+        let v1 = registry.get(&1).unwrap();
+        let v3 = registry.get(&3).unwrap();
+        assert_ne!(v1.description, v3.description);
+    }
+
+    #[test]
+    fn test_const_hash_deterministic() {
+        let h1 = const_hash("test string");
+        let h2 = const_hash("test string");
+        assert_eq!(h1, h2);
+
+        // Different strings should have different hashes
+        let h3 = const_hash("different string");
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_schema_mismatch_validator_info() {
+        // This test ensures the error path for ValidatorInfo schema mismatch works
+        // We can't easily trigger it in practice without modifying the struct,
+        // but we can verify the error formatting works
+        let err = SchemaError::SchemaMismatch {
+            type_name: "ValidatorInfo",
+            expected_hash: 12345,
+            actual_hash: 67890,
+            current_version: 3,
+            hint: "Test hint for validator".to_string(),
+        };
+        let formatted = format!("{}", err);
+        assert!(formatted.contains("SCHEMA CHANGE DETECTED"));
+        assert!(formatted.contains("ValidatorInfo"));
+        assert!(formatted.contains("12345"));
+        assert!(formatted.contains("67890"));
+    }
+
+    #[test]
+    fn test_schema_mismatch_chain_state() {
+        // Test the ChainState schema mismatch error path
+        let err = SchemaError::SchemaMismatch {
+            type_name: "ChainState",
+            expected_hash: 11111,
+            actual_hash: 22222,
+            current_version: 3,
+            hint: "Test hint for chain state".to_string(),
+        };
+        let formatted = format!("{}", err);
+        assert!(formatted.contains("SCHEMA CHANGE DETECTED"));
+        assert!(formatted.contains("ChainState"));
+        assert!(formatted.contains("11111"));
+        assert!(formatted.contains("22222"));
+    }
+
+    #[test]
+    fn test_missing_version_registry() {
+        // Test that verify_migration_paths catches missing versions
+        use crate::state_versioning::{CURRENT_STATE_VERSION, MIN_SUPPORTED_VERSION};
+
+        // This should pass since all versions are registered
+        let result = verify_migration_paths();
+        assert!(result.is_ok());
+
+        // Test the error formatting for missing version
+        let err = SchemaError::MissingVersion {
+            version: 99,
+            hint: "Version 99 is missing".to_string(),
+        };
+        let formatted = format!("{}", err);
+        assert!(formatted.contains("MISSING VERSION ENTRY"));
+        assert!(formatted.contains("99"));
+    }
 }

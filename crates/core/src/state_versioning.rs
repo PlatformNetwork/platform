@@ -435,4 +435,160 @@ mod tests {
         assert!(CURRENT_STATE_VERSION >= MIN_SUPPORTED_VERSION);
         assert_eq!(CURRENT_STATE_VERSION, 3);
     }
+
+    #[test]
+    fn test_validator_info_legacy_migrate() {
+        let kp = Keypair::generate();
+        let legacy = ValidatorInfoLegacy {
+            hotkey: kp.hotkey(),
+            stake: Stake::new(5_000_000_000),
+            is_active: true,
+            last_seen: chrono::Utc::now(),
+            peer_id: Some("peer123".to_string()),
+        };
+
+        let migrated = legacy.migrate();
+        assert_eq!(migrated.hotkey, kp.hotkey());
+        assert_eq!(migrated.stake.0, 5_000_000_000);
+        assert!(migrated.x25519_pubkey.is_none());
+    }
+
+    #[test]
+    fn test_chainstate_v2_migrate() {
+        let sudo = Keypair::generate();
+        let mut registered = HashSet::new();
+        registered.insert(sudo.hotkey());
+
+        let v2 = ChainStateV2 {
+            block_height: 200,
+            epoch: 10,
+            config: NetworkConfig::default(),
+            sudo_key: sudo.hotkey(),
+            validators: HashMap::new(),
+            challenges: HashMap::new(),
+            challenge_configs: HashMap::new(),
+            mechanism_configs: HashMap::new(),
+            challenge_weights: HashMap::new(),
+            required_version: None,
+            pending_jobs: Vec::new(),
+            state_hash: [1u8; 32],
+            last_updated: chrono::Utc::now(),
+            registered_hotkeys: registered.clone(),
+        };
+
+        let migrated = v2.migrate();
+        assert_eq!(migrated.block_height, 200);
+        assert_eq!(migrated.registered_hotkeys, registered);
+    }
+
+    #[test]
+    fn test_deserialize_state_smart_v2() {
+        // Create V2 state and serialize it
+        let sudo = Keypair::generate();
+        let v2 = ChainStateV2 {
+            block_height: 150,
+            epoch: 8,
+            config: NetworkConfig::default(),
+            sudo_key: sudo.hotkey(),
+            validators: HashMap::new(),
+            challenges: HashMap::new(),
+            challenge_configs: HashMap::new(),
+            mechanism_configs: HashMap::new(),
+            challenge_weights: HashMap::new(),
+            required_version: None,
+            pending_jobs: Vec::new(),
+            state_hash: [2u8; 32],
+            last_updated: chrono::Utc::now(),
+            registered_hotkeys: HashSet::new(),
+        };
+
+        let data = bincode::serialize(&v2).unwrap();
+        let loaded = deserialize_state_smart(&data).unwrap();
+        assert_eq!(loaded.block_height, 150);
+    }
+
+    #[test]
+    fn test_deserialize_state_smart_current_format() {
+        let state = create_test_state();
+        // Use versioned serialization (the proper way)
+        let data = serialize_state_versioned(&state).unwrap();
+        let loaded = deserialize_state_smart(&data).unwrap();
+        assert_eq!(loaded.block_height, state.block_height);
+    }
+
+    #[test]
+    fn test_into_state_version_too_old() {
+        // Test the error path when version is too old
+        let versioned = VersionedState {
+            version: 0, // Version 0 is below MIN_SUPPORTED_VERSION (1)
+            data: vec![1, 2, 3],
+        };
+        let result = versioned.into_state();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::MiniChainError::Serialization(msg) => {
+                assert!(msg.contains("too old"));
+                assert!(msg.contains("minimum supported"));
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
+
+    #[test]
+    fn test_migrate_state_v1_deserialization_error() {
+        // Test that V1 migration handles deserialization errors
+        let bad_data = vec![0xFF, 0xFF, 0xFF]; // Invalid bincode data
+        let result = migrate_state(1, &bad_data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::MiniChainError::Serialization(msg) => {
+                assert!(msg.contains("V1 migration failed"));
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
+
+    #[test]
+    fn test_migrate_state_v2_deserialization_error() {
+        // Test that V2 migration handles deserialization errors
+        let bad_data = vec![0xFF, 0xFF, 0xFF]; // Invalid bincode data
+        let result = migrate_state(2, &bad_data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::MiniChainError::Serialization(msg) => {
+                assert!(msg.contains("V2 migration failed"));
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
+
+    #[test]
+    fn test_migrate_state_unknown_version() {
+        // Test that unknown version returns error
+        let data = vec![1, 2, 3];
+        let result = migrate_state(99, &data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::MiniChainError::Serialization(msg) => {
+                assert!(msg.contains("Unknown state version"));
+                assert!(msg.contains("99"));
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_state_smart_all_strategies_fail() {
+        // Test that when all deserialization strategies fail, we get proper error
+        let bad_data = vec![0xFF; 100]; // Completely invalid data
+        let result = deserialize_state_smart(&bad_data);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::MiniChainError::Serialization(msg) => {
+                assert!(msg.contains("Failed to deserialize state"));
+                assert!(msg.contains("incompatible format"));
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
 }

@@ -487,4 +487,36 @@ mod tests {
         let half = Score::new(0.5, 0.5);
         assert_eq!(half.weighted_value(), 0.25);
     }
+
+    #[test]
+    fn test_hotkey_from_ss58() {
+        // Test with a valid SS58 address
+        let original = Hotkey([0x42; 32]);
+        let ss58 = original.to_ss58();
+        let recovered = Hotkey::from_ss58(&ss58);
+        assert!(recovered.is_some());
+        assert_eq!(recovered.unwrap(), original);
+    }
+
+    #[test]
+    fn test_hotkey_from_ss58_invalid() {
+        assert!(Hotkey::from_ss58("invalid-address").is_none());
+        assert!(Hotkey::from_ss58("").is_none());
+    }
+
+    #[test]
+    fn test_challenge_id_from_uuid() {
+        let uuid = uuid::Uuid::new_v4();
+        let challenge_id = ChallengeId::from_uuid(uuid);
+        assert_eq!(challenge_id.0, uuid);
+        assert_eq!(format!("{}", challenge_id), format!("{}", uuid));
+    }
+
+    #[test]
+    fn test_challenge_id_default() {
+        let id1 = ChallengeId::default();
+        let id2 = ChallengeId::default();
+        // Each default should be unique
+        assert_ne!(id1, id2);
+    }
 }

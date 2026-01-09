@@ -450,4 +450,101 @@ mod tests {
         let other_kp = Keypair::generate();
         assert!(!state.is_sudo(&other_kp.hotkey()));
     }
+
+    #[test]
+    fn test_default_timestamp() {
+        let ts = default_timestamp();
+        let now = chrono::Utc::now();
+        // Should be within a few seconds of now
+        assert!((now.timestamp() - ts.timestamp()).abs() < 5);
+    }
+
+    #[test]
+    fn test_production_default() {
+        let state = ChainState::production_default();
+        assert_eq!(state.block_height, 0);
+        assert_eq!(state.config.subnet_id, 100);
+        assert!(!state.sudo_key.0.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_total_stake() {
+        let mut state = create_test_state();
+
+        // Add two validators with known stakes
+        let kp1 = Keypair::generate();
+        let info1 = ValidatorInfo::new(kp1.hotkey(), Stake::new(1_000_000_000));
+        state.add_validator(info1).unwrap();
+
+        let kp2 = Keypair::generate();
+        let info2 = ValidatorInfo::new(kp2.hotkey(), Stake::new(2_000_000_000));
+        state.add_validator(info2).unwrap();
+
+        let total = state.total_stake();
+        assert_eq!(total.0, 3_000_000_000);
+    }
+
+    #[test]
+    fn test_total_stake_only_active() {
+        let mut state = create_test_state();
+
+        // Add active validator
+        let kp1 = Keypair::generate();
+        let info1 = ValidatorInfo::new(kp1.hotkey(), Stake::new(1_000_000_000));
+        state.add_validator(info1).unwrap();
+
+        // Add inactive validator
+        let kp2 = Keypair::generate();
+        let mut info2 = ValidatorInfo::new(kp2.hotkey(), Stake::new(2_000_000_000));
+        info2.is_active = false;
+        state.validators.insert(kp2.hotkey(), info2);
+
+        // Total should only include active
+        let total = state.total_stake();
+        assert_eq!(total.0, 1_000_000_000);
+    }
+
+    #[test]
+    fn test_add_validator_max_validators_reached() {
+        let mut state = create_test_state();
+        // Set max validators to a small number
+        state.config.max_validators = 2;
+
+        // Add validators up to the limit
+        for _ in 0..2 {
+            let kp = Keypair::generate();
+            let info = ValidatorInfo::new(kp.hotkey(), Stake::new(10_000_000_000));
+            state.add_validator(info).unwrap();
+        }
+
+        // Try to add one more - should fail
+        let kp = Keypair::generate();
+        let info = ValidatorInfo::new(kp.hotkey(), Stake::new(10_000_000_000));
+        let result = state.add_validator(info);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::MiniChainError::Consensus(_)
+        ));
+    }
+
+    #[test]
+    fn test_claim_job_none_available() {
+        let mut state = create_test_state();
+        let kp = Keypair::generate();
+
+        // Try to claim a job when there are none
+        let result = state.claim_job(&kp.hotkey());
+        assert!(result.is_none());
+
+        // Add a job and assign it
+        let job = Job::new(ChallengeId::new(), "agent1".to_string());
+        state.add_job(job);
+        let claimed = state.claim_job(&kp.hotkey());
+        assert!(claimed.is_some());
+
+        // Try to claim again - should return None since all jobs are assigned
+        let result2 = state.claim_job(&kp.hotkey());
+        assert!(result2.is_none());
+    }
 }
