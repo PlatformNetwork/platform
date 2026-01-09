@@ -299,15 +299,12 @@ impl DynamicStorage {
 
         let mut list = match existing {
             None => Vec::new(),
-            Some(v) => {
-                if let Some(l) = v.as_list() {
-                    l.clone()
-                } else {
-                    return Err(MiniChainError::TypeMismatch(format!(
-                        "Cannot push to non-list value at key {:?}. Existing value is not a list.",
-                        key
-                    )));
-                }
+            Some(StorageValue::List(list)) => list,
+            Some(_) => {
+                return Err(MiniChainError::TypeMismatch(format!(
+                    "Cannot push to non-list value at key {:?}. Existing value is not a list.",
+                    key
+                )))
             }
         };
 
@@ -330,16 +327,11 @@ impl DynamicStorage {
 
         let mut map = match existing {
             None => HashMap::new(),
-            Some(v) => {
-                if let Some(m) = v.as_map() {
-                    m.clone()
-                } else {
-                    return Err(MiniChainError::TypeMismatch(format!(
-                        "Cannot set map field on non-map value at key {:?}. Existing value is not a map.",
-                        key
-                    )));
-                }
-            }
+            Some(StorageValue::Map(map)) => map,
+            Some(_) => return Err(MiniChainError::TypeMismatch(format!(
+                "Cannot set map field on non-map value at key {:?}. Existing value is not a map.",
+                key
+            ))),
         };
 
         map.insert(field.into(), value);
