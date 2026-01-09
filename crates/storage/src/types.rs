@@ -603,4 +603,30 @@ mod tests {
         let v: StorageValue = s.into();
         assert_eq!(v.as_str(), Some("test value"));
     }
+
+    #[test]
+    fn test_storage_value_as_bool_none_path() {
+        // Test as_bool returns None for non-Bool variants
+        let v = StorageValue::U64(1);
+        assert_eq!(v.as_bool(), None);
+
+        let v = StorageValue::String("true".to_string());
+        assert_eq!(v.as_bool(), None);
+
+        let v = StorageValue::Null;
+        assert_eq!(v.as_bool(), None);
+    }
+
+    #[test]
+    fn test_storage_value_as_str_none_path() {
+        // Test as_str returns None for non-String variants
+        let v = StorageValue::U64(42);
+        assert_eq!(v.as_str(), None);
+
+        let v = StorageValue::Bool(true);
+        assert_eq!(v.as_str(), None);
+
+        let v = StorageValue::Null;
+        assert_eq!(v.as_str(), None);
+    }
 }
