@@ -358,4 +358,76 @@ mod tests {
         assert_eq!(decoded.claims.challenge_id, "term-challenge");
         assert_eq!(decoded.claims.owner_id, "validator-1");
     }
+
+    #[test]
+    fn test_generate_token_different_ttl() {
+        let secret = "secret-key";
+        let token = generate_token("ch1", "owner1", secret, 7200).unwrap();
+        
+        let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        let validation = jsonwebtoken::Validation::default();
+        let decoded = jsonwebtoken::decode::<WsClaims>(&token, &key, &validation).unwrap();
+        
+        assert!(decoded.claims.exp > decoded.claims.iat);
+        assert_eq!(decoded.claims.exp - decoded.claims.iat, 7200);
+    }
+
+    #[test]
+    fn test_ws_config_default() {
+        let config = WsConfig::default();
+        assert_eq!(config.bind_addr, "0.0.0.0:8090");
+        assert_eq!(config.max_connections_per_challenge, 10);
+        assert_eq!(config.allowed_challenges.len(), 0);
+    }
+
+    #[test]
+    fn test_ws_config_from_env() {
+        std::env::set_var("BROKER_JWT_SECRET", "test-secret");
+        let config = WsConfig::default();
+        assert_eq!(config.jwt_secret, Some("test-secret".to_string()));
+        std::env::remove_var("BROKER_JWT_SECRET");
+    }
+
+    #[test]
+    fn test_ws_claims_fields() {
+        let claims = WsClaims {
+            challenge_id: "challenge-123".into(),
+            owner_id: "owner-456".into(),
+            iat: 1000,
+            exp: 2000,
+        };
+        
+        assert_eq!(claims.challenge_id, "challenge-123");
+        assert_eq!(claims.owner_id, "owner-456");
+        assert_eq!(claims.iat, 1000);
+        assert_eq!(claims.exp, 2000);
+    }
+
+    #[test]
+    fn test_auth_message_serialization() {
+        let auth_msg = AuthMessage {
+            token: "test-jwt-token".into(),
+        };
+        
+        let json = serde_json::to_string(&auth_msg).unwrap();
+        assert!(json.contains("test-jwt-token"));
+        
+        let decoded: AuthMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.token, "test-jwt-token");
+    }
+
+    #[test]
+    fn test_ws_config_custom() {
+        let config = WsConfig {
+            bind_addr: "127.0.0.1:9000".into(),
+            jwt_secret: Some("my-secret".into()),
+            allowed_challenges: vec!["ch1".into(), "ch2".into()],
+            max_connections_per_challenge: 5,
+        };
+        
+        assert_eq!(config.bind_addr, "127.0.0.1:9000");
+        assert_eq!(config.jwt_secret, Some("my-secret".into()));
+        assert_eq!(config.allowed_challenges.len(), 2);
+        assert_eq!(config.max_connections_per_challenge, 5);
+    }
 }

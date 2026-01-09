@@ -266,10 +266,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_new() {
+        let client = WsContainerClient::new(
+            "ws://localhost:8090",
+            "test-jwt-token",
+            "challenge-123",
+            "owner-456"
+        );
+        
+        assert_eq!(client.ws_url, "ws://localhost:8090");
+        assert_eq!(client.jwt_token, "test-jwt-token");
+        assert_eq!(client.challenge_id, "challenge-123");
+        assert_eq!(client.owner_id, "owner-456");
+    }
+
+    #[test]
     fn test_from_env_missing() {
-        // Should return None when env vars are not set
+        // Clean up all env vars first
         std::env::remove_var("CONTAINER_BROKER_WS_URL");
         std::env::remove_var("CONTAINER_BROKER_JWT");
+        std::env::remove_var("CHALLENGE_UUID");
+        std::env::remove_var("CHALLENGE_ID");
+        std::env::remove_var("VALIDATOR_HOTKEY");
+        
+        // Should return None when env vars are not set
         assert!(WsContainerClient::from_env().is_none());
+    }
+
+    #[test]
+    fn test_from_env_with_vars() {
+        // Clean first
+        std::env::remove_var("CONTAINER_BROKER_WS_URL");
+        std::env::remove_var("CONTAINER_BROKER_JWT");
+        std::env::remove_var("CHALLENGE_UUID");
+        std::env::remove_var("CHALLENGE_ID");
+        std::env::remove_var("VALIDATOR_HOTKEY");
+        
+        std::env::set_var("CONTAINER_BROKER_WS_URL", "ws://test:8090");
+        std::env::set_var("CONTAINER_BROKER_JWT", "test-token");
+        std::env::set_var("CHALLENGE_UUID", "uuid-123");
+        std::env::set_var("VALIDATOR_HOTKEY", "hotkey-456");
+        
+        let client = WsContainerClient::from_env().unwrap();
+        assert_eq!(client.ws_url, "ws://test:8090");
+        assert_eq!(client.jwt_token, "test-token");
+        assert_eq!(client.challenge_id, "uuid-123");
+        assert_eq!(client.owner_id, "hotkey-456");
+        
+        // Cleanup
+        std::env::remove_var("CONTAINER_BROKER_WS_URL");
+        std::env::remove_var("CONTAINER_BROKER_JWT");
+        std::env::remove_var("CHALLENGE_UUID");
+        std::env::remove_var("VALIDATOR_HOTKEY");
+    }
+
+    #[test]
+    fn test_from_env_with_fallback_challenge_id() {
+        // Clean first
+        std::env::remove_var("CONTAINER_BROKER_WS_URL");
+        std::env::remove_var("CONTAINER_BROKER_JWT");
+        std::env::remove_var("CHALLENGE_UUID");
+        std::env::remove_var("CHALLENGE_ID");
+        std::env::remove_var("VALIDATOR_HOTKEY");
+        
+        std::env::set_var("CONTAINER_BROKER_WS_URL", "ws://test:8090");
+        std::env::set_var("CONTAINER_BROKER_JWT", "test-token");
+        std::env::set_var("CHALLENGE_ID", "challenge-name");
+        
+        let client = WsContainerClient::from_env().unwrap();
+        assert_eq!(client.challenge_id, "challenge-name");
+        
+        // Cleanup
+        std::env::remove_var("CONTAINER_BROKER_WS_URL");
+        std::env::remove_var("CONTAINER_BROKER_JWT");
+        std::env::remove_var("CHALLENGE_ID");
+    }
+
+    #[test]
+    fn test_from_env_default_challenge_and_owner() {
+        // Clean first
+        std::env::remove_var("CONTAINER_BROKER_WS_URL");
+        std::env::remove_var("CONTAINER_BROKER_JWT");
+        std::env::remove_var("CHALLENGE_UUID");
+        std::env::remove_var("CHALLENGE_ID");
+        std::env::remove_var("VALIDATOR_HOTKEY");
+        
+        std::env::set_var("CONTAINER_BROKER_WS_URL", "ws://test:8090");
+        std::env::set_var("CONTAINER_BROKER_JWT", "test-token");
+        
+        let client = WsContainerClient::from_env().unwrap();
+        assert_eq!(client.challenge_id, "unknown-challenge");
+        assert_eq!(client.owner_id, "unknown-owner");
+        
+        // Cleanup
+        std::env::remove_var("CONTAINER_BROKER_WS_URL");
+        std::env::remove_var("CONTAINER_BROKER_JWT");
     }
 }

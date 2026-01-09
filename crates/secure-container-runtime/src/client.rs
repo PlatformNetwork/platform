@@ -677,4 +677,132 @@ mod tests {
         assert_eq!(config.resources.memory_bytes, 2 * 1024 * 1024 * 1024);
         assert_eq!(config.network.ports.get(&8080), Some(&0));
     }
+
+    #[test]
+    fn test_config_builder_all_methods() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("VAR1".into(), "val1".into());
+        env_vars.insert("VAR2".into(), "val2".into());
+
+        let config = ContainerConfigBuilder::new("alpine:latest", "ch1", "owner1")
+            .name("test")
+            .cmd(vec!["sh".into(), "-c".into(), "echo hello".into()])
+            .env("KEY", "value")
+            .envs(env_vars)
+            .working_dir("/app")
+            .memory(1024 * 1024 * 1024) // 1GB
+            .cpu(0.5)
+            .pids(128)
+            .network_mode(NetworkMode::Bridge)
+            .port(8080, 8080)
+            .allow_internet(true)
+            .mount("/tmp/data", "/data", false)
+            .mount_readonly("/tmp/config", "/config")
+            .label("version", "1.0")
+            .build();
+
+        assert_eq!(config.name, Some("test".into()));
+        assert_eq!(config.cmd, Some(vec!["sh".into(), "-c".into(), "echo hello".into()]));
+        assert_eq!(config.env.get("KEY"), Some(&"value".into()));
+        assert_eq!(config.env.get("VAR1"), Some(&"val1".into()));
+        assert_eq!(config.working_dir, Some("/app".into()));
+        assert_eq!(config.resources.memory_bytes, 1024 * 1024 * 1024);
+        assert_eq!(config.resources.cpu_cores, 0.5);
+        assert_eq!(config.resources.pids_limit, 128);
+        assert_eq!(config.network.mode, NetworkMode::Bridge);
+        assert_eq!(config.network.ports.get(&8080), Some(&8080));
+        assert_eq!(config.network.allow_internet, true);
+        assert_eq!(config.mounts.len(), 2);
+        assert_eq!(config.mounts[0].read_only, false);
+        assert_eq!(config.mounts[1].read_only, true);
+        assert_eq!(config.labels.get("version"), Some(&"1.0".into()));
+    }
+
+    #[test]
+    fn test_config_builder_memory_gb() {
+        let config = ContainerConfigBuilder::new("test:1", "ch1", "owner1")
+            .memory_gb(4.5)
+            .build();
+        
+        assert_eq!(config.resources.memory_bytes, (4.5 * 1024.0 * 1024.0 * 1024.0) as i64);
+    }
+
+    #[test]
+    fn test_secure_container_client_new() {
+        let client = SecureContainerClient::new("/custom/path.sock");
+        assert_eq!(client.socket_path, "/custom/path.sock");
+    }
+
+    #[test]
+    fn test_secure_container_client_default_path() {
+        let client = SecureContainerClient::default_path();
+        assert_eq!(client.socket_path, "/var/run/platform/container-broker.sock");
+    }
+
+    #[test]
+    fn test_cleanup_result_success() {
+        let result = CleanupResult {
+            total: 5,
+            stopped: 5,
+            removed: 5,
+            errors: vec![],
+        };
+        assert!(result.success());
+
+        let result_with_errors = CleanupResult {
+            total: 5,
+            stopped: 4,
+            removed: 4,
+            errors: vec!["Failed to stop container".into()],
+        };
+        assert!(!result_with_errors.success());
+    }
+
+    #[test]
+    fn test_oneshot_result_fields() {
+        let result = OneshotResult {
+            success: true,
+            logs: "test output".into(),
+            duration_secs: 1.5,
+            timed_out: false,
+        };
+        
+        assert!(result.success);
+        assert_eq!(result.logs, "test output");
+        assert_eq!(result.duration_secs, 1.5);
+        assert!(!result.timed_out);
+    }
+
+    #[test]
+    fn test_challenge_stats_fields() {
+        let stats = ChallengeStats {
+            challenge_id: "challenge-123".into(),
+            total_containers: 10,
+            running_containers: 7,
+            stopped_containers: 3,
+            container_ids: vec!["c1".into(), "c2".into()],
+        };
+        
+        assert_eq!(stats.challenge_id, "challenge-123");
+        assert_eq!(stats.total_containers, 10);
+        assert_eq!(stats.running_containers, 7);
+        assert_eq!(stats.stopped_containers, 3);
+        assert_eq!(stats.container_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_container_start_result_fields() {
+        let mut ports = HashMap::new();
+        ports.insert(8080, 38080);
+        
+        let result = ContainerStartResult {
+            container_id: "container-123".into(),
+            ports: ports.clone(),
+            endpoint: Some("http://test-container:8080".into()),
+        };
+        
+        assert_eq!(result.container_id, "container-123");
+        assert_eq!(result.ports, ports);
+        assert_eq!(result.endpoint, Some("http://test-container:8080".into()));
+    }
 }

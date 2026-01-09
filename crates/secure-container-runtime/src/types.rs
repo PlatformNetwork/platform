@@ -269,3 +269,251 @@ pub mod labels {
     pub const BROKER_VERSION: &str = "platform.broker.version";
     pub const MANAGED: &str = "platform.managed";
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_container_config_default() {
+        let config = ContainerConfig::default();
+        assert!(config.image.is_empty());
+        assert!(config.challenge_id.is_empty());
+        assert!(config.owner_id.is_empty());
+        assert!(config.name.is_none());
+        assert!(config.cmd.is_none());
+        assert!(config.env.is_empty());
+        assert!(config.mounts.is_empty());
+        assert!(config.labels.is_empty());
+    }
+
+    #[test]
+    fn test_resource_limits_default() {
+        let limits = ResourceLimits::default();
+        assert_eq!(limits.memory_bytes, 2 * 1024 * 1024 * 1024);
+        assert_eq!(limits.cpu_cores, 1.0);
+        assert_eq!(limits.pids_limit, 256);
+        assert_eq!(limits.disk_quota_bytes, 0);
+    }
+
+    #[test]
+    fn test_network_config_default() {
+        let network = NetworkConfig::default();
+        assert_eq!(network.mode, NetworkMode::Isolated);
+        assert!(network.ports.is_empty());
+        assert!(!network.allow_internet);
+    }
+
+    #[test]
+    fn test_network_mode_serialization() {
+        let modes = vec![
+            NetworkMode::None,
+            NetworkMode::Bridge,
+            NetworkMode::Isolated,
+        ];
+
+        for mode in modes {
+            let json = serde_json::to_string(&mode).unwrap();
+            let decoded: NetworkMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, mode);
+        }
+    }
+
+    #[test]
+    fn test_container_state_serialization() {
+        let states = vec![
+            ContainerState::Creating,
+            ContainerState::Running,
+            ContainerState::Stopped,
+            ContainerState::Paused,
+            ContainerState::Removing,
+            ContainerState::Dead,
+            ContainerState::Unknown,
+        ];
+
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let decoded: ContainerState = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, state);
+        }
+    }
+
+    #[test]
+    fn test_mount_config_serialization() {
+        let mount = MountConfig {
+            source: "/host/path".into(),
+            target: "/container/path".into(),
+            read_only: true,
+        };
+
+        let json = serde_json::to_string(&mount).unwrap();
+        let decoded: MountConfig = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(decoded.source, "/host/path");
+        assert_eq!(decoded.target, "/container/path");
+        assert!(decoded.read_only);
+    }
+
+    #[test]
+    fn test_exec_result_fields() {
+        let result = ExecResult {
+            stdout: "output".into(),
+            stderr: "error".into(),
+            exit_code: 0,
+            duration_ms: 1500,
+            timed_out: false,
+        };
+
+        assert_eq!(result.stdout, "output");
+        assert_eq!(result.stderr, "error");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.duration_ms, 1500);
+        assert!(!result.timed_out);
+    }
+
+    #[test]
+    fn test_audit_action_serialization() {
+        let actions = vec![
+            AuditAction::ContainerCreate,
+            AuditAction::ContainerStart,
+            AuditAction::ContainerStop,
+            AuditAction::ContainerRemove,
+            AuditAction::ContainerExec,
+            AuditAction::ImagePull,
+            AuditAction::ImageBuild,
+            AuditAction::PolicyViolation,
+        ];
+
+        for action in actions {
+            let json = serde_json::to_string(&action).unwrap();
+            let decoded: AuditAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, action);
+        }
+    }
+
+    #[test]
+    fn test_audit_entry_serialization() {
+        let mut details = HashMap::new();
+        details.insert("key".into(), "value".into());
+
+        let entry = AuditEntry {
+            timestamp: chrono::Utc::now(),
+            action: AuditAction::ContainerCreate,
+            challenge_id: "ch1".into(),
+            owner_id: "owner1".into(),
+            container_id: Some("container1".into()),
+            success: true,
+            error: None,
+            details,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let decoded: AuditEntry = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(decoded.action, AuditAction::ContainerCreate);
+        assert_eq!(decoded.challenge_id, "ch1");
+        assert!(decoded.success);
+    }
+
+    #[test]
+    fn test_container_error_display() {
+        let errors = vec![
+            ContainerError::ImageNotWhitelisted("test:latest".into()),
+            ContainerError::PolicyViolation("test".into()),
+            ContainerError::ContainerNotFound("c1".into()),
+            ContainerError::ResourceLimitExceeded("memory".into()),
+            ContainerError::PermissionDenied("test".into()),
+            ContainerError::InvalidConfig("test".into()),
+            ContainerError::DockerError("test".into()),
+            ContainerError::InternalError("test".into()),
+            ContainerError::Unauthorized("test".into()),
+            ContainerError::InvalidRequest("test".into()),
+        ];
+
+        for error in errors {
+            let msg = format!("{}", error);
+            assert!(!msg.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_container_error_serialization() {
+        let error = ContainerError::PolicyViolation("docker socket blocked".into());
+        let json = serde_json::to_string(&error).unwrap();
+        let decoded: ContainerError = serde_json::from_str(&json).unwrap();
+        
+        match decoded {
+            ContainerError::PolicyViolation(msg) => assert_eq!(msg, "docker socket blocked"),
+            _ => panic!("Wrong error type"),
+        }
+    }
+
+    #[test]
+    fn test_container_info_serialization() {
+        let mut ports = HashMap::new();
+        ports.insert(8080, 38080);
+
+        let mut labels = HashMap::new();
+        labels.insert("key".into(), "value".into());
+
+        let info = ContainerInfo {
+            id: "c1".into(),
+            name: "test-container".into(),
+            challenge_id: "ch1".into(),
+            owner_id: "owner1".into(),
+            image: "alpine:latest".into(),
+            state: ContainerState::Running,
+            created_at: chrono::Utc::now(),
+            ports,
+            endpoint: Some("http://test:8080".into()),
+            labels,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let decoded: ContainerInfo = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(decoded.id, "c1");
+        assert_eq!(decoded.name, "test-container");
+        assert_eq!(decoded.state, ContainerState::Running);
+    }
+
+    #[test]
+    fn test_labels_constants() {
+        assert_eq!(labels::CHALLENGE_ID, "platform.challenge.id");
+        assert_eq!(labels::OWNER_ID, "platform.owner.id");
+        assert_eq!(labels::CREATED_BY, "platform.created-by");
+        assert_eq!(labels::BROKER_VERSION, "platform.broker.version");
+        assert_eq!(labels::MANAGED, "platform.managed");
+    }
+
+    #[test]
+    fn test_container_config_with_all_fields() {
+        let mut env = HashMap::new();
+        env.insert("KEY".into(), "VALUE".into());
+
+        let mut labels = HashMap::new();
+        labels.insert("label1".into(), "value1".into());
+
+        let config = ContainerConfig {
+            image: "test:latest".into(),
+            challenge_id: "ch1".into(),
+            owner_id: "owner1".into(),
+            name: Some("test".into()),
+            cmd: Some(vec!["sh".into()]),
+            env,
+            working_dir: Some("/app".into()),
+            resources: ResourceLimits::default(),
+            network: NetworkConfig::default(),
+            mounts: vec![],
+            labels,
+            user: Some("1000:1000".into()),
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let decoded: ContainerConfig = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(decoded.image, "test:latest");
+        assert_eq!(decoded.challenge_id, "ch1");
+        assert_eq!(decoded.user, Some("1000:1000".into()));
+    }
+}

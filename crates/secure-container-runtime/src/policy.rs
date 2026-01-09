@@ -291,6 +291,7 @@ impl SecurityPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_policy_default() {
@@ -387,5 +388,200 @@ mod tests {
         };
 
         assert!(policy.validate(&config).is_err());
+    }
+
+    #[test]
+    fn test_strict_policy() {
+        let policy = SecurityPolicy::strict();
+        assert_eq!(policy.allowed_image_prefixes.len(), 1);
+        assert_eq!(policy.allowed_image_prefixes[0], "ghcr.io/platformnetwork/");
+        assert!(policy.validate_image("ghcr.io/platformnetwork/test:latest").is_ok());
+        assert!(policy.validate_image("docker.io/test:latest").is_err());
+    }
+
+    #[test]
+    fn test_development_policy() {
+        let policy = SecurityPolicy::development();
+        assert!(policy.allowed_mount_prefixes.contains(&"/workspace/".to_string()));
+    }
+
+    #[test]
+    fn test_allow_all_images() {
+        let mut policy = SecurityPolicy::strict();
+        assert!(!policy.allowed_image_prefixes.is_empty());
+        
+        policy = policy.allow_all_images();
+        assert!(policy.allowed_image_prefixes.is_empty());
+        assert!(policy.validate_image("any:image").is_ok());
+    }
+
+    #[test]
+    fn test_with_image_prefix() {
+        let policy = SecurityPolicy::default()
+            .with_image_prefix("docker.io/myorg/");
+        
+        assert!(policy.allowed_image_prefixes.contains(&"docker.io/myorg/".to_string()));
+    }
+
+    #[test]
+    fn test_validate_missing_owner_id() {
+        let policy = SecurityPolicy::default();
+        let config = ContainerConfig {
+            image: "test:latest".to_string(),
+            challenge_id: "challenge-1".to_string(),
+            owner_id: "".to_string(),
+            ..Default::default()
+        };
+        
+        assert!(policy.validate(&config).is_err());
+    }
+
+    #[test]
+    fn test_validate_resources_excessive_cpu() {
+        let policy = SecurityPolicy::default();
+        let resources = ResourceLimits {
+            memory_bytes: 1024 * 1024 * 1024,
+            cpu_cores: 10.0, // Exceeds max_cpu_cores (4.0)
+            pids_limit: 100,
+            disk_quota_bytes: 0,
+        };
+        
+        assert!(policy.validate_resources(&resources).is_err());
+    }
+
+    #[test]
+    fn test_validate_resources_excessive_pids() {
+        let policy = SecurityPolicy::default();
+        let resources = ResourceLimits {
+            memory_bytes: 1024 * 1024 * 1024,
+            cpu_cores: 1.0,
+            pids_limit: 10000, // Exceeds max_pids (512)
+            disk_quota_bytes: 0,
+        };
+        
+        assert!(policy.validate_resources(&resources).is_err());
+    }
+
+    #[test]
+    fn test_validate_mounts_run_docker_sock() {
+        let policy = SecurityPolicy::default();
+        let mounts = vec![MountConfig {
+            source: "/run/docker.sock".to_string(),
+            target: "/var/run/docker.sock".to_string(),
+            read_only: true,
+        }];
+        
+        assert!(policy.validate_mounts(&mounts).is_err());
+    }
+
+    #[test]
+    fn test_validate_mounts_forbidden_paths() {
+        let policy = SecurityPolicy::default();
+        
+        let forbidden_mounts = vec![
+            "/etc/passwd",
+            "/etc/shadow",
+            "/etc/sudoers",
+            "/root",
+            "/home",
+            "/proc",
+            "/sys",
+            "/dev",
+        ];
+        
+        for path in forbidden_mounts {
+            let mounts = vec![MountConfig {
+                source: path.to_string(),
+                target: "/mnt/test".to_string(),
+                read_only: true,
+            }];
+            assert!(policy.validate_mounts(&mounts).is_err(), "Should block mount: {}", path);
+        }
+    }
+
+    #[test]
+    fn test_validate_mounts_allowed_prefixes() {
+        let policy = SecurityPolicy::default();
+        
+        let allowed_mounts = vec![
+            "/tmp/data",
+            "/var/lib/platform/challenge-1",
+            "/var/lib/docker/volumes/vol1",
+        ];
+        
+        for path in allowed_mounts {
+            let mounts = vec![MountConfig {
+                source: path.to_string(),
+                target: "/mnt/test".to_string(),
+                read_only: true,
+            }];
+            assert!(policy.validate_mounts(&mounts).is_ok(), "Should allow mount: {}", path);
+        }
+    }
+
+    #[test]
+    fn test_validate_mounts_docker_sock_in_path() {
+        let policy = SecurityPolicy::default();
+        let mounts = vec![MountConfig {
+            source: "/tmp/docker.sock".to_string(),
+            target: "/app/docker.sock".to_string(),
+            read_only: true,
+        }];
+        
+        // Should be blocked due to containing "docker.sock"
+        assert!(policy.validate_mounts(&mounts).is_err());
+    }
+
+    #[test]
+    fn test_validate_mounts_empty_list() {
+        let policy = SecurityPolicy::default();
+        assert!(policy.validate_mounts(&vec![]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_network() {
+        let policy = SecurityPolicy::default();
+        
+        let network = NetworkConfig {
+            mode: NetworkMode::Isolated,
+            ports: HashMap::new(),
+            allow_internet: false,
+        };
+        assert!(policy.validate_network(&network).is_ok());
+        
+        let network_with_internet = NetworkConfig {
+            mode: NetworkMode::Bridge,
+            ports: HashMap::new(),
+            allow_internet: true,
+        };
+        assert!(policy.validate_network(&network_with_internet).is_ok());
+    }
+
+    #[test]
+    fn test_check_container_limit() {
+        let policy = SecurityPolicy::default();
+        
+        assert!(policy.check_container_limit("challenge-1", 50).is_ok());
+        assert!(policy.check_container_limit("challenge-1", 99).is_ok());
+        assert!(policy.check_container_limit("challenge-1", 100).is_err());
+        assert!(policy.check_container_limit("challenge-1", 150).is_err());
+    }
+
+    #[test]
+    fn test_check_owner_limit() {
+        let policy = SecurityPolicy::default();
+        
+        assert!(policy.check_owner_limit("owner-1", 100).is_ok());
+        assert!(policy.check_owner_limit("owner-1", 199).is_ok());
+        assert!(policy.check_owner_limit("owner-1", 200).is_err());
+        assert!(policy.check_owner_limit("owner-1", 300).is_err());
+    }
+
+    #[test]
+    fn test_forbidden_mount_paths_default() {
+        let policy = SecurityPolicy::default();
+        assert!(policy.forbidden_mount_paths.contains("/var/run/docker.sock"));
+        assert!(policy.forbidden_mount_paths.contains("/run/docker.sock"));
+        assert!(policy.forbidden_mount_paths.contains("/etc/passwd"));
     }
 }
