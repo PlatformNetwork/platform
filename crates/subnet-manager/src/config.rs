@@ -458,4 +458,16 @@ mod tests {
         let loaded = BanList::load(&path).unwrap();
         assert!(loaded.is_validator_banned(&hotkey));
     }
+
+    #[test]
+    fn test_ban_list_load_missing_file_returns_default() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("does_not_exist.json");
+
+        let loaded = BanList::load(&path).unwrap();
+
+        assert!(loaded.banned_validators.is_empty());
+        assert!(loaded.banned_hotkeys.is_empty());
+        assert!(loaded.banned_coldkeys.is_empty());
+    }
 }

@@ -569,6 +569,19 @@ impl HealthMonitor {
 }
 
 #[cfg(test)]
+impl HealthMonitor {
+    pub(crate) fn test_history_mut(&mut self) -> &mut VecDeque<HealthCheck> {
+        &mut self.history
+    }
+
+    pub(crate) fn test_failure_counts_mut(
+        &mut self,
+    ) -> &mut std::collections::HashMap<String, u32> {
+        &mut self.failure_counts
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1020,5 +1033,49 @@ mod tests {
         // Should trigger degraded/critical status
         let status = monitor.current_status();
         assert!(matches!(status, HealthStatus::Critical | HealthStatus::Degraded));
+    }
+
+    #[test]
+    fn test_history_is_trimmed_to_100_entries() {
+        let mut monitor = HealthMonitor::new(HealthConfig::default());
+        let metrics = HealthMetrics {
+            memory_percent: 10.0,
+            cpu_percent: 10.0,
+            disk_percent: 10.0,
+            ..Default::default()
+        };
+
+        let first_timestamp = monitor.check(metrics.clone()).timestamp;
+        for _ in 0..100 {
+            monitor.check(metrics.clone());
+        }
+
+        assert_eq!(monitor.history.len(), 100);
+        let oldest_timestamp = monitor.history.front().unwrap().timestamp;
+        assert!(oldest_timestamp > first_timestamp);
+    }
+
+    #[test]
+    fn test_worse_status_ordering() {
+        assert_eq!(
+            HealthMonitor::worse_status(HealthStatus::Healthy, HealthStatus::Degraded),
+            HealthStatus::Degraded
+        );
+        assert_eq!(
+            HealthMonitor::worse_status(HealthStatus::Degraded, HealthStatus::Unhealthy),
+            HealthStatus::Unhealthy
+        );
+        assert_eq!(
+            HealthMonitor::worse_status(HealthStatus::Unhealthy, HealthStatus::Critical),
+            HealthStatus::Critical
+        );
+        assert_eq!(
+            HealthMonitor::worse_status(HealthStatus::Critical, HealthStatus::Healthy),
+            HealthStatus::Critical
+        );
+        assert_eq!(
+            HealthMonitor::worse_status(HealthStatus::Healthy, HealthStatus::Healthy),
+            HealthStatus::Healthy
+        );
     }
 }

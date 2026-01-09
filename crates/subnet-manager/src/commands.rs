@@ -861,6 +861,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rollback_to_snapshot_success_path() {
+        let (executor, _dir) = create_test_executor();
+
+        let (snapshot_id, original_height, original_epoch) = {
+            let state = executor.state.read();
+            let mut snapshots = executor.snapshots.write();
+            let id = snapshots
+                .create_snapshot(
+                    "rollback-success",
+                    state.block_height,
+                    state.epoch,
+                    &state,
+                    "test",
+                    false,
+                )
+                .unwrap();
+            (id, state.block_height, state.epoch)
+        };
+
+        {
+            let mut state = executor.state.write();
+            state.block_height = original_height + 500;
+            state.epoch = original_epoch + 5;
+        }
+
+        let result = executor
+            .execute_command(&SubnetCommand::RollbackToSnapshot { snapshot_id })
+            .await;
+
+        assert!(result.success);
+        assert!(result.message.contains("Rolled back"));
+
+        let state = executor.state.read();
+        assert_eq!(state.block_height, original_height);
+        assert_eq!(state.epoch, original_epoch);
+    }
+
+    #[tokio::test]
     async fn test_update_config_command() {
         let (executor, _dir) = create_test_executor();
         

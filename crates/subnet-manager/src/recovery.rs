@@ -313,7 +313,7 @@ impl RecoveryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HealthConfig;
+    use crate::{HealthCheck, HealthConfig};
     use tempfile::tempdir;
 
     fn create_manager_with_config(
@@ -727,6 +727,54 @@ mod tests {
         })
         .await;
         assert!(matches!(fallback_action, RecoveryAction::RestartEvaluations));
+    }
+
+    #[tokio::test]
+    async fn test_check_and_recover_degraded_branch() {
+        let config = RecoveryConfig {
+            auto_recover: true,
+            cooldown_secs: 0,
+            ..Default::default()
+        };
+        let (mut manager, _, _, _dir) = create_manager_with_config(config);
+        let mut health = create_aggressive_health_monitor();
+
+        let mut metrics = base_metrics();
+        metrics.pending_jobs = 11; // just over the degraded threshold
+        metrics.running_jobs = 1;
+        health.check(metrics);
+        assert_eq!(health.current_status(), HealthStatus::Degraded);
+
+        let attempt = manager
+            .check_and_recover(&health)
+            .await
+            .expect("expected degraded recovery");
+        assert!(matches!(attempt.action, RecoveryAction::RestartEvaluations));
+    }
+
+    #[tokio::test]
+    async fn test_check_and_recover_healthy_branch_returns_none() {
+        let config = RecoveryConfig {
+            auto_recover: true,
+            cooldown_secs: 0,
+            ..Default::default()
+        };
+        let (mut manager, _, _, _dir) = create_manager_with_config(config);
+        let mut health = create_aggressive_health_monitor();
+
+        health
+            .test_failure_counts_mut()
+            .insert("job_queue".into(), 5);
+        health.test_history_mut().push_back(HealthCheck {
+            timestamp: chrono::Utc::now(),
+            status: HealthStatus::Healthy,
+            components: Vec::new(),
+            alerts: Vec::new(),
+            metrics: HealthMetrics::default(),
+        });
+
+        let attempt = manager.check_and_recover(&health).await;
+        assert!(attempt.is_none());
     }
 
     #[tokio::test]
