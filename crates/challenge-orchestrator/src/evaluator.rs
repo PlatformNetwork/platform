@@ -4,9 +4,16 @@
 //! forwards JSON payloads to the configured container endpoint, enforces
 //! timeouts, and surfaces useful errors back to the validator.
 //!
+//! ## Circuit Breaker Integration
+//!
+//! The evaluator optionally integrates with a circuit breaker to prevent
+//! repeated requests to unhealthy containers. When enabled, requests to
+//! containers with open circuits will fast-fail instead of waiting for timeout.
+//!
 //! For challenge-specific schemas, see each challenge repository (for example,
 //! `term-challenge-repo/src/server.rs`).
 
+use crate::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use crate::{ChallengeInstance, ContainerStatus};
 use parking_lot::RwLock;
 use platform_core::ChallengeId;
@@ -18,29 +25,80 @@ use tracing::{debug, info, warn};
 
 /// Generic evaluator for routing requests to challenge containers with baked-in
 /// HTTP client configuration (timeouts, retries handled upstream).
+///
+/// Optionally integrates with a circuit breaker to fast-fail requests to
+/// unhealthy containers.
 pub struct ChallengeEvaluator {
     challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>,
     client: reqwest::Client,
+    circuit_breaker: Option<Arc<CircuitBreakerManager>>,
 }
 
 impl ChallengeEvaluator {
+    /// Create a new evaluator without circuit breaker protection
     pub fn new(challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3600))
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { challenges, client }
+        Self {
+            challenges,
+            client,
+            circuit_breaker: None,
+        }
+    }
+
+    /// Create a new evaluator with circuit breaker protection using default config
+    pub fn with_circuit_breaker(
+        challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>,
+    ) -> Self {
+        Self::with_circuit_breaker_config(challenges, CircuitBreakerConfig::default())
+    }
+
+    /// Create a new evaluator with circuit breaker protection using custom config
+    pub fn with_circuit_breaker_config(
+        challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>,
+        config: CircuitBreakerConfig,
+    ) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3600))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self {
+            challenges,
+            client,
+            circuit_breaker: Some(Arc::new(CircuitBreakerManager::with_config(config))),
+        }
+    }
+
+    /// Get the circuit breaker manager (if enabled)
+    pub fn circuit_breaker(&self) -> Option<&Arc<CircuitBreakerManager>> {
+        self.circuit_breaker.as_ref()
     }
 
     /// Send a generic evaluation request to a challenge container
     /// The request/response format is defined by each challenge, not by the orchestrator
+    ///
+    /// If circuit breaker is enabled and the circuit is open, this will fast-fail
+    /// with `EvaluatorError::CircuitOpen` instead of waiting for timeout.
     pub async fn evaluate_generic(
         &self,
         challenge_id: ChallengeId,
         request: serde_json::Value,
         timeout_secs: Option<u64>,
     ) -> Result<serde_json::Value, EvaluatorError> {
+        // Check circuit breaker first (fast-fail if open)
+        if let Some(ref cb) = self.circuit_breaker {
+            if let Err(e) = cb.check(challenge_id) {
+                return Err(EvaluatorError::CircuitOpen {
+                    challenge_id,
+                    time_until_retry: e.time_until_retry,
+                });
+            }
+        }
+
         let instance = self
             .challenges
             .read()
@@ -59,14 +117,29 @@ impl ChallengeEvaluator {
             "Sending evaluation request to {}", url
         );
 
-        let response = self
+        let result = self
             .client
             .post(&url)
             .json(&request)
             .timeout(Duration::from_secs(timeout_secs.unwrap_or(3600)))
             .send()
-            .await
-            .map_err(|e| EvaluatorError::NetworkError(e.to_string()))?;
+            .await;
+
+        // Record success/failure with circuit breaker
+        match &result {
+            Ok(resp) if resp.status().is_success() => {
+                if let Some(ref cb) = self.circuit_breaker {
+                    cb.record_success(challenge_id);
+                }
+            }
+            Ok(_) | Err(_) => {
+                if let Some(ref cb) = self.circuit_breaker {
+                    cb.record_failure(challenge_id);
+                }
+            }
+        }
+
+        let response = result.map_err(|e| EvaluatorError::NetworkError(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -91,6 +164,9 @@ impl ChallengeEvaluator {
     }
 
     /// Proxy any request to a challenge endpoint
+    ///
+    /// If circuit breaker is enabled and the circuit is open, this will fast-fail
+    /// with `EvaluatorError::CircuitOpen` instead of waiting for timeout.
     pub async fn proxy_request(
         &self,
         challenge_id: ChallengeId,
@@ -99,6 +175,16 @@ impl ChallengeEvaluator {
         body: Option<serde_json::Value>,
         timeout_secs: Option<u64>,
     ) -> Result<serde_json::Value, EvaluatorError> {
+        // Check circuit breaker first (fast-fail if open)
+        if let Some(ref cb) = self.circuit_breaker {
+            if let Err(e) = cb.check(challenge_id) {
+                return Err(EvaluatorError::CircuitOpen {
+                    challenge_id,
+                    time_until_retry: e.time_until_retry,
+                });
+            }
+        }
+
         let instance = self
             .challenges
             .read()
@@ -127,10 +213,23 @@ impl ChallengeEvaluator {
             req = req.json(&b);
         }
 
-        let response = req
-            .send()
-            .await
-            .map_err(|e| EvaluatorError::NetworkError(e.to_string()))?;
+        let result = req.send().await;
+
+        // Record success/failure with circuit breaker
+        match &result {
+            Ok(resp) if resp.status().is_success() => {
+                if let Some(ref cb) = self.circuit_breaker {
+                    cb.record_success(challenge_id);
+                }
+            }
+            Ok(_) | Err(_) => {
+                if let Some(ref cb) = self.circuit_breaker {
+                    cb.record_failure(challenge_id);
+                }
+            }
+        }
+
+        let response = result.map_err(|e| EvaluatorError::NetworkError(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -268,6 +367,12 @@ pub enum EvaluatorError {
 
     #[error("Timeout")]
     Timeout,
+
+    #[error("Circuit open for challenge {challenge_id}: retry in {time_until_retry:?}")]
+    CircuitOpen {
+        challenge_id: ChallengeId,
+        time_until_retry: Option<Duration>,
+    },
 }
 
 #[cfg(test)]
