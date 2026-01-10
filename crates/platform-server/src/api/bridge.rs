@@ -190,7 +190,8 @@ async fn proxy_to_challenge(
 ///
 /// Routes:
 ///   /api/v1/bridge/term-challenge/submit -> term-challenge /api/v1/submit
-///   /api/v1/bridge/term-challenge/leaderboard -> term-challenge /api/v1/leaderboard
+///   /api/v1/bridge/term-challenge/leaderboard -> term-challenge /leaderboard (root-level)
+///   /api/v1/bridge/term-challenge/get_weights -> term-challenge /get_weights (root-level)
 ///   /api/v1/bridge/math-challenge/evaluate -> math-challenge /api/v1/evaluate
 pub async fn bridge_to_challenge(
     State(state): State<Arc<AppState>>,
@@ -202,10 +203,21 @@ pub async fn bridge_to_challenge(
         challenge_name, path
     );
 
-    // Construct the API path (add /api/v1/ prefix if not present)
+    // Root-level endpoints that don't need /api/v1/ prefix
+    const ROOT_LEVEL_ENDPOINTS: &[&str] = &["get_weights", "leaderboard", "evaluate", "health"];
+
+    // Construct the API path
     let api_path = if path.starts_with("api/") {
+        // Already has api/ prefix
+        format!("/{}", path)
+    } else if ROOT_LEVEL_ENDPOINTS
+        .iter()
+        .any(|e| path == *e || path.starts_with(&format!("{}/", e)))
+    {
+        // Root-level endpoints on challenge servers
         format!("/{}", path)
     } else {
+        // Default: add /api/v1/ prefix
         format!("/api/v1/{}", path)
     };
 
