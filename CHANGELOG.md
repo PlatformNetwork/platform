@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.2.2](https://github.com/PlatformNetwork/platform/compare/v0.2.1...v0.2.2) (2026-01-10)
+
+
+### Features
+
+* **validator:** add periodic challenge refresh + apply emission_weight ([3cfbd77](https://github.com/PlatformNetwork/platform/commit/3cfbd77188bc405b02075023d2f7d2c4c7a2f84d))
+* **validator:** add periodic metagraph refresh every 5 minutes ([22c9f57](https://github.com/PlatformNetwork/platform/commit/22c9f57bb4bde0aad2858cc9b29ab8ce5d1c1c81))
+* **validator:** convert hotkey weights to UIDs using metagraph ([630990c](https://github.com/PlatformNetwork/platform/commit/630990c5203da34a3116bc46405db0db5ebcb09a))
+
+
+### Bug Fixes
+
+* **bridge:** route root-level endpoints without /api/v1 prefix ([b5102e5](https://github.com/PlatformNetwork/platform/commit/b5102e564cb81a2ea04b07e103938ed54989d2d7))
+* **ci:** separate coverage job to prevent cancellation ([8cd7b3e](https://github.com/PlatformNetwork/platform/commit/8cd7b3ef433385c8fb3891d47fac0c92a4b492a4))
+* **docker:** use external network to avoid compose label conflict ([8056f50](https://github.com/PlatformNetwork/platform/commit/8056f50da7d1b4169ada7d55f5ee92889ffda1d1))
+* **validator:** max-upscale weights to match Python SDK behavior ([63af164](https://github.com/PlatformNetwork/platform/commit/63af1641f65a5c307509747749dccda9565f6568))
+* **validator:** send 100% burn when challenge returns no/empty/unresolved weights ([b180427](https://github.com/PlatformNetwork/platform/commit/b180427f95398271c552f42e55442068b38ee23d))
+* **validator:** unresolved hotkey weights go to burn instead of being lost ([969bf87](https://github.com/PlatformNetwork/platform/commit/969bf87fcf154ec28bac321ea5c8bc0666d2eb40))
+
+
+### Code Refactoring
+
+* remove P2P consensus and networking code ([7678293](https://github.com/PlatformNetwork/platform/commit/76782935d5efb0215746c11969cdcde8426535a4))
+
+
+### Documentation
+
+* add docker network create step to validator guide ([52d29f8](https://github.com/PlatformNetwork/platform/commit/52d29f86facf15d4575433ef2be0769aaa7f4c5d))
+
+
+### Miscellaneous
+
+* fix configuration table in the readme ([9f3fa85](https://github.com/PlatformNetwork/platform/commit/9f3fa8596a8d10387c8f87a0a423c992f4577776))
+* fix configuration table in the readme ([160541e](https://github.com/PlatformNetwork/platform/commit/160541e57ba9f29360ca072025b56aac471f1619))
+* nitpicks by coderabbitai ([3e21331](https://github.com/PlatformNetwork/platform/commit/3e21331fc594d17bb5f91b13343752bb28d6df28))
+* remove unused method `receive_write_proposal` ([2eabda6](https://github.com/PlatformNetwork/platform/commit/2eabda61b2871e11362b86c707c63e843981cda4))
+
+
+### Tests
+
+* add missing tests for command.rs ([a7d5f44](https://github.com/PlatformNetwork/platform/commit/a7d5f448282a228ae7454d15e8522319e3789d22))
+* add missing tests for config.rs ([7c94ac3](https://github.com/PlatformNetwork/platform/commit/7c94ac32972dcf0690277eef2a98532b885d3ab3))
+* cover missing paths for health.rs ([0f777ef](https://github.com/PlatformNetwork/platform/commit/0f777ef12bf3b5a814e69da0b370e6e3cf51b9eb))
+* **platform-storage:** add comprehensive test coverage for storage modules ([90940ce](https://github.com/PlatformNetwork/platform/commit/90940ce59a02bacf0dbc59b970349361c9268994))
+* **subnet-manager:** add comprehensive units tests ([59beb07](https://github.com/PlatformNetwork/platform/commit/59beb07939d0be70a7cce684aa39e5bb22bc272e))
+
 ## [0.2.1](https://github.com/PlatformNetwork/platform/compare/v0.2.0...v0.2.1) (2026-01-09)
 
 
