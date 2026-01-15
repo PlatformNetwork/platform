@@ -327,6 +327,10 @@ pub async fn get_evaluations_for_agent(pool: &Pool, agent_hash: &str) -> Result<
 // LEADERBOARD
 // ============================================================================
 
+/// Update leaderboard entry for an agent by calculating consensus score from evaluations
+///
+/// Calculates the average score from all evaluations for the agent and updates the leaderboard.
+/// Returns `None` if no evaluations exist for the agent.
 pub async fn update_leaderboard(pool: &Pool, agent_hash: &str) -> Result<Option<LeaderboardEntry>> {
     let evaluations = get_evaluations_for_agent(pool, agent_hash).await?;
     if evaluations.is_empty() {
@@ -338,7 +342,11 @@ pub async fn update_leaderboard(pool: &Pool, agent_hash: &str) -> Result<Option<
         .ok_or_else(|| anyhow!("Submission not found for agent_hash: {}", agent_hash))?;
 
     let scores: Vec<f64> = evaluations.iter().map(|e| e.score).collect();
-    let consensus_score = scores.iter().sum::<f64>() / scores.len() as f64;
+    let consensus_score = if scores.is_empty() {
+        0.0 // Should not happen due to check above, but defensive
+    } else {
+        scores.iter().sum::<f64>() / scores.len() as f64
+    };
     let evaluation_count = evaluations.len() as i32;
     let first_epoch = submission.epoch as i64;
 
