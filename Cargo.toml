@@ -9,8 +9,6 @@ members = [
     "crates/subnet-manager",
     "crates/rpc-server",
     "crates/challenge-orchestrator",
-    "crates/auto-updater",
-    "crates/distributed-db",
     "crates/secure-container-runtime",
     "crates/platform-server",
     "bins/platform",
