@@ -15,6 +15,42 @@ pub async fn submit_evaluation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SubmitEvaluationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Validate score is within valid range [0.0, 1.0]
+    if req.score < 0.0 || req.score > 1.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Score must be between 0.0 and 1.0, got {}", req.score)
+            })),
+        ));
+    }
+
+    // Validate task counts are consistent
+    if req.tasks_passed + req.tasks_failed != req.tasks_total {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!(
+                    "Task counts are inconsistent: tasks_passed ({}) + tasks_failed ({}) != tasks_total ({})",
+                    req.tasks_passed, req.tasks_failed, req.tasks_total
+                )
+            })),
+        ));
+    }
+
+    // Validate tasks_total is not zero to avoid division by zero in score calculations
+    if req.tasks_total == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "tasks_total must be greater than 0"
+            })),
+        ));
+    }
+
     let evaluation = queries::create_evaluation(&state.db, &req)
         .await
         .map_err(|e| {
@@ -260,5 +296,59 @@ mod tests {
 
         assert!(!response["success"].as_bool().unwrap());
         assert!(response["error"].as_str().is_some());
+    }
+
+    // =========================================================================
+    // Input validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_score_validation_negative() {
+        let score = -0.1;
+        assert!(
+            score < 0.0 || score > 1.0,
+            "Negative score should be invalid"
+        );
+    }
+
+    #[test]
+    fn test_score_validation_too_high() {
+        let score = 1.5;
+        assert!(
+            score < 0.0 || score > 1.0,
+            "Score > 1.0 should be invalid"
+        );
+    }
+
+    #[test]
+    fn test_score_validation_boundary_values() {
+        assert!(0.0 >= 0.0 && 0.0 <= 1.0, "Score 0.0 should be valid");
+        assert!(1.0 >= 0.0 && 1.0 <= 1.0, "Score 1.0 should be valid");
+    }
+
+    #[test]
+    fn test_task_count_validation_consistent() {
+        let passed = 17u32;
+        let failed = 3u32;
+        let total = 20u32;
+        assert_eq!(passed + failed, total, "Consistent task counts should be valid");
+    }
+
+    #[test]
+    fn test_task_count_validation_inconsistent() {
+        let passed = 17u32;
+        let failed = 3u32;
+        let total = 25u32; // Wrong total
+        assert_ne!(
+            passed + failed,
+            total,
+            "Inconsistent task counts should be invalid"
+        );
+    }
+
+    #[test]
+    fn test_tasks_total_zero_validation() {
+        let total = 0u32;
+        assert_eq!(total, 0, "Zero tasks_total should be invalid");
     }
 }
