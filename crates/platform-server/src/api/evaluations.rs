@@ -15,27 +15,13 @@ pub async fn submit_evaluation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SubmitEvaluationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // Validate score is within valid range [0.0, 1.0]
-    if req.score < 0.0 || req.score > 1.0 {
+    // Validate score is within valid range [0.0, 1.0] and finite
+    if !req.score.is_finite() || req.score < 0.0 || req.score > 1.0 {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "success": false,
-                "error": format!("Score must be between 0.0 and 1.0, got {}", req.score)
-            })),
-        ));
-    }
-
-    // Validate task counts are consistent
-    if req.tasks_passed + req.tasks_failed != req.tasks_total {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "success": false,
-                "error": format!(
-                    "Task counts are inconsistent: tasks_passed ({}) + tasks_failed ({}) != tasks_total ({})",
-                    req.tasks_passed, req.tasks_failed, req.tasks_total
-                )
+                "error": format!("Score must be finite and between 0.0 and 1.0, got {}", req.score)
             })),
         ));
     }
@@ -47,6 +33,32 @@ pub async fn submit_evaluation(
             Json(serde_json::json!({
                 "success": false,
                 "error": "tasks_total must be greater than 0"
+            })),
+        ));
+    }
+
+    // Validate task counts are consistent (and avoid overflow)
+    let tasks_sum = req
+        .tasks_passed
+        .checked_add(req.tasks_failed)
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Task counts overflowed u32"
+                })),
+            )
+        })?;
+    if tasks_sum != req.tasks_total {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!(
+                    "Task counts are inconsistent: tasks_passed ({}) + tasks_failed ({}) != tasks_total ({})",
+                    req.tasks_passed, req.tasks_failed, req.tasks_total
+                )
             })),
         ));
     }
@@ -256,8 +268,8 @@ mod tests {
 
         for score in scores {
             assert!(
-                score >= 0.0 && score <= 1.0,
-                "Score {} should be valid",
+                score.is_finite() && score >= 0.0 && score <= 1.0,
+                "Score {} should be valid and finite",
                 score
             );
         }
@@ -269,7 +281,8 @@ mod tests {
         let failed = 3u32;
         let total = 20u32;
 
-        assert_eq!(passed + failed, total);
+        let sum = passed.checked_add(failed).expect("Should not overflow");
+        assert_eq!(sum, total, "Task counts should be consistent");
     }
 
     // =========================================================================
@@ -350,5 +363,41 @@ mod tests {
     fn test_tasks_total_zero_validation() {
         let total = 0u32;
         assert_eq!(total, 0, "Zero tasks_total should be invalid");
+    }
+
+    #[test]
+    fn test_score_validation_nan() {
+        let score = f64::NAN;
+        assert!(!score.is_finite(), "NaN should be detected as non-finite");
+    }
+
+    #[test]
+    fn test_score_validation_infinity() {
+        let score = f64::INFINITY;
+        assert!(!score.is_finite(), "Infinity should be detected as non-finite");
+    }
+
+    #[test]
+    fn test_score_validation_negative_infinity() {
+        let score = f64::NEG_INFINITY;
+        assert!(!score.is_finite(), "Negative infinity should be detected as non-finite");
+    }
+
+    #[test]
+    fn test_task_count_overflow_prevention() {
+        let passed = u32::MAX;
+        let failed = 1u32;
+        // This would overflow if we used regular addition
+        let result = passed.checked_add(failed);
+        assert!(result.is_none(), "Overflow should be detected");
+    }
+
+    #[test]
+    fn test_task_count_overflow_edge_case() {
+        let passed = u32::MAX - 1;
+        let failed = 2u32;
+        // This should not overflow
+        let result = passed.checked_add(failed);
+        assert_eq!(result, Some(u32::MAX), "Should handle edge case without overflow");
     }
 }
