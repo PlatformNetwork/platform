@@ -81,8 +81,12 @@
 pub mod data;
 /// Database utilities
 pub mod database;
+/// Decentralized challenge runner for P2P mode
+pub mod decentralized;
 /// Error types
 pub mod error;
+/// P2P client for decentralized communication
+pub mod p2p_client;
 /// Client mode - connect to platform via WebSocket
 pub mod platform_client;
 /// HTTP routes
@@ -104,6 +108,10 @@ pub mod weights;
 // EXPORTS
 // ============================================================================
 
+pub use decentralized::run_decentralized;
+pub use p2p_client::{
+    P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,
+};
 pub use platform_client::{
     run_as_client, ChallengeMessage, ConnectionState, PlatformClient, PlatformClientConfig,
     ServerMessage,
@@ -131,6 +139,12 @@ pub mod prelude {
     pub use super::server::{
         ChallengeServer, EvaluationRequest, EvaluationResponse, ServerChallenge, ServerConfig,
         ValidationRequest, ValidationResponse,
+    };
+
+    // P2P / Decentralized mode
+    pub use super::decentralized::run_decentralized;
+    pub use super::p2p_client::{
+        P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,
     };
 
     // Common utilities

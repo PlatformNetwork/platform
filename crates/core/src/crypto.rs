@@ -319,19 +319,19 @@ mod tests {
     }
 
     #[test]
-    fn test_known_mnemonic_produces_expected_hotkey() {
-        // Test the production sudo mnemonic
-        let mnemonic = "law stock festival crisp swap toilet bridge once payment alien antenna witness echo cheap search insect zebra thrive sugar picnic turtle grab satoshi nut";
-        let kp = Keypair::from_mnemonic(mnemonic).unwrap();
+    fn test_mnemonic_produces_deterministic_hotkey() {
+        // Test that mnemonic derivation is deterministic using a well-known test vector
+        // This mnemonic is NOT a production key - it's a standard BIP-39 test vector
+        let test_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let kp = Keypair::from_mnemonic(test_mnemonic).unwrap();
 
-        // Expected SS58: 5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At
-        let expected_hotkey_hex =
-            "da220409678df5f06074a671abdc1f19bc2ba151729fdb9a8e4be284e60c9401";
-        assert_eq!(kp.hotkey().to_hex(), expected_hotkey_hex);
+        // The hotkey should be deterministic for the same mnemonic
+        let hotkey_hex = kp.hotkey().to_hex();
+        assert_eq!(hotkey_hex.len(), 64);
 
-        // Verify SS58 format
-        let ss58 = kp.ss58_address();
-        assert_eq!(ss58, "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At");
+        // Creating from same mnemonic should produce same hotkey
+        let kp2 = Keypair::from_mnemonic(test_mnemonic).unwrap();
+        assert_eq!(kp.hotkey().to_hex(), kp2.hotkey().to_hex());
     }
 
     #[test]

@@ -28,8 +28,11 @@ pub enum ChallengeError {
     #[error("Validation error: {0}")]
     Validation(String),
 
-    #[error("Timeout")]
-    Timeout,
+    #[error("Network error: {0}")]
+    Network(String),
+
+    #[error("Timeout: {0}")]
+    Timeout(String),
 
     // ========== Legacy errors (kept for compatibility) ==========
     #[error("Database error: {0}")]

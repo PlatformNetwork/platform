@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/core",
     "crates/storage",
+    "crates/distributed-storage",
     "crates/challenge-sdk",
     "crates/epoch",
     "crates/bittensor-integration",
@@ -11,8 +12,10 @@ members = [
     "crates/challenge-orchestrator",
     "crates/secure-container-runtime",
     "crates/platform-server",
+    "crates/p2p-consensus",
     "bins/platform",
     "bins/validator-node",
+    "bins/validator-decentralized",
     "bins/csudo",
     "bins/utils",
     "tests",

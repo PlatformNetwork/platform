@@ -1,0 +1,37 @@
+[package]
+name = "platform-p2p-consensus"
+version.workspace = true
+edition.workspace = true
+description = "Decentralized P2P consensus for Platform Network validators"
+
+[dependencies]
+platform-core = { path = "../core" }
+
+# Networking
+libp2p = { version = "0.54", features = ["tokio", "gossipsub", "kad", "identify", "noise", "yamux", "tcp", "dns", "macros", "serde"] }
+
+# Async
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization  
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+
+# Crypto
+sha2 = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+
+# Utils
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = { workspace = true }

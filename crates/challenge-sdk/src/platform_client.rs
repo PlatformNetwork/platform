@@ -413,7 +413,9 @@ impl<C: ServerChallenge + 'static> PlatformClient<C> {
             }
 
             ServerMessage::Ping { timestamp } => {
-                let _ = msg_tx.send(ChallengeMessage::Pong { timestamp }).await;
+                if let Err(e) = msg_tx.send(ChallengeMessage::Pong { timestamp }).await {
+                    warn!("Failed to send Pong message: {}", e);
+                }
             }
 
             ServerMessage::Shutdown {

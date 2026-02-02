@@ -1,0 +1,37 @@
+[package]
+name = "platform-distributed-storage"
+version.workspace = true
+edition.workspace = true
+description = "Distributed storage layer for Platform Network"
+
+[dependencies]
+platform-core = { path = "../core" }
+
+# Local storage
+sled = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+
+# Crypto
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# Utils
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }

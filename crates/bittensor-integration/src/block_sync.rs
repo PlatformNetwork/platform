@@ -228,16 +228,21 @@ impl BlockSync {
                 *current_epoch.write().await = epoch_info.epoch_number;
                 *current_phase.write().await = epoch_info.phase;
 
-                let _ = event_tx
+                if let Err(e) = event_tx
                     .send(BlockSyncEvent::NewBlock {
                         block_number,
                         epoch_info,
                     })
-                    .await;
+                    .await
+                {
+                    warn!("Failed to send NewBlock event: {}", e);
+                }
 
                 if *was_disconnected {
                     *was_disconnected = false;
-                    let _ = event_tx.send(BlockSyncEvent::Reconnected).await;
+                    if let Err(e) = event_tx.send(BlockSyncEvent::Reconnected).await {
+                        warn!("Failed to send Reconnected event: {}", e);
+                    }
                 }
             }
             BlockEvent::EpochTransition(EpochTransition::NewEpoch {
@@ -249,13 +254,16 @@ impl BlockSync {
                     "Bittensor epoch transition: {} -> {} at block {}",
                     old_epoch, new_epoch, block
                 );
-                let _ = event_tx
+                if let Err(e) = event_tx
                     .send(BlockSyncEvent::EpochTransition {
                         old_epoch,
                         new_epoch,
                         block,
                     })
-                    .await;
+                    .await
+                {
+                    warn!("Failed to send EpochTransition event: {}", e);
+                }
             }
             BlockEvent::PhaseChange {
                 block_number,
@@ -268,31 +276,40 @@ impl BlockSync {
                     old_phase, new_phase, block_number, epoch
                 );
 
-                let _ = event_tx
+                if let Err(e) = event_tx
                     .send(BlockSyncEvent::PhaseChange {
                         block_number,
                         old_phase,
                         new_phase,
                         epoch,
                     })
-                    .await;
+                    .await
+                {
+                    warn!("Failed to send PhaseChange event: {}", e);
+                }
 
                 match new_phase {
                     EpochPhase::CommitWindow => {
-                        let _ = event_tx
+                        if let Err(e) = event_tx
                             .send(BlockSyncEvent::CommitWindowOpen {
                                 epoch,
                                 block: block_number,
                             })
-                            .await;
+                            .await
+                        {
+                            warn!("Failed to send CommitWindowOpen event: {}", e);
+                        }
                     }
                     EpochPhase::RevealWindow => {
-                        let _ = event_tx
+                        if let Err(e) = event_tx
                             .send(BlockSyncEvent::RevealWindowOpen {
                                 epoch,
                                 block: block_number,
                             })
-                            .await;
+                            .await
+                        {
+                            warn!("Failed to send RevealWindowOpen event: {}", e);
+                        }
                     }
                     _ => {}
                 }
@@ -300,7 +317,9 @@ impl BlockSync {
             BlockEvent::ConnectionError(e) => {
                 warn!("Bittensor connection error: {}", e);
                 *was_disconnected = true;
-                let _ = event_tx.send(BlockSyncEvent::Disconnected(e)).await;
+                if let Err(send_err) = event_tx.send(BlockSyncEvent::Disconnected(e)).await {
+                    warn!("Failed to send Disconnected event: {}", send_err);
+                }
             }
             BlockEvent::Stopped => {
                 info!("Block listener stopped");

@@ -1,0 +1,47 @@
+[package]
+name = "validator-decentralized"
+version.workspace = true
+edition.workspace = true
+description = "Decentralized Platform Validator using P2P networking"
+
+[[bin]]
+name = "validator-decentralized"
+path = "src/main.rs"
+
+[dependencies]
+# Platform crates
+platform-core = { path = "../../crates/core" }
+platform-storage = { path = "../../crates/storage" }
+platform-bittensor = { path = "../../crates/bittensor-integration" }
+platform-p2p-consensus = { path = "../../crates/p2p-consensus" }
+platform-distributed-storage = { path = "../../crates/distributed-storage" }
+platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
+challenge-orchestrator = { path = "../../crates/challenge-orchestrator" }
+secure-container-runtime = { path = "../../crates/secure-container-runtime" }
+
+# Bittensor
+bittensor-rs = { workspace = true }
+
+# Networking
+libp2p = { version = "0.54", features = ["tokio", "gossipsub", "kad", "identify", "noise", "yamux", "tcp", "dns"] }
+
+# Async
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# CLI
+clap = { workspace = true, features = ["env"] }
+anyhow = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
+sp-core = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
