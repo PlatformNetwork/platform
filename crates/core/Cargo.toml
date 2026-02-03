@@ -20,3 +20,6 @@ bs58 = "0.5"
 # Sr25519 crypto (Substrate standard)
 sp-core = { version = "31.0", default-features = false, features = ["std"] }
 schnorrkel = "0.11"
+
+[dev-dependencies]
+tempfile = { workspace = true }

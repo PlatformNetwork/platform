@@ -22,12 +22,14 @@
 
 mod auth;
 mod handlers;
+pub mod health;
 mod jsonrpc;
 mod server;
 mod types;
 
 pub use auth::*;
 pub use handlers::*;
+pub use health::{create_health_check, HealthCheck, HealthResponse, HealthStatus, ReadinessStatus};
 pub use jsonrpc::*;
 pub use server::*;
 pub use types::*;

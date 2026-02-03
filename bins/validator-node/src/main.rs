@@ -12,7 +12,13 @@ use platform_bittensor::{
     sync_metagraph, BittensorClient, BlockSync, BlockSyncConfig, BlockSyncEvent, Metagraph,
     Subtensor, SubtensorClient,
 };
-use platform_core::{Hotkey, Keypair, SUDO_KEY_SS58};
+use platform_core::{
+    checkpoint::{
+        CheckpointData, CheckpointManager, CompletedEvaluationState, PendingEvaluationState,
+        WeightVoteState,
+    },
+    Hotkey, Keypair, SUDO_KEY_SS58,
+};
 use platform_distributed_storage::{
     DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
 };
@@ -20,13 +26,93 @@ use platform_p2p_consensus::{
     ChainState, ConsensusEngine, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager,
     ValidatorRecord, ValidatorSet,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 /// Storage key for persisted chain state
 const STATE_STORAGE_KEY: &str = "chain_state";
+
+// ==================== Shutdown Handler ====================
+
+/// Handles graceful shutdown with state persistence
+struct ShutdownHandler {
+    checkpoint_manager: CheckpointManager,
+    state_manager: Arc<StateManager>,
+    netuid: u16,
+}
+
+impl ShutdownHandler {
+    fn new(checkpoint_dir: &Path, state_manager: Arc<StateManager>, netuid: u16) -> Result<Self> {
+        let checkpoint_manager = CheckpointManager::new(checkpoint_dir.join("checkpoints"), 10)?;
+        Ok(Self {
+            checkpoint_manager,
+            state_manager,
+            netuid,
+        })
+    }
+
+    /// Create checkpoint from current state
+    fn create_checkpoint(&mut self) -> Result<()> {
+        let state = self.state_manager.snapshot();
+
+        let mut checkpoint_data = CheckpointData::new(state.sequence, state.epoch, self.netuid);
+
+        // Convert pending evaluations
+        for (id, record) in &state.pending_evaluations {
+            let pending = PendingEvaluationState {
+                submission_id: id.clone(),
+                challenge_id: record.challenge_id,
+                miner: record.miner.clone(),
+                submission_hash: record.agent_hash.clone(),
+                scores: record
+                    .evaluations
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.score))
+                    .collect(),
+                created_at: record.created_at,
+                finalizing: record.finalized,
+            };
+            checkpoint_data.add_pending(pending);
+        }
+
+        // Convert completed evaluations (current epoch only)
+        if let Some(completed) = state.completed_evaluations.get(&state.epoch) {
+            for record in completed {
+                if let Some(score) = record.aggregated_score {
+                    let completed_state = CompletedEvaluationState {
+                        submission_id: record.submission_id.clone(),
+                        challenge_id: record.challenge_id,
+                        final_score: score,
+                        epoch: state.epoch,
+                        completed_at: record.finalized_at.unwrap_or(record.created_at),
+                    };
+                    checkpoint_data.add_completed(completed_state);
+                }
+            }
+        }
+
+        // Convert weight votes
+        if let Some(ref votes) = state.weight_votes {
+            checkpoint_data.weight_votes = Some(WeightVoteState {
+                epoch: votes.epoch,
+                netuid: votes.netuid,
+                votes: votes.votes.clone(),
+                finalized: votes.finalized,
+                final_weights: votes.final_weights.clone(),
+            });
+        }
+
+        checkpoint_data.bittensor_block = state.bittensor_block;
+
+        self.checkpoint_manager
+            .create_checkpoint(&checkpoint_data)?;
+        info!("Shutdown checkpoint created at sequence {}", state.sequence);
+
+        Ok(())
+    }
+}
 
 // ==================== CLI ====================
 
@@ -252,6 +338,22 @@ async fn main() -> Result<()> {
         bittensor_client_for_metagraph = None;
     }
 
+    // Initialize shutdown handler for graceful checkpoint persistence
+    let mut shutdown_handler =
+        match ShutdownHandler::new(&data_dir, state_manager.clone(), args.netuid) {
+            Ok(handler) => {
+                info!("Shutdown handler initialized with checkpoint directory");
+                Some(handler)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to initialize shutdown handler: {}. Checkpoints disabled.",
+                    e
+                );
+                None
+            }
+        };
+
     info!("Decentralized validator running. Press Ctrl+C to stop.");
 
     let netuid = args.netuid;
@@ -260,6 +362,7 @@ async fn main() -> Result<()> {
     let mut metagraph_interval = tokio::time::interval(Duration::from_secs(300));
     let mut stale_check_interval = tokio::time::interval(Duration::from_secs(60));
     let mut state_persist_interval = tokio::time::interval(Duration::from_secs(60));
+    let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
 
     loop {
         tokio::select! {
@@ -335,8 +438,27 @@ async fn main() -> Result<()> {
                 debug!("Active validators: {}", validator_set.active_count());
             }
 
+            // Periodic checkpoint
+            _ = checkpoint_interval.tick() => {
+                if let Some(handler) = shutdown_handler.as_mut() {
+                    if let Err(e) = handler.create_checkpoint() {
+                        warn!("Failed to create periodic checkpoint: {}", e);
+                    } else {
+                        debug!("Periodic checkpoint created");
+                    }
+                }
+            }
+
             // Ctrl+C
             _ = tokio::signal::ctrl_c() => {
+                info!("Received shutdown signal, creating final checkpoint...");
+                if let Some(handler) = shutdown_handler.as_mut() {
+                    if let Err(e) = handler.create_checkpoint() {
+                        error!("Failed to create shutdown checkpoint: {}", e);
+                    } else {
+                        info!("Shutdown checkpoint saved successfully");
+                    }
+                }
                 info!("Shutting down...");
                 break;
             }

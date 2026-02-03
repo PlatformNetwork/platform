@@ -36,6 +36,10 @@ path = "sudo_action_tests.rs"
 name = "blockchain_state_tests"
 path = "blockchain_state_tests.rs"
 
+[[test]]
+name = "checkpoint_tests"
+path = "checkpoint_tests.rs"
+
 [dependencies]
 platform-core = { path = "../crates/core" }
 platform-storage = { path = "../crates/storage" }

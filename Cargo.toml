@@ -5,6 +5,7 @@ members = [
     "crates/storage",
     "crates/distributed-storage",
     "crates/challenge-sdk",
+    "crates/challenge-registry",
     "crates/epoch",
     "crates/bittensor-integration",
     "crates/subnet-manager",
@@ -19,6 +20,10 @@ members = [
 # Note: Challenges are in separate repositories and import platform-challenge-sdk as a git dependency
 # Note: WASM runtime removed - updates via git, version checked at handshake
 # Note: P2P-only architecture - no centralized platform-server
+
+# Challenge crates can be added here or as optional path/git dependencies
+# Example:
+# "challenges/example-challenge",
 
 [workspace.package]
 version = "0.1.0"
@@ -95,3 +100,11 @@ type_complexity = "allow"
 await_holding_lock = "warn"  # TODO: Fix async lock issues properly
 collapsible_match = "allow"
 collapsible_if = "allow"
+
+# Workspace-level feature flags for challenge integration
+# Individual crates can enable these by adding features in their Cargo.toml:
+#   [features]
+#   dynamic-challenges = ["libloading"]
+[workspace.metadata.challenge-features]
+# Enable dynamic challenge loading (crates opt-in via features)
+dynamic-loading-available = true

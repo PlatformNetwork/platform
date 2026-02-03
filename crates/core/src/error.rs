@@ -49,6 +49,9 @@ pub enum MiniChainError {
 
     #[error("Type mismatch: {0}")]
     TypeMismatch(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 impl From<std::io::Error> for MiniChainError {
