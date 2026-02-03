@@ -259,4 +259,182 @@ mod tests {
         // 100 * 0.8 + 200 * 0.2 = 80 + 40 = 120
         assert!((health.avg_response_time_ms - 120.0).abs() < 0.01);
     }
+
+    #[test]
+    fn test_health_status_default() {
+        let status = HealthStatus::default();
+        assert_eq!(status, HealthStatus::Unknown);
+    }
+
+    #[test]
+    fn test_challenge_health_new() {
+        let challenge_id = ChallengeId::new();
+        let health = ChallengeHealth::new(challenge_id);
+
+        assert_eq!(health.challenge_id, challenge_id);
+        assert_eq!(health.status, HealthStatus::Unknown);
+        assert_eq!(health.last_check_at, 0);
+        assert_eq!(health.consecutive_failures, 0);
+        assert_eq!(health.avg_response_time_ms, 0.0);
+        assert!(health.metrics.is_empty());
+    }
+
+    #[test]
+    fn test_challenge_health_metrics() {
+        let mut health = ChallengeHealth::new(ChallengeId::new());
+
+        health.metrics.insert("cpu_usage".to_string(), 45.5);
+        health.metrics.insert("memory_mb".to_string(), 512.0);
+        health.metrics.insert("requests_per_sec".to_string(), 1000.0);
+
+        assert_eq!(health.metrics.len(), 3);
+        assert_eq!(health.metrics.get("cpu_usage"), Some(&45.5));
+        assert_eq!(health.metrics.get("memory_mb"), Some(&512.0));
+        assert_eq!(health.metrics.get("requests_per_sec"), Some(&1000.0));
+        assert_eq!(health.metrics.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_health_config_default() {
+        let config = HealthConfig::default();
+
+        assert_eq!(config.check_interval, Duration::from_secs(30));
+        assert_eq!(config.check_timeout, Duration::from_secs(5));
+        assert_eq!(config.failure_threshold, 3);
+        assert_eq!(config.recovery_threshold, 2);
+    }
+
+    #[test]
+    fn test_health_config_custom() {
+        let config = HealthConfig {
+            check_interval: Duration::from_secs(60),
+            check_timeout: Duration::from_secs(10),
+            failure_threshold: 5,
+            recovery_threshold: 3,
+        };
+
+        assert_eq!(config.check_interval, Duration::from_secs(60));
+        assert_eq!(config.check_timeout, Duration::from_secs(10));
+        assert_eq!(config.failure_threshold, 5);
+        assert_eq!(config.recovery_threshold, 3);
+    }
+
+    #[test]
+    fn test_health_monitor_with_config() {
+        let config = HealthConfig {
+            check_interval: Duration::from_secs(120),
+            check_timeout: Duration::from_secs(15),
+            failure_threshold: 10,
+            recovery_threshold: 5,
+        };
+
+        let monitor = HealthMonitor::with_config(config);
+        let monitor_config = monitor.config();
+
+        assert_eq!(monitor_config.check_interval, Duration::from_secs(120));
+        assert_eq!(monitor_config.check_timeout, Duration::from_secs(15));
+        assert_eq!(monitor_config.failure_threshold, 10);
+        assert_eq!(monitor_config.recovery_threshold, 5);
+    }
+
+    #[test]
+    fn test_health_monitor_get_all_health() {
+        let monitor = HealthMonitor::new();
+        let id1 = ChallengeId::new();
+        let id2 = ChallengeId::new();
+        let id3 = ChallengeId::new();
+
+        assert!(monitor.get_all_health().is_empty());
+
+        monitor.register(id1);
+        monitor.register(id2);
+        monitor.register(id3);
+
+        let all_health = monitor.get_all_health();
+        assert_eq!(all_health.len(), 3);
+
+        let ids: Vec<ChallengeId> = all_health.iter().map(|h| h.challenge_id).collect();
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+        assert!(ids.contains(&id3));
+    }
+
+    #[test]
+    fn test_health_monitor_update_health() {
+        let monitor = HealthMonitor::new();
+        let id = ChallengeId::new();
+
+        monitor.register(id);
+        let health = monitor.get_health(&id).expect("should be registered");
+        assert_eq!(health.status, HealthStatus::Unknown);
+
+        monitor.update_health(&id, HealthStatus::Healthy);
+        let health = monitor.get_health(&id).expect("should be registered");
+        assert_eq!(health.status, HealthStatus::Healthy);
+        assert!(health.last_check_at > 0);
+
+        monitor.update_health(&id, HealthStatus::Degraded("high latency".to_string()));
+        let health = monitor.get_health(&id).expect("should be registered");
+        assert_eq!(
+            health.status,
+            HealthStatus::Degraded("high latency".to_string())
+        );
+
+        monitor.update_health(&id, HealthStatus::Unhealthy("connection lost".to_string()));
+        let health = monitor.get_health(&id).expect("should be registered");
+        assert_eq!(
+            health.status,
+            HealthStatus::Unhealthy("connection lost".to_string())
+        );
+    }
+
+    #[test]
+    fn test_health_status_variants() {
+        let unknown = HealthStatus::Unknown;
+        let healthy = HealthStatus::Healthy;
+        let degraded = HealthStatus::Degraded("slow response".to_string());
+        let unhealthy = HealthStatus::Unhealthy("service down".to_string());
+
+        assert_eq!(unknown, HealthStatus::Unknown);
+        assert_eq!(healthy, HealthStatus::Healthy);
+        assert_eq!(
+            degraded,
+            HealthStatus::Degraded("slow response".to_string())
+        );
+        assert_eq!(
+            unhealthy,
+            HealthStatus::Unhealthy("service down".to_string())
+        );
+
+        assert_ne!(unknown, healthy);
+        assert_ne!(healthy, degraded);
+        assert_ne!(degraded, unhealthy);
+
+        let degraded_clone = degraded.clone();
+        assert_eq!(degraded, degraded_clone);
+    }
+
+    #[test]
+    fn test_challenge_health_consecutive_successes() {
+        let mut health = ChallengeHealth::new(ChallengeId::new());
+
+        health.record_failure("error 1".to_string());
+        health.record_failure("error 2".to_string());
+        assert_eq!(health.consecutive_failures, 2);
+        assert!(matches!(health.status, HealthStatus::Degraded(_)));
+
+        health.record_success(50.0);
+        assert_eq!(health.consecutive_failures, 0);
+        assert_eq!(health.status, HealthStatus::Healthy);
+
+        health.record_failure("error 3".to_string());
+        health.record_failure("error 4".to_string());
+        health.record_failure("error 5".to_string());
+        assert_eq!(health.consecutive_failures, 3);
+        assert!(matches!(health.status, HealthStatus::Unhealthy(_)));
+
+        health.record_success(75.0);
+        assert_eq!(health.consecutive_failures, 0);
+        assert_eq!(health.status, HealthStatus::Healthy);
+    }
 }

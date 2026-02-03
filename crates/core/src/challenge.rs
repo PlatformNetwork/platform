@@ -239,4 +239,202 @@ mod tests {
         assert_eq!(config.max_memory_mb, 512);
         assert_eq!(config.emission_weight, 1.0);
     }
+
+    #[test]
+    fn test_challenge_config_default() {
+        let config = ChallengeConfig::default();
+        assert_eq!(config.mechanism_id, 1);
+        assert_eq!(config.timeout_secs, 300);
+        assert_eq!(config.max_memory_mb, 512);
+        assert_eq!(config.max_cpu_secs, 60);
+        assert_eq!(config.emission_weight, 1.0);
+        assert_eq!(config.min_validators, 1);
+        assert_eq!(config.params_json, "{}");
+    }
+
+    #[test]
+    fn test_challenge_verify_code_tampered() {
+        let owner = Keypair::generate();
+        let wasm = vec![0u8; 100];
+
+        let mut challenge = Challenge::new(
+            "Test".into(),
+            "Test".into(),
+            wasm,
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        // Tamper with the code without updating the hash
+        challenge.wasm_code[0] = 255;
+
+        // verify_code should return false since hash doesn't match
+        assert!(!challenge.verify_code());
+    }
+
+    #[test]
+    fn test_challenge_is_active_default() {
+        let owner = Keypair::generate();
+        let wasm = vec![0u8; 50];
+
+        let challenge = Challenge::new(
+            "Test".into(),
+            "Test".into(),
+            wasm,
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        assert!(challenge.is_active);
+    }
+
+    #[test]
+    fn test_challenge_id_uniqueness() {
+        let owner = Keypair::generate();
+        let wasm = vec![0u8; 50];
+
+        let challenge1 = Challenge::new(
+            "Test 1".into(),
+            "Test".into(),
+            wasm.clone(),
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        let challenge2 = Challenge::new(
+            "Test 2".into(),
+            "Test".into(),
+            wasm,
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        assert_ne!(challenge1.id, challenge2.id);
+    }
+
+    #[test]
+    fn test_challenge_timestamps() {
+        let owner = Keypair::generate();
+        let wasm = vec![0u8; 50];
+
+        let before = chrono::Utc::now();
+        let challenge = Challenge::new(
+            "Test".into(),
+            "Test".into(),
+            wasm,
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+        let after = chrono::Utc::now();
+
+        // created_at and updated_at should be within the time bounds
+        assert!(challenge.created_at >= before);
+        assert!(challenge.created_at <= after);
+        assert!(challenge.updated_at >= before);
+        assert!(challenge.updated_at <= after);
+        // For a new challenge, created_at equals updated_at
+        assert_eq!(challenge.created_at, challenge.updated_at);
+    }
+
+    #[test]
+    fn test_challenge_update_code_changes_timestamp() {
+        let owner = Keypair::generate();
+        let wasm1 = vec![1u8; 50];
+        let wasm2 = vec![2u8; 50];
+
+        let mut challenge = Challenge::new(
+            "Test".into(),
+            "Test".into(),
+            wasm1,
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        let original_updated_at = challenge.updated_at;
+        let original_created_at = challenge.created_at;
+
+        // Small sleep to ensure timestamp changes
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        challenge.update_code(wasm2);
+
+        // created_at should not change
+        assert_eq!(challenge.created_at, original_created_at);
+        // updated_at should change
+        assert!(challenge.updated_at > original_updated_at);
+    }
+
+    #[test]
+    fn test_challenge_meta_preserves_fields() {
+        let owner = Keypair::generate();
+        let wasm = vec![42u8; 75];
+        let config = ChallengeConfig::with_mechanism(3);
+
+        let challenge = Challenge::new(
+            "Meta Test".into(),
+            "Description for meta".into(),
+            wasm,
+            owner.hotkey(),
+            config,
+        );
+
+        let meta: ChallengeMeta = (&challenge).into();
+
+        assert_eq!(meta.id, challenge.id);
+        assert_eq!(meta.name, challenge.name);
+        assert_eq!(meta.description, challenge.description);
+        assert_eq!(meta.code_hash, challenge.code_hash);
+        assert_eq!(meta.owner, challenge.owner);
+        assert_eq!(meta.config.mechanism_id, challenge.config.mechanism_id);
+        assert_eq!(meta.config.timeout_secs, challenge.config.timeout_secs);
+        assert_eq!(meta.created_at, challenge.created_at);
+        assert_eq!(meta.updated_at, challenge.updated_at);
+        assert_eq!(meta.is_active, challenge.is_active);
+    }
+
+    #[test]
+    fn test_challenge_config_params_json() {
+        let config = ChallengeConfig::default();
+        assert_eq!(config.params_json, "{}");
+
+        let config_mechanism = ChallengeConfig::with_mechanism(2);
+        assert_eq!(config_mechanism.params_json, "{}");
+    }
+
+    #[test]
+    fn test_challenge_empty_wasm() {
+        let owner = Keypair::generate();
+        let empty_wasm: Vec<u8> = vec![];
+
+        let challenge = Challenge::new(
+            "Empty WASM".into(),
+            "Challenge with empty wasm".into(),
+            empty_wasm,
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        // Should still create successfully and verify
+        assert!(challenge.verify_code());
+        assert!(challenge.wasm_code.is_empty());
+        assert!(!challenge.code_hash.is_empty()); // Hash should still be computed
+    }
+
+    #[test]
+    fn test_challenge_large_wasm() {
+        let owner = Keypair::generate();
+        let large_wasm = vec![0xABu8; 10 * 1024]; // 10KB
+
+        let challenge = Challenge::new(
+            "Large WASM".into(),
+            "Challenge with 10KB wasm".into(),
+            large_wasm.clone(),
+            owner.hotkey(),
+            ChallengeConfig::default(),
+        );
+
+        assert!(challenge.verify_code());
+        assert_eq!(challenge.wasm_code.len(), 10 * 1024);
+        assert_eq!(challenge.wasm_code, large_wasm);
+    }
 }

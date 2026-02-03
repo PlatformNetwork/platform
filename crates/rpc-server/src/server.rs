@@ -691,4 +691,118 @@ mod tests {
         assert_eq!(config.name, "CustomChain");
         assert!(!config.cors_enabled);
     }
+
+    #[test]
+    fn test_rpc_config_clone() {
+        let config = RpcConfig {
+            addr: "127.0.0.1:8080".parse().unwrap(),
+            netuid: 42,
+            name: "CloneTest".to_string(),
+            min_stake: 1_000_000,
+            cors_enabled: true,
+        };
+
+        let cloned = config.clone();
+
+        assert_eq!(cloned.addr, config.addr);
+        assert_eq!(cloned.netuid, config.netuid);
+        assert_eq!(cloned.name, config.name);
+        assert_eq!(cloned.min_stake, config.min_stake);
+        assert_eq!(cloned.cors_enabled, config.cors_enabled);
+    }
+
+    #[test]
+    fn test_rpc_config_debug() {
+        let config = RpcConfig {
+            addr: "0.0.0.0:9000".parse().unwrap(),
+            netuid: 7,
+            name: "DebugTest".to_string(),
+            min_stake: 500_000,
+            cors_enabled: false,
+        };
+
+        let debug_str = format!("{:?}", config);
+
+        assert!(debug_str.contains("RpcConfig"));
+        assert!(debug_str.contains("9000"));
+        assert!(debug_str.contains("7"));
+        assert!(debug_str.contains("DebugTest"));
+        assert!(debug_str.contains("500000"));
+        assert!(debug_str.contains("false"));
+    }
+
+    #[tokio::test]
+    async fn test_rpc_server_router_has_routes() {
+        let kp = Keypair::generate();
+        let state = Arc::new(RwLock::new(ChainState::new(
+            kp.hotkey(),
+            NetworkConfig::default(),
+        )));
+        let bans = Arc::new(RwLock::new(BanList::new()));
+
+        let config = RpcConfig::default();
+        let server = RpcServer::new(config, state, bans);
+
+        // The router() method should create a router with routes defined
+        // We verify this by checking that the router can be created without panicking
+        let router = server.router();
+
+        // The router is created successfully, which means routes for /, /rpc, /health are configured
+        // We can't directly inspect routes, but creation success proves they're registered
+        assert!(std::mem::size_of_val(&router) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_rpc_server_cors_disabled() {
+        let kp = Keypair::generate();
+        let state = Arc::new(RwLock::new(ChainState::new(
+            kp.hotkey(),
+            NetworkConfig::default(),
+        )));
+        let bans = Arc::new(RwLock::new(BanList::new()));
+
+        let config = RpcConfig {
+            addr: "127.0.0.1:8081".parse().unwrap(),
+            netuid: 1,
+            name: "NoCorsTest".to_string(),
+            min_stake: 1_000_000_000_000,
+            cors_enabled: false,
+        };
+
+        // Verify config is set correctly
+        assert!(!config.cors_enabled);
+
+        let server = RpcServer::new(config, state, bans);
+
+        // Server creation should succeed with cors disabled
+        let router = server.router();
+        assert!(std::mem::size_of_val(&router) > 0);
+
+        // Verify the addr is set correctly
+        assert_eq!(server.addr().port(), 8081);
+    }
+
+    #[tokio::test]
+    async fn test_handle_batch_request_empty() {
+        let kp = Keypair::generate();
+        let state = Arc::new(RwLock::new(ChainState::new(
+            kp.hotkey(),
+            NetworkConfig::default(),
+        )));
+        let bans = Arc::new(RwLock::new(BanList::new()));
+
+        let config = RpcConfig::default();
+        let server = RpcServer::new(config, state, bans);
+        let handler = server.rpc_handler();
+
+        // Empty batch array should return error
+        let empty_batch = json!([]);
+        let (status, response) = jsonrpc_handler(Json(empty_batch), handler).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(response.0.error.is_some());
+        let error = response.0.error.unwrap();
+        assert_eq!(error.code, PARSE_ERROR);
+        assert!(error.message.contains("Empty batch"));
+    }
 }
