@@ -6,6 +6,7 @@
 //! - `Storage` - Main storage for chain state, challenges, and validators
 //! - `DynamicStorage` - Per-challenge/per-validator dynamic storage
 //! - `MigrationRunner` - Version-based migrations for blockchain upgrades
+//! - `BlockchainStorage` - Blockchain-like structure for validator consensus
 //!
 //! ## Dynamic Storage
 //!
@@ -30,15 +31,35 @@
 //! runner.register(Box::new(MyMigration));
 //! runner.run_pending(&storage_tree, &state_tree, block_height)?;
 //! ```
+//!
+//! ## Blockchain Storage
+//!
+//! Blockchain storage provides immutable, verifiable state tracking:
+//!
+//! ```ignore
+//! use platform_storage::blockchain::BlockchainStorage;
+//!
+//! let db = sled::open("./blockchain")?;
+//! let mut storage = BlockchainStorage::new(&db)?;
+//!
+//! // Append a new block
+//! storage.append_block(block)?;
+//!
+//! // Query historical state
+//! let root = storage.get_state_root_at_block(10, None)?;
+//! ```
 
+pub mod blockchain;
 pub mod distributed;
 pub mod dynamic;
+pub mod metadata;
 pub mod migration;
 pub mod optimized;
 pub mod types;
 
 pub use distributed::*;
 pub use dynamic::*;
+pub use metadata::*;
 pub use migration::*;
 pub use optimized::*;
 pub use types::*;

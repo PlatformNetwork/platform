@@ -209,9 +209,7 @@ mod tests {
             &LifecycleState::Running,
             &LifecycleState::Failed("crash".to_string())
         ));
-        assert!(
-            lifecycle.is_valid_transition(&LifecycleState::Running, &LifecycleState::Migrating)
-        );
+        assert!(lifecycle.is_valid_transition(&LifecycleState::Running, &LifecycleState::Migrating));
 
         // From Stopping
         assert!(lifecycle.is_valid_transition(&LifecycleState::Stopping, &LifecycleState::Stopped));
@@ -233,9 +231,7 @@ mod tests {
         ));
 
         // From Migrating
-        assert!(
-            lifecycle.is_valid_transition(&LifecycleState::Migrating, &LifecycleState::Running)
-        );
+        assert!(lifecycle.is_valid_transition(&LifecycleState::Migrating, &LifecycleState::Running));
         assert!(lifecycle.is_valid_transition(
             &LifecycleState::Migrating,
             &LifecycleState::Failed("migration failed".to_string())
@@ -353,14 +349,10 @@ mod tests {
         let lifecycle = ChallengeLifecycle::new();
 
         // Valid: Running -> Migrating
-        assert!(
-            lifecycle.is_valid_transition(&LifecycleState::Running, &LifecycleState::Migrating)
-        );
+        assert!(lifecycle.is_valid_transition(&LifecycleState::Running, &LifecycleState::Migrating));
 
         // Valid: Migrating -> Running (successful migration)
-        assert!(
-            lifecycle.is_valid_transition(&LifecycleState::Migrating, &LifecycleState::Running)
-        );
+        assert!(lifecycle.is_valid_transition(&LifecycleState::Migrating, &LifecycleState::Running));
 
         // Valid: Migrating -> Failed (migration failed)
         assert!(lifecycle.is_valid_transition(

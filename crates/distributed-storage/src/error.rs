@@ -128,10 +128,7 @@ mod tests {
 
         // Test NamespaceNotFound variant
         let namespace_err = StorageError::NamespaceNotFound("missing_ns".to_string());
-        assert_eq!(
-            namespace_err.to_string(),
-            "Namespace not found: missing_ns"
-        );
+        assert_eq!(namespace_err.to_string(), "Namespace not found: missing_ns");
 
         // Test Dht variant
         let dht_err = StorageError::Dht("peer unreachable".to_string());
@@ -139,7 +136,10 @@ mod tests {
 
         // Test Replication variant
         let replication_err = StorageError::Replication("sync failed".to_string());
-        assert_eq!(replication_err.to_string(), "Replication error: sync failed");
+        assert_eq!(
+            replication_err.to_string(),
+            "Replication error: sync failed"
+        );
 
         // Test QuorumNotReached variant
         let quorum_err = StorageError::QuorumNotReached {
@@ -201,8 +201,7 @@ mod tests {
     fn test_from_bincode_error() {
         // Create a bincode error by attempting to deserialize invalid data
         let invalid_data: &[u8] = &[0xff, 0xff, 0xff, 0xff];
-        let bincode_result: Result<String, bincode::Error> =
-            bincode::deserialize(invalid_data);
+        let bincode_result: Result<String, bincode::Error> = bincode::deserialize(invalid_data);
         if let Err(bincode_err) = bincode_result {
             let storage_err: StorageError = bincode_err.into();
             let display = storage_err.to_string();

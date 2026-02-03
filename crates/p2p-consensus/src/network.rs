@@ -1050,10 +1050,7 @@ mod tests {
 
         // Test NoPeers error display
         let no_peers_err = NetworkError::NoPeers;
-        assert_eq!(
-            format!("{}", no_peers_err),
-            "Not connected to any peers"
-        );
+        assert_eq!(format!("{}", no_peers_err), "Not connected to any peers");
 
         // Test Channel error display
         let channel_err = NetworkError::Channel("channel closed".to_string());
@@ -1087,8 +1084,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([5u8; 32]);
         let nonce = 12345u64;
@@ -1132,8 +1129,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([7u8; 32]);
 
@@ -1149,10 +1146,16 @@ mod tests {
 
         // The next message should exceed the limit
         let result = network.check_rate_limit(&signer);
-        assert!(result.is_err(), "Should exceed rate limit after 100 messages");
+        assert!(
+            result.is_err(),
+            "Should exceed rate limit after 100 messages"
+        );
 
         match result {
-            Err(NetworkError::RateLimitExceeded { signer: err_signer, count }) => {
+            Err(NetworkError::RateLimitExceeded {
+                signer: err_signer,
+                count,
+            }) => {
                 assert_eq!(err_signer, signer.to_hex());
                 assert_eq!(count, DEFAULT_RATE_LIMIT);
             }
@@ -1175,15 +1178,21 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([9u8; 32]);
 
         // Add some nonces
-        network.check_replay(&signer, 1).expect("Nonce 1 should succeed");
-        network.check_replay(&signer, 2).expect("Nonce 2 should succeed");
-        network.check_replay(&signer, 3).expect("Nonce 3 should succeed");
+        network
+            .check_replay(&signer, 1)
+            .expect("Nonce 1 should succeed");
+        network
+            .check_replay(&signer, 2)
+            .expect("Nonce 2 should succeed");
+        network
+            .check_replay(&signer, 3)
+            .expect("Nonce 3 should succeed");
 
         // Verify nonces are tracked
         {
@@ -1218,15 +1227,19 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer1 = Hotkey([10u8; 32]);
         let signer2 = Hotkey([11u8; 32]);
 
         // Add rate limit entries for both signers
-        network.check_rate_limit(&signer1).expect("Rate limit check should succeed");
-        network.check_rate_limit(&signer2).expect("Rate limit check should succeed");
+        network
+            .check_rate_limit(&signer1)
+            .expect("Rate limit check should succeed");
+        network
+            .check_rate_limit(&signer2)
+            .expect("Rate limit check should succeed");
 
         // Verify entries exist
         {
@@ -1269,8 +1282,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         // Initially no connected peers
         assert_eq!(network.connected_peer_count(), 0);
@@ -1306,8 +1319,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         // Initially no peers
         assert!(!network.has_min_peers(1));

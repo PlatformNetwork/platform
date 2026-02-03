@@ -90,6 +90,7 @@ pub mod error;
 pub mod local;
 pub mod query;
 pub mod replication;
+pub mod state_consensus;
 pub mod store;
 pub mod submission;
 pub mod weights;
@@ -120,6 +121,12 @@ pub use weights::{StoredWeights, ValidatorWeightVote, WeightAggregator, WeightHi
 // Challenge-specific storage
 pub use challenge_store::{
     ChallengeStorage, ChallengeStore, ChallengeStoreRegistry, MerkleNode, MerkleProof,
+};
+
+// State consensus protocol
+pub use state_consensus::{
+    ConsensusResult as StateConsensusResult, FraudProof, GlobalStateLinker, InclusionProof,
+    StateRootConsensus, StateRootConsensusError, StateRootProposal, StateRootVote,
 };
 
 #[cfg(test)]

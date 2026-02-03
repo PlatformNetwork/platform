@@ -16,6 +16,7 @@ chrono = { workspace = true }
 
 # Crypto for checksums
 sha2 = { workspace = true }
+hex = { workspace = true }
 
 # Compression (LZ4 - fast)
 lz4_flex = "0.11"

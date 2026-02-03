@@ -74,7 +74,10 @@ mod tests {
     #[test]
     fn test_registry_error_display_already_registered() {
         let err = RegistryError::AlreadyRegistered("my-challenge".to_string());
-        assert_eq!(err.to_string(), "Challenge already registered: my-challenge");
+        assert_eq!(
+            err.to_string(),
+            "Challenge already registered: my-challenge"
+        );
     }
 
     #[test]
@@ -181,8 +184,7 @@ mod tests {
     fn test_from_bincode_error() {
         // Create invalid bincode data to trigger an error
         let invalid_data: &[u8] = &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
-        let bincode_err: bincode::Error =
-            bincode::deserialize::<String>(invalid_data).unwrap_err();
+        let bincode_err: bincode::Error = bincode::deserialize::<String>(invalid_data).unwrap_err();
         let registry_err: RegistryError = bincode_err.into();
 
         match registry_err {

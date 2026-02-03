@@ -308,14 +308,20 @@ mod tests {
 
         map.insert(v3, "version_one_updated");
         assert_eq!(map.len(), 2);
-        assert_eq!(map.get(&ChallengeVersion::new(1, 0, 0)), Some(&"version_one_updated"));
+        assert_eq!(
+            map.get(&ChallengeVersion::new(1, 0, 0)),
+            Some(&"version_one_updated")
+        );
     }
 
     #[test]
     fn test_version_constraint_range() {
         let min = ChallengeVersion::new(1, 0, 0);
         let max = ChallengeVersion::new(2, 0, 0);
-        let range = VersionConstraint::Range { min: min.clone(), max: max.clone() };
+        let range = VersionConstraint::Range {
+            min: min.clone(),
+            max: max.clone(),
+        };
 
         assert!(range.satisfies(&ChallengeVersion::new(1, 0, 0)));
         assert!(range.satisfies(&ChallengeVersion::new(1, 5, 0)));
@@ -346,7 +352,10 @@ mod tests {
 
         assert_eq!(challenge.challenge_id, "test-challenge");
         assert_eq!(challenge.version, ChallengeVersion::new(1, 0, 0));
-        assert_eq!(challenge.min_platform_version, Some(ChallengeVersion::new(0, 5, 0)));
+        assert_eq!(
+            challenge.min_platform_version,
+            Some(ChallengeVersion::new(0, 5, 0))
+        );
         assert!(!challenge.deprecated);
         assert!(challenge.deprecation_message.is_none());
 
@@ -359,7 +368,10 @@ mod tests {
         };
 
         assert!(deprecated_challenge.deprecated);
-        assert_eq!(deprecated_challenge.deprecation_message, Some("Use new-challenge instead".to_string()));
+        assert_eq!(
+            deprecated_challenge.deprecation_message,
+            Some("Use new-challenge instead".to_string())
+        );
     }
 
     #[test]

@@ -285,7 +285,9 @@ mod tests {
 
         health.metrics.insert("cpu_usage".to_string(), 45.5);
         health.metrics.insert("memory_mb".to_string(), 512.0);
-        health.metrics.insert("requests_per_sec".to_string(), 1000.0);
+        health
+            .metrics
+            .insert("requests_per_sec".to_string(), 1000.0);
 
         assert_eq!(health.metrics.len(), 3);
         assert_eq!(health.metrics.get("cpu_usage"), Some(&45.5));

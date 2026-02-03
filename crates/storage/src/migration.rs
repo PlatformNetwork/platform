@@ -2,14 +2,34 @@
 //!
 //! Provides versioned migrations that run when the blockchain is upgraded.
 //! Similar to database migrations but for blockchain state.
+//!
+//! ## Network-Aware Migrations
+//!
+//! For distributed validator networks, migrations must be coordinated across
+//! all validators to ensure consistent schema versions:
+//!
+//! ```ignore
+//! use platform_storage::{NetworkMigrationCoordinator, NetworkMigrationStatus};
+//!
+//! let coordinator = NetworkMigrationCoordinator::new(&db)?;
+//!
+//! // Check if we can accept a new validator
+//! if coordinator.can_accept_validator(&their_hotkey, their_version) {
+//!     // Accept validator
+//! }
+//!
+//! // Start network-wide migration
+//! coordinator.start_network_migration(target_version)?;
+//! ```
 
 use crate::types::{StorageKey, StorageValue};
-use platform_core::{MiniChainError, Result};
+use platform_core::{ChallengeId, Hotkey, MiniChainError, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sled::Tree;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::SystemTime;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Migration version number
 pub type MigrationVersion = u64;
@@ -499,6 +519,403 @@ impl Migration for AddChallengeMetricsMigration {
 
     fn reversible(&self) -> bool {
         true
+    }
+}
+
+// ============================================================================
+// Network-Aware Migration Coordination
+// ============================================================================
+
+/// Network migration status for coordination across validators
+///
+/// Tracks the migration state across the distributed validator network,
+/// ensuring all validators are synchronized before accepting new ones.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NetworkMigrationStatus {
+    /// Current network-wide schema version
+    pub network_version: MigrationVersion,
+    /// Validators that have reported their version (hotkey -> version)
+    pub validator_versions: HashMap<Hotkey, MigrationVersion>,
+    /// Whether a migration is currently in progress network-wide
+    pub migration_in_progress: bool,
+    /// Target version being migrated to
+    pub target_version: Option<MigrationVersion>,
+    /// Timestamp when migration started
+    pub started_at: Option<SystemTime>,
+}
+
+impl Default for NetworkMigrationStatus {
+    fn default() -> Self {
+        Self {
+            network_version: 0,
+            validator_versions: HashMap::new(),
+            migration_in_progress: false,
+            target_version: None,
+            started_at: None,
+        }
+    }
+}
+
+/// Challenge-specific migration record
+///
+/// Tracks migrations for individual challenges, allowing challenges
+/// to have their own schema versions independent of the global version.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeMigration {
+    /// Challenge ID
+    pub challenge_id: ChallengeId,
+    /// Source schema version
+    pub from_version: u64,
+    /// Target schema version
+    pub to_version: u64,
+    /// State hash before migration
+    pub state_hash_before: [u8; 32],
+    /// State hash after migration (set when completed)
+    pub state_hash_after: Option<[u8; 32]>,
+    /// Current status
+    pub status: ChallengeMigrationStatus,
+}
+
+/// Status of a challenge-specific migration
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChallengeMigrationStatus {
+    /// Migration has not started
+    Pending,
+    /// Migration is currently running
+    InProgress,
+    /// Migration completed successfully
+    Completed,
+    /// Migration failed with error
+    Failed(String),
+}
+
+/// Coordinator for network-wide migration synchronization
+///
+/// Ensures validators stay synchronized during schema upgrades by:
+/// - Tracking validator versions across the network
+/// - Blocking new validators until they sync to the current schema
+/// - Coordinating migration rollouts across all validators
+pub struct NetworkMigrationCoordinator {
+    /// Tree for storing network migration state
+    network_tree: Tree,
+    /// Cached network status
+    cached_status: Option<NetworkMigrationStatus>,
+}
+
+impl NetworkMigrationCoordinator {
+    /// Create a new network migration coordinator
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - The sled database to use for persistence
+    ///
+    /// # Returns
+    ///
+    /// A new `NetworkMigrationCoordinator` instance
+    pub fn new(db: &sled::Db) -> Result<Self> {
+        let network_tree = db.open_tree("network_migrations").map_err(|e| {
+            MiniChainError::Storage(format!("Failed to open network_migrations tree: {}", e))
+        })?;
+
+        Ok(Self {
+            network_tree,
+            cached_status: None,
+        })
+    }
+
+    /// Get the current network migration status
+    ///
+    /// Loads the status from the database or returns defaults if not set.
+    pub fn get_network_status(&self) -> Result<NetworkMigrationStatus> {
+        match self
+            .network_tree
+            .get("status")
+            .map_err(|e| MiniChainError::Storage(e.to_string()))?
+        {
+            Some(data) => {
+                let status: NetworkMigrationStatus = bincode::deserialize(&data)
+                    .map_err(|e| MiniChainError::Serialization(e.to_string()))?;
+                Ok(status)
+            }
+            None => Ok(NetworkMigrationStatus::default()),
+        }
+    }
+
+    /// Save the network migration status
+    fn save_network_status(&self, status: &NetworkMigrationStatus) -> Result<()> {
+        let data =
+            bincode::serialize(status).map_err(|e| MiniChainError::Serialization(e.to_string()))?;
+        self.network_tree
+            .insert("status", data)
+            .map_err(|e| MiniChainError::Storage(e.to_string()))?;
+        self.network_tree
+            .flush()
+            .map_err(|e| MiniChainError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Report a validator's current schema version
+    ///
+    /// Called by validators to report their current version to the network.
+    ///
+    /// # Arguments
+    ///
+    /// * `validator` - The validator's hotkey
+    /// * `version` - The validator's current schema version
+    pub fn report_validator_version(
+        &mut self,
+        validator: Hotkey,
+        version: MigrationVersion,
+    ) -> Result<()> {
+        let mut status = self.get_network_status()?;
+        status.validator_versions.insert(validator.clone(), version);
+
+        debug!(
+            validator = %validator.to_hex(),
+            version = version,
+            "Validator reported schema version"
+        );
+
+        self.save_network_status(&status)?;
+        self.cached_status = Some(status);
+        Ok(())
+    }
+
+    /// Check if a validator can be accepted based on schema version
+    ///
+    /// A validator can be accepted if:
+    /// - No migration is in progress, OR
+    /// - The validator's version >= network version
+    ///
+    /// # Arguments
+    ///
+    /// * `validator` - The validator's hotkey
+    /// * `their_version` - The validator's reported schema version
+    ///
+    /// # Returns
+    ///
+    /// `true` if the validator can be accepted
+    pub fn can_accept_validator(
+        &self,
+        validator: &Hotkey,
+        their_version: MigrationVersion,
+    ) -> bool {
+        let status = match self.get_network_status() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    validator = %validator.to_hex(),
+                    "Failed to get network status, rejecting validator"
+                );
+                return false;
+            }
+        };
+
+        // During migration, only accept validators at or above target version
+        if status.migration_in_progress {
+            if let Some(target) = status.target_version {
+                return their_version >= target;
+            }
+        }
+
+        // Otherwise, accept if at or above network version
+        their_version >= status.network_version
+    }
+
+    /// Start a network-wide migration to a target version
+    ///
+    /// This marks the migration as in-progress and sets the target version.
+    /// Validators should check `is_migration_in_progress()` before processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_version` - The version to migrate to
+    pub fn start_network_migration(&mut self, target_version: MigrationVersion) -> Result<()> {
+        let mut status = self.get_network_status()?;
+
+        if status.migration_in_progress {
+            return Err(MiniChainError::Storage(format!(
+                "Migration already in progress to version {:?}",
+                status.target_version
+            )));
+        }
+
+        if target_version <= status.network_version {
+            return Err(MiniChainError::Storage(format!(
+                "Target version {} must be greater than current version {}",
+                target_version, status.network_version
+            )));
+        }
+
+        info!(
+            from_version = status.network_version,
+            to_version = target_version,
+            "Starting network-wide migration"
+        );
+
+        status.migration_in_progress = true;
+        status.target_version = Some(target_version);
+        status.started_at = Some(SystemTime::now());
+
+        self.save_network_status(&status)?;
+        self.cached_status = Some(status);
+        Ok(())
+    }
+
+    /// Complete migration for a specific validator
+    ///
+    /// Called when a validator has finished migrating to the target version.
+    ///
+    /// # Arguments
+    ///
+    /// * `validator` - The validator that completed migration
+    pub fn complete_migration(&mut self, validator: &Hotkey) -> Result<()> {
+        let mut status = self.get_network_status()?;
+
+        if !status.migration_in_progress {
+            return Ok(()); // No migration in progress
+        }
+
+        let target = status.target_version.unwrap_or(status.network_version);
+        status.validator_versions.insert(validator.clone(), target);
+
+        debug!(
+            validator = %validator.to_hex(),
+            version = target,
+            "Validator completed migration"
+        );
+
+        self.save_network_status(&status)?;
+        self.cached_status = Some(status);
+        Ok(())
+    }
+
+    /// Finalize migration when all validators have completed
+    ///
+    /// Call this after verifying all active validators have migrated.
+    pub fn finalize_network_migration(&mut self) -> Result<()> {
+        let mut status = self.get_network_status()?;
+
+        if !status.migration_in_progress {
+            return Ok(());
+        }
+
+        let target = status.target_version.unwrap_or(status.network_version);
+
+        info!(
+            old_version = status.network_version,
+            new_version = target,
+            "Finalizing network migration"
+        );
+
+        status.network_version = target;
+        status.migration_in_progress = false;
+        status.target_version = None;
+        status.started_at = None;
+
+        self.save_network_status(&status)?;
+        self.cached_status = Some(status);
+        Ok(())
+    }
+
+    /// Check if a migration is currently in progress
+    pub fn is_migration_in_progress(&self) -> bool {
+        self.get_network_status()
+            .map(|s| s.migration_in_progress)
+            .unwrap_or(false)
+    }
+
+    /// Get list of validators that need to upgrade
+    ///
+    /// Returns validators whose version is below the network version.
+    pub fn get_validators_needing_upgrade(&self) -> Vec<Hotkey> {
+        let status = match self.get_network_status() {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        status
+            .validator_versions
+            .iter()
+            .filter(|(_, v)| **v < status.network_version)
+            .map(|(h, _)| h.clone())
+            .collect()
+    }
+
+    /// Set the network version directly (for initialization)
+    pub fn set_network_version(&mut self, version: MigrationVersion) -> Result<()> {
+        let mut status = self.get_network_status()?;
+        status.network_version = version;
+        self.save_network_status(&status)?;
+        self.cached_status = Some(status);
+        Ok(())
+    }
+}
+
+/// Compute a state hash for migration verification
+///
+/// Computes a hash of all data in a challenge's namespace to verify
+/// that migrations produce consistent results across validators.
+///
+/// # Arguments
+///
+/// * `ctx` - The migration context
+/// * `challenge_id` - The challenge to compute hash for
+///
+/// # Returns
+///
+/// A 32-byte hash of the challenge's current state
+pub fn compute_migration_state_hash(
+    ctx: &MigrationContext,
+    challenge_id: &ChallengeId,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+
+    // Hash the challenge ID
+    hasher.update(challenge_id.0.as_bytes());
+
+    // Scan and hash all keys in the challenge namespace
+    let namespace = challenge_id.0.to_string();
+    if let Ok(entries) = ctx.scan_prefix(&namespace) {
+        for (key, value) in entries {
+            hasher.update(key.to_bytes());
+            if let Ok(data) = bincode::serialize(&value) {
+                hasher.update(&data);
+            }
+        }
+    }
+
+    hasher.finalize().into()
+}
+
+/// Trait for challenge-specific migration handlers
+///
+/// Implement this trait to create migrations that are specific to a
+/// single challenge's data schema.
+pub trait ChallengeMigrationHandler: Send + Sync {
+    /// Get the challenge ID this migration applies to
+    fn challenge_id(&self) -> &ChallengeId;
+
+    /// Source schema version
+    fn from_version(&self) -> u64;
+
+    /// Target schema version
+    fn to_version(&self) -> u64;
+
+    /// Run the migration
+    fn migrate(&self, ctx: &mut MigrationContext) -> Result<()>;
+
+    /// Rollback the migration (optional)
+    fn rollback(&self, _ctx: &mut MigrationContext) -> Result<()> {
+        Err(MiniChainError::Storage(
+            "Challenge migration rollback not supported".to_string(),
+        ))
+    }
+
+    /// Whether this migration can be rolled back
+    fn reversible(&self) -> bool {
+        false
     }
 }
 
@@ -1064,5 +1481,173 @@ mod tests {
         // Try to rollback non-reversible migration (lines 409-410)
         let result = runner.rollback_to(0, &storage_tree, &state_tree, 0);
         assert!(result.is_err());
+    }
+
+    // === Network Migration Tests ===
+
+    #[test]
+    fn test_network_migration_status_serialization() {
+        let status = NetworkMigrationStatus {
+            network_version: 5,
+            validator_versions: HashMap::new(),
+            migration_in_progress: false,
+            target_version: None,
+            started_at: None,
+        };
+
+        let serialized = bincode::serialize(&status).unwrap();
+        let deserialized: NetworkMigrationStatus = bincode::deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.network_version, 5);
+        assert!(!deserialized.migration_in_progress);
+    }
+
+    #[test]
+    fn test_network_migration_coordinator_creation() {
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+
+        let coordinator = NetworkMigrationCoordinator::new(&db).unwrap();
+        let status = coordinator.get_network_status().unwrap();
+
+        assert_eq!(status.network_version, 0);
+        assert!(!status.migration_in_progress);
+    }
+
+    #[test]
+    fn test_network_migration_coordinator_report_version() {
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+
+        let mut coordinator = NetworkMigrationCoordinator::new(&db).unwrap();
+        let validator = Hotkey([1u8; 32]);
+
+        coordinator
+            .report_validator_version(validator.clone(), 3)
+            .unwrap();
+
+        let status = coordinator.get_network_status().unwrap();
+        assert_eq!(*status.validator_versions.get(&validator).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_network_migration_coordinator_can_accept_validator() {
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+
+        let mut coordinator = NetworkMigrationCoordinator::new(&db).unwrap();
+        let validator = Hotkey([1u8; 32]);
+
+        // When network version is 0, accept any version >= 0
+        assert!(coordinator.can_accept_validator(&validator, 0));
+        assert!(coordinator.can_accept_validator(&validator, 5));
+
+        // Set network version to 5
+        coordinator.set_network_version(5).unwrap();
+
+        // Now only accept validators at version 5 or higher
+        assert!(!coordinator.can_accept_validator(&validator, 4));
+        assert!(coordinator.can_accept_validator(&validator, 5));
+        assert!(coordinator.can_accept_validator(&validator, 6));
+    }
+
+    #[test]
+    fn test_network_migration_start_and_complete() {
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+
+        let mut coordinator = NetworkMigrationCoordinator::new(&db).unwrap();
+        let validator = Hotkey([1u8; 32]);
+
+        // Start migration
+        coordinator.start_network_migration(5).unwrap();
+
+        let status = coordinator.get_network_status().unwrap();
+        assert!(status.migration_in_progress);
+        assert_eq!(status.target_version, Some(5));
+
+        // Complete migration for validator
+        coordinator.complete_migration(&validator).unwrap();
+
+        // Migration still in progress until network version is updated
+        assert!(coordinator.is_migration_in_progress());
+    }
+
+    #[test]
+    fn test_challenge_migration_status() {
+        let status = ChallengeMigrationStatus::Pending;
+        assert_eq!(status, ChallengeMigrationStatus::Pending);
+
+        let failed = ChallengeMigrationStatus::Failed("test error".to_string());
+        assert!(matches!(failed, ChallengeMigrationStatus::Failed(_)));
+    }
+
+    #[test]
+    fn test_challenge_migration_serialization() {
+        let migration = ChallengeMigration {
+            challenge_id: ChallengeId(uuid::Uuid::new_v4()),
+            from_version: 1,
+            to_version: 2,
+            state_hash_before: [1u8; 32],
+            state_hash_after: Some([2u8; 32]),
+            status: ChallengeMigrationStatus::Completed,
+        };
+
+        let serialized = bincode::serialize(&migration).unwrap();
+        let deserialized: ChallengeMigration = bincode::deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.from_version, 1);
+        assert_eq!(deserialized.to_version, 2);
+    }
+
+    #[test]
+    fn test_validators_needing_upgrade() {
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+
+        let mut coordinator = NetworkMigrationCoordinator::new(&db).unwrap();
+        let v1 = Hotkey([1u8; 32]);
+        let v2 = Hotkey([2u8; 32]);
+        let v3 = Hotkey([3u8; 32]);
+
+        // Set network version to 5
+        coordinator.set_network_version(5).unwrap();
+
+        // Report different versions
+        coordinator.report_validator_version(v1.clone(), 5).unwrap();
+        coordinator.report_validator_version(v2.clone(), 4).unwrap();
+        coordinator.report_validator_version(v3.clone(), 3).unwrap();
+
+        let needing_upgrade = coordinator.get_validators_needing_upgrade();
+
+        // v2 and v3 need upgrade
+        assert_eq!(needing_upgrade.len(), 2);
+        assert!(needing_upgrade.contains(&v2));
+        assert!(needing_upgrade.contains(&v3));
+    }
+
+    #[test]
+    fn test_compute_migration_state_hash() {
+        let dir = tempdir().unwrap();
+        let db = sled::open(dir.path()).unwrap();
+        let storage_tree = db.open_tree("dynamic_storage").unwrap();
+        let state_tree = db.open_tree("state").unwrap();
+
+        let mut ctx = MigrationContext::new(&storage_tree, &state_tree, 0);
+
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+
+        // Empty state should still produce a hash
+        let hash1 = compute_migration_state_hash(&ctx, &challenge_id);
+        assert_ne!(hash1, [0u8; 32]);
+
+        // Adding data should change the hash
+        ctx.set(
+            StorageKey::challenge(&challenge_id, "test"),
+            StorageValue::U64(42),
+        )
+        .unwrap();
+        let hash2 = compute_migration_state_hash(&ctx, &challenge_id);
+        assert_ne!(hash1, hash2);
     }
 }
