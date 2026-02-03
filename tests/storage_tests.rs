@@ -110,18 +110,23 @@ mod main_storage {
     #[test]
     fn test_storage_persistence() {
         let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
 
         // Create and save
         {
-            let storage = Storage::open(dir.path()).unwrap();
+            let storage = Storage::open(&path).unwrap();
             let sudo = Keypair::generate();
             let state = ChainState::new(sudo.hotkey(), NetworkConfig::default());
             storage.save_state(&state).unwrap();
+            // Explicit flush before dropping to ensure persistence
+            storage.flush().unwrap();
+            // Explicitly drop storage to release sled lock before reopening
+            drop(storage);
         }
 
         // Reopen and verify
         {
-            let storage = Storage::open(dir.path()).unwrap();
+            let storage = Storage::open(&path).unwrap();
             let loaded = storage.load_state().unwrap();
             assert!(loaded.is_some());
         }
