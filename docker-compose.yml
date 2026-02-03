@@ -1,11 +1,24 @@
+# =============================================================================
+# Platform Validator Configuration
+# =============================================================================
+# Fully decentralized P2P architecture
+#
+# Usage:
+#   export VALIDATOR_SECRET_KEY="your-mnemonic-or-hex-key"
+#   docker compose up -d
+# =============================================================================
+
 services:
   # ==========================================================================
-  # Platform Validator Node (Centralized Architecture)
+  # Platform Validator Node
   # ==========================================================================
   validator:
     image: ghcr.io/platformnetwork/platform:latest
     container_name: platform-validator
     restart: unless-stopped
+    # SECURITY NOTE: Privileged mode is required for Docker-in-Docker to spawn challenge containers.
+    # This is necessary for the decentralized evaluation architecture where validators run
+    # challenge containers locally. If you don't need to run challenges, remove this line.
     privileged: true
     
     # Enable Watchtower auto-update for this container only
@@ -13,7 +26,8 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     
     ports:
-      - "8080:8080"   # RPC API
+      - "9000:9000"   # P2P libp2p port
+      - "8080:8080"   # Local RPC API (optional)
       - "8090:8090"   # Container Broker WebSocket
     
     volumes:
@@ -21,20 +35,29 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     
     environment:
-      - RUST_LOG=info,platform=debug
+      - RUST_LOG=info,validator_node=debug,platform_p2p_consensus=debug
       - DATA_DIR=/data
       - VALIDATOR_SECRET_KEY=${VALIDATOR_SECRET_KEY}
-      - VALIDATOR_NAME=validator
+      # Subtensor endpoint (Bittensor mainnet)
+      - SUBTENSOR_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+      # Network UID for this subnet
+      - NETUID=100
+      # P2P settings
+      - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
+      # Optional: Bootstrap peers (comma-separated multiaddrs)
+      # - BOOTSTRAP_PEERS=/ip4/x.x.x.x/tcp/9000/p2p/PEER_ID
+    
+    command: ["validator-node", "--data-dir", "/data", "--listen-addr", "/ip4/0.0.0.0/tcp/9000"]
     
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "test -f /data/distributed.db || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     
     networks:
-      - platform-network
+      - platform
 
   # ==========================================================================
   # Watchtower - Auto-update platform container only
@@ -60,12 +83,12 @@ services:
       - WATCHTOWER_LOG_LEVEL=info
     
     networks:
-      - platform-network
+      - platform
 
 volumes:
   validator-data:
     driver: local
 
 networks:
-  platform-network:
-    external: true
+  platform:
+    driver: bridge

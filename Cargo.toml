@@ -11,17 +11,14 @@ members = [
     "crates/rpc-server",
     "crates/challenge-orchestrator",
     "crates/secure-container-runtime",
-    "crates/platform-server",
     "crates/p2p-consensus",
-    "bins/platform",
     "bins/validator-node",
-    "bins/validator-decentralized",
-    "bins/csudo",
     "bins/utils",
     "tests",
 ]
 # Note: Challenges are in separate repositories and import platform-challenge-sdk as a git dependency
 # Note: WASM runtime removed - updates via git, version checked at handshake
+# Note: P2P-only architecture - no centralized platform-server
 
 [workspace.package]
 version = "0.1.0"
@@ -82,7 +79,7 @@ wiremock = "0.6"
 rstest = "0.23"
 tokio-test = "0.4"
 
-# HTTP/Web (for platform-server)
+# HTTP/Web (for P2P communication and challenge SDK)
 reqwest = { version = "0.12", features = ["json"] }
 
 # Patch for TLE/CRv4 compatibility (w3f-bls version conflict)

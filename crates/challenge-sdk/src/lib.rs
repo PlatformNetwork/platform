@@ -2,11 +2,11 @@
 //! Platform Challenge SDK
 //!
 //! SDK for developing challenges on Platform Network.
-//! Supports two modes:
-//! 1. **Server Mode** - Challenge runs as HTTP server, platform calls `/evaluate`
-//! 2. **Client Mode** - Challenge connects via WebSocket to platform
+//! Fully decentralized P2P architecture - validators communicate directly.
 //!
 //! # Quick Start - Server Mode
+//!
+//! Challenge runs as HTTP server, validators call `/evaluate`:
 //!
 //! ```rust,ignore
 //! use platform_challenge_sdk::prelude::*;
@@ -36,14 +36,14 @@
 //! }
 //! ```
 //!
-//! # Quick Start - Client Mode
+//! # Quick Start - P2P Mode
 //!
 //! ```rust,ignore
 //! use platform_challenge_sdk::prelude::*;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), ChallengeError> {
-//!     run_as_client(MyChallenge).await
+//!     run_decentralized(MyChallenge).await
 //! }
 //! ```
 //!
@@ -56,12 +56,12 @@
 //! ├─────────────────────────────────────────────────────────────┤
 //! │                  Platform Challenge SDK                     │
 //! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-//! │  │   Server    │  │   Client    │  │   Types     │        │
-//! │  │ (HTTP mode) │  │ (WS mode)   │  │ (generic)   │        │
+//! │  │   Server    │  │  P2P Client │  │   Types     │        │
+//! │  │ (HTTP mode) │  │ (libp2p)    │  │ (generic)   │        │
 //! │  └─────────────┘  └─────────────┘  └─────────────┘        │
 //! ├─────────────────────────────────────────────────────────────┤
-//! │                    Platform Server                          │
-//! │         (orchestration, auth, consensus)                    │
+//! │                  Validator Network (P2P)                    │
+//! │         (gossipsub, DHT, consensus)                         │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -87,8 +87,6 @@ pub mod decentralized;
 pub mod error;
 /// P2P client for decentralized communication
 pub mod p2p_client;
-/// Client mode - connect to platform via WebSocket
-pub mod platform_client;
 /// HTTP routes
 pub mod routes;
 /// Server mode - expose challenge as HTTP server
@@ -113,10 +111,6 @@ pub use p2p_client::{
     P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,
     ValidatorEvaluationResult,
 };
-pub use platform_client::{
-    run_as_client, ChallengeMessage, ConnectionState, PlatformClient, PlatformClientConfig,
-    ServerMessage,
-};
 pub use server::{
     ChallengeServer, ChallengeServerBuilder, ConfigLimits, ConfigResponse, EvaluationRequest,
     EvaluationResponse, HealthResponse, ServerChallenge, ServerConfig, ValidationRequest,
@@ -133,16 +127,15 @@ pub use types::*;
 pub use weight_types::*;
 pub use weights::*;
 
-/// Prelude for new centralized API
+/// Prelude for P2P challenge development
 pub mod prelude {
     pub use super::error::ChallengeError;
-    pub use super::platform_client::{run_as_client, PlatformClient, PlatformClientConfig};
     pub use super::server::{
         ChallengeServer, EvaluationRequest, EvaluationResponse, ServerChallenge, ServerConfig,
         ValidationRequest, ValidationResponse,
     };
 
-    // P2P / Decentralized mode
+    // P2P mode
     pub use super::decentralized::run_decentralized;
     pub use super::p2p_client::{
         P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,

@@ -2,6 +2,7 @@
 name = "validator-node"
 version.workspace = true
 edition.workspace = true
+description = "Platform Validator Node - Decentralized P2P Architecture"
 
 [[bin]]
 name = "validator-node"
@@ -12,23 +13,25 @@ path = "src/main.rs"
 platform-core = { path = "../../crates/core" }
 platform-storage = { path = "../../crates/storage" }
 platform-bittensor = { path = "../../crates/bittensor-integration" }
-platform-rpc = { path = "../../crates/rpc-server" }
-platform-subnet-manager = { path = "../../crates/subnet-manager" }
+platform-p2p-consensus = { path = "../../crates/p2p-consensus" }
+platform-distributed-storage = { path = "../../crates/distributed-storage" }
+platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
 challenge-orchestrator = { path = "../../crates/challenge-orchestrator" }
 secure-container-runtime = { path = "../../crates/secure-container-runtime" }
 
-# Bittensor (for weight submission)
+# Bittensor
 bittensor-rs = { workspace = true }
 
-# Async runtime
+# Networking
+libp2p = { version = "0.54", features = ["tokio", "gossipsub", "kad", "identify", "noise", "yamux", "tcp", "dns"] }
+
+# Async
 tokio = { workspace = true }
+futures = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# HTTP client for platform-server
-reqwest = { version = "0.12", features = ["json"] }
 
 # Logging
 tracing = { workspace = true }
@@ -40,10 +43,5 @@ anyhow = { workspace = true }
 hex = { workspace = true }
 parking_lot = { workspace = true }
 sp-core = { workspace = true }
-sysinfo = "0.31"
-uuid = { version = "1.0", features = ["v5"] }
-
-# WebSocket for platform-server events
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
-futures-util = "0.3"
-url = "2.5"
+uuid = { workspace = true }
+chrono = { workspace = true }

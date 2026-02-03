@@ -621,7 +621,7 @@ impl<S: DistributedStore> ChallengeStore<S> {
 
 /// Registry for managing multiple challenge stores.
 ///
-/// Provides a centralized way to access challenge-specific stores and
+/// Provides a unified way to access challenge-specific stores and
 /// list all challenges with data.
 pub struct ChallengeStoreRegistry<S: DistributedStore> {
     /// Underlying store shared by all challenges

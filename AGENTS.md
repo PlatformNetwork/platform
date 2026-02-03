@@ -6,7 +6,7 @@ This document explains how agents (miners) interact with the Platform network.
 
 ## Important: Challenge-Specific Repositories
 
-**Platform is a load balancer and orchestration layer.** It does not contain challenge-specific logic.
+**Platform is a fully decentralized P2P network for distributed evaluation.** It does not contain challenge-specific logic.
 
 Each challenge has its own repository with:
 - Task definitions and evaluation criteria
@@ -25,26 +25,34 @@ Each challenge has its own repository with:
 
 ## What is Platform?
 
-Platform is infrastructure that:
+Platform is a **fully decentralized P2P infrastructure** that:
 
-1. **Routes submissions** from miners to validators
-2. **Orchestrates evaluation** across distributed validators
-3. **Aggregates scores** using stake-weighted consensus
+1. **Propagates submissions** from miners across the validator network via gossipsub
+2. **Orchestrates evaluation** across distributed validators using DHT coordination
+3. **Aggregates scores** using stake-weighted consensus (P2P)
 4. **Submits weights** to Bittensor at epoch boundaries
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
-│   MINERS    │ ──▶ │     PLATFORM     │ ──▶ │  BITTENSOR  │
-│  (Agents)   │     │  (Load Balancer) │     │   (Weights) │
-└─────────────┘     └──────────────────┘     └─────────────┘
-                           │
-                    ┌──────┴──────┐
-                    ▼             ▼
-              ┌──────────┐  ┌──────────┐
-              │Challenge │  │Challenge │
-              │    A     │  │    B     │
-              │  (Repo)  │  │  (Repo)  │
-              └──────────┘  └──────────┘
+┌─────────────┐                              ┌─────────────┐
+│   MINERS    │ ──────────────────────────▶  │  BITTENSOR  │
+│  (Agents)   │                              │   (Weights) │
+└─────────────┘                              └─────────────┘
+       │                                            ▲
+       │ P2P (libp2p)                               │
+       ▼                                            │
+┌──────────────────────────────────────────────────────────┐
+│              VALIDATOR P2P NETWORK                       │
+│  ┌───────────┐   ┌───────────┐   ┌───────────┐          │
+│  │ Validator │◀─▶│ Validator │◀─▶│ Validator │ ...      │
+│  │   Node    │   │   Node    │   │   Node    │          │
+│  └───────────┘   └───────────┘   └───────────┘          │
+│       │               │               │                  │
+│       ▼               ▼               ▼                  │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐             │
+│  │Challenge │   │Challenge │   │Challenge │             │
+│  │Container │   │Container │   │Container │             │
+│  └──────────┘   └──────────┘   └──────────┘             │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -69,10 +77,10 @@ class MyAgent(Agent):
 
 ### 2. Submission
 
-Submit your agent code to the Platform API. The submission is:
-- Stored in the central database
+Submit your agent code to the P2P network. The submission is:
+- Broadcast to validators via libp2p gossipsub
 - Compiled/validated by the challenge system
-- Queued for evaluation by validators
+- Distributed across the validator network for evaluation
 
 ### 3. Evaluation
 
@@ -83,10 +91,10 @@ Validators independently evaluate your submission:
 
 ### 4. Scoring
 
-Platform aggregates validator scores:
-- Stake-weighted averaging
+Validators aggregate scores across the P2P network:
+- Stake-weighted averaging via DHT coordination
 - Outlier detection (removes anomalous validators)
-- Confidence calculation
+- Consensus achieved through gossipsub protocol
 
 ### 5. Rewards
 
@@ -96,23 +104,32 @@ At epoch end (~72 minutes), weights are submitted to Bittensor:
 
 ---
 
-## Platform API
+## P2P Network
 
-### Endpoints
+### How It Works
 
-All challenge-specific endpoints are proxied through Platform:
+Platform uses libp2p for fully decentralized communication:
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/v1/bridge/{challenge_id}/submit` | Submit agent code |
-| `GET /api/v1/bridge/{challenge_id}/status/{hash}` | Check submission status |
-| `GET /api/v1/bridge/{challenge_id}/leaderboard` | View rankings |
+- **Gossipsub**: Submissions and scores are broadcast across the validator network
+- **DHT (Kademlia)**: Peer discovery and coordination without central servers
+- **Direct Connections**: Validators communicate directly with each other
 
 ### Authentication
 
-Submissions are signed with your Bittensor hotkey:
+All P2P messages are signed with your Bittensor hotkey:
 - Use `sr25519` signature scheme
 - Include timestamp to prevent replay attacks
+- Validators verify signatures before processing
+
+### Submitting via P2P
+
+Connect to any validator node to submit your agent:
+```bash
+# Using the challenge CLI (recommended)
+term submit --agent my_agent.py --peer /ip4/VALIDATOR_IP/tcp/9000/p2p/PEER_ID
+
+# Or via the challenge SDK
+```
 
 ---
 
@@ -131,7 +148,7 @@ Check the challenge repository for:
 
 ### How are scores calculated?
 
-Each challenge defines its own scoring algorithm. Platform only aggregates scores from validators.
+Each challenge defines its own scoring algorithm. Validators coordinate score aggregation via P2P consensus.
 
 ### Can I test locally?
 
@@ -152,14 +169,12 @@ Defined by each challenge. Check the challenge docs for specific limits.
 ```
 Platform Repository (this repo)
 ├── crates/
-│   ├── platform-server/     # Central coordination server
-│   ├── challenge-sdk/       # SDK for building challenges (not agents!)
-│   ├── challenge-orchestrator/
-│   ├── bittensor-integration/
+│   ├── challenge-sdk/           # SDK for building challenges (not agents!)
+│   ├── challenge-orchestrator/  # Manages challenge container execution
+│   ├── bittensor-integration/   # Bittensor network integration
 │   └── ...
 └── bins/
-    ├── platform/           # Server binary
-    └── validator-node/     # Validator binary
+    └── validator-node/          # P2P validator node binary
 
 Challenge Repositories (separate)
 ├── term-challenge/         # Terminal Bench
@@ -169,6 +184,8 @@ Challenge Repositories (separate)
 └── (other challenges)/
 ```
 
+**Note:** Platform is fully decentralized—there is no central server. All validators communicate directly via libp2p (gossipsub + DHT).
+
 ---
 
 ## Getting Started
@@ -177,7 +194,7 @@ Challenge Repositories (separate)
 2. **Go to that challenge's repository** (not this one)
 3. **Read the challenge-specific documentation**
 4. **Develop your agent** using the challenge SDK
-5. **Submit** through the Platform API or challenge CLI
+5. **Submit** through the P2P network or challenge CLI
 6. **Monitor** your submission status and leaderboard position
 
 ---
@@ -187,7 +204,7 @@ Challenge Repositories (separate)
 - [Bittensor Docs](https://docs.bittensor.com) - Network documentation
 - [Validator Guide](docs/validator.md) - Running a validator
 
-**Note:** In P2P mode (recommended), validators communicate directly without a central server.
+Platform is fully decentralized—validators communicate directly via P2P without any central server.
 See the main README for deployment instructions.
 
 For challenge-specific questions, please refer to the appropriate challenge repository.

@@ -1,7 +1,7 @@
 //! Challenge Server Mode
 //!
 //! Provides HTTP server functionality for challenges to expose their evaluation
-//! endpoints to platform-server.
+//! endpoints to validators in the P2P network.
 //!
 //! # Usage
 //!

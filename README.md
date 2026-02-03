@@ -26,11 +26,11 @@
 
 ### Key Features
 
+- **Fully Decentralized**: P2P architecture using libp2p gossipsub and DHT
 - **Decentralized Evaluation**: Multiple validators independently evaluate submissions
 - **Challenge-Based Architecture**: Modular Docker containers define custom evaluation logic
 - **Byzantine Fault Tolerance**: PBFT consensus with $2f+1$ threshold ensures correctness
 - **Secure Weight Submission**: Weights submitted to Bittensor at epoch boundaries
-- **Centralized Coordination**: Platform-server provides HTTP/WebSocket APIs for validators
 - **Multi-Mechanism Support**: Each challenge maps to a Bittensor mechanism for independent weight setting
 - **Stake-Weighted Security**: Minimum 1000 TAO stake required for validator participation
 
@@ -38,7 +38,7 @@
 
 ## System Overview
 
-> **Note:** Platform now supports two operating modes: **Centralized Mode** (default, using platform-server) and **P2P Mode** (recommended, fully decentralized). See the [Decentralized P2P Mode](#decentralized-p2p-mode-recommended) section for the peer-to-peer architecture.
+Platform uses a fully decentralized P2P architecture where validators communicate directly via libp2p gossipsub and store data in a distributed hash table (DHT).
 
 Platform involves three main participants:
 
@@ -56,15 +56,15 @@ The coordination between validators ensures that only verified, consensus-valida
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SHARED BLOCKCHAIN STATE                             │
+│                         P2P NETWORK (libp2p)                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
 │  │ Challenge A │  │ Challenge B │  │ Challenge C │  │     ...     │         │
 │  │ (Docker)    │  │ (Docker)    │  │ (Docker)    │  │             │         │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘         │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                 Platform Server (self-hosted)                         │  │
-│  │          PostgreSQL Database • HTTP API • WebSocket Events            │  │
+│  │                    Distributed Hash Table (DHT)                       │  │
+│  │           Submissions • Evaluations • Consensus State                 │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────┬───────────────────────────────────────────┘
                                   │
@@ -73,6 +73,7 @@ The coordination between validators ensures that only verified, consensus-valida
             ▼                     ▼                     ▼
 ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
 │   VALIDATOR 1     │ │   VALIDATOR 2     │ │   VALIDATOR N     │
+│   (libp2p peer)   │ │   (libp2p peer)   │ │   (libp2p peer)   │
 ├───────────────────┤ ├───────────────────┤ ├───────────────────┤
 │ ┌───────────────┐ │ │ ┌───────────────┐ │ │ ┌───────────────┐ │
 │ │ Challenge A   │ │ │ │ Challenge A   │ │ │ │ Challenge A   │ │
@@ -81,7 +82,7 @@ The coordination between validators ensures that only verified, consensus-valida
 │ └───────────────┘ │ │ └───────────────┘ │ │ └───────────────┘ │
 │                   │ │                   │ │                   │
 │ Evaluates miners  │ │ Evaluates miners  │ │ Evaluates miners  │
-│ Shares results    │ │ Shares results    │ │ Shares results    │
+│ Shares via P2P    │ │ Shares via P2P    │ │ Shares via P2P    │
 └─────────┬─────────┘ └─────────┬─────────┘ └─────────┬─────────┘
           │                     │                     │
           └─────────────────────┼─────────────────────┘
@@ -107,15 +108,15 @@ The coordination between validators ensures that only verified, consensus-valida
 
 2. **Submission**:
 
-   - Submit to any validator via HTTP API
-   - Submission is stored in PostgreSQL database at platform-server
+   - Submit to any validator via the P2P network
+   - Submission is distributed via gossipsub and stored in DHT
    - Submission includes: source code, miner hotkey, metadata
 
 3. **Evaluation**:
 
    - All validators independently evaluate the submission
    - Evaluation runs in isolated Docker containers (challenge-specific logic)
-   - Results are stored in PostgreSQL database at platform-server
+   - Results are shared via gossipsub and stored in DHT
 
 4. **Weight Distribution**:
    - At epoch end, validators aggregate scores
@@ -141,15 +142,15 @@ The coordination between validators ensures that only verified, consensus-valida
 
 2. **Submission Evaluation**:
 
-   - Receive submissions via platform-server HTTP API
+   - Receive submissions via P2P gossipsub
    - Execute evaluation in sandboxed Docker environment
    - Compute score $s \in [0, 1]$ based on challenge criteria
 
 3. **Result Sharing**:
 
-   - Submit `EvaluationResult` to platform-server via HTTP API
-   - Results stored in PostgreSQL database at platform-server
-   - Platform-server broadcasts events to validators via WebSocket
+   - Broadcast `EvaluationResult` via gossipsub to all peers
+   - Results stored in distributed hash table (DHT)
+   - Validators receive results in real-time via P2P
 
 4. **Score Aggregation**:
 
@@ -241,14 +242,6 @@ $$\text{threshold} = 2f + 1 = \left\lfloor \frac{2n}{3} \right\rfloor + 1$$
 - `SudoAction::SetRequiredVersion` - Mandatory version update
 - `NewBlock` - State checkpoint
 
-### Centralized State Management
-
-Platform-server (run by subnet owner on their own infrastructure) maintains authoritative state:
-
-- **PostgreSQL Database**: Stores all submissions, evaluations, and scores
-- **HTTP API (port 8080)**: Validators submit and retrieve data
-- **WebSocket Events**: Real-time notifications to connected validators
-
 ---
 
 ## Score Aggregation
@@ -306,9 +299,9 @@ Low confidence (high variance) may exclude submission from weights.
 
 ### Data Integrity
 
-- **Centralized Database**: Platform-server maintains authoritative PostgreSQL state
-- **Signature Verification**: All API requests signed by validator keys
-- **WebSocket Sync**: Validators receive real-time state updates
+- **DHT Storage**: Data distributed across validators via Kademlia DHT
+- **Signature Verification**: All messages signed by validator keys
+- **Gossipsub Sync**: Validators receive real-time state updates via P2P
 
 ---
 
@@ -347,9 +340,9 @@ Each Bittensor epoch (~360 blocks, ~72 minutes):
 
 **Evaluation runs continuously** throughout the entire epoch. Validators constantly:
 
-- Receive and process submissions from challenges
+- Receive and process submissions from challenges via P2P
 - Execute evaluations in Docker containers
-- Submit results to platform-server via HTTP API
+- Broadcast results via gossipsub
 - Aggregate scores from all validators
 
 ### Weight Submission
@@ -358,37 +351,25 @@ At the end of each epoch, validators submit weights to Bittensor based on aggreg
 
 ---
 
-## Quick Start (P2P Mode - Recommended)
+## Quick Start
 
 ```bash
 git clone https://github.com/PlatformNetwork/platform.git
 cd platform
 cp .env.example .env
 # Edit .env: add your VALIDATOR_SECRET_KEY (BIP39 mnemonic)
-docker compose -f docker-compose.decentralized.yml up -d
+docker compose up -d
 ```
 
-## Decentralized P2P Mode
+## P2P Architecture
 
-Platform supports a fully decentralized architecture where validators communicate via P2P without requiring a central server.
+Platform uses a fully decentralized architecture where validators communicate via libp2p without requiring a central server.
 
 ### Benefits
 - **No single point of failure** - No central server dependency
 - **Fully trustless** - Validators reach consensus via PBFT
 - **Bittensor-linked state** - State changes are linked to Subtensor block numbers
 - **DHT storage** - Submissions and evaluations stored across the network
-
-### Quick Start (P2P Mode)
-
-```bash
-git clone https://github.com/PlatformNetwork/platform.git
-cd platform
-cp .env.example .env
-# Edit .env: add your VALIDATOR_SECRET_KEY (BIP39 mnemonic)
-docker compose -f docker-compose.decentralized.yml up -d
-```
-
-### Architecture (P2P Mode)
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
@@ -406,16 +387,6 @@ docker compose -f docker-compose.decentralized.yml up -d
                     └─────────────────────────┘
 ```
 
-### P2P Configuration
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VALIDATOR_SECRET_KEY` | BIP39 mnemonic or hex key | - |
-| `SUBTENSOR_ENDPOINT` | Bittensor RPC endpoint | `wss://entrypoint-finney.opentensor.ai:443` |
-| `NETUID` | Subnet UID | `100` |
-| `P2P_LISTEN_ADDR` | libp2p listen address | `/ip4/0.0.0.0/tcp/9000` |
-| `BOOTSTRAP_PEERS` | Bootstrap peers (comma-separated) | - |
-
 ## Hardware Requirements
 
 | Resource    | Minimum    | Recommended |
@@ -429,29 +400,10 @@ docker compose -f docker-compose.decentralized.yml up -d
 
 ## Network Requirements
 
-| Port     | Protocol  | Usage                                      |
-| -------- | --------- | ------------------------------------------ |
-| 8080/tcp | HTTP      | Platform-server API                        |
-| 8090/tcp | WebSocket | Container Broker (challenge communication) |
-
-## API Endpoints
-
-### HTTP API (port 8080)
-
-Standard REST endpoints for submissions, evaluations, and challenges.
-
-### WebSocket Endpoints
-
-| Endpoint        | Description                |
-| --------------- | -------------------------- |
-| `/ws`           | Validator events           |
-| `/ws/challenge` | Challenge container events |
-
-### Bridge Proxy
-
-| Endpoint                          | Description                   |
-| --------------------------------- | ----------------------------- |
-| `/api/v1/bridge/{challenge_id}/*` | Proxy to challenge containers |
+| Port      | Protocol  | Usage                                      |
+| --------- | --------- | ------------------------------------------ |
+| 9000/tcp  | libp2p    | P2P communication (gossipsub, DHT)         |
+| 8090/tcp  | WebSocket | Container Broker (challenge communication) |
 
 ## Configuration
 
@@ -461,19 +413,21 @@ Standard REST endpoints for submissions, evaluations, and challenges.
 | `SUBTENSOR_ENDPOINT`   | Bittensor RPC endpoint               | `wss://entrypoint-finney.opentensor.ai:443` | No           |
 | `NETUID`               | Subnet UID                           | `100`                                       | No           |
 | `RUST_LOG`             | Log level                            | `info`                                      | No           |
-| `PLATFORM_SERVER_URL`  | Platform server URL (self-hosted)    | -                                           | No (server mode only) |
+| `P2P_LISTEN_ADDR`      | libp2p listen address                | `/ip4/0.0.0.0/tcp/9000`                     | No           |
+| `BOOTSTRAP_PEERS`      | Bootstrap peers (comma-separated)    | -                                           | No           |
 | `PLATFORM_PUBLIC_URL`  | Public URL for challenge containers  | -                                           | Yes          |
-| `DATABASE_URL`         | PostgreSQL connection (server only)  | -                                           | Yes (server) |
-| `OWNER_HOTKEY`         | Subnet owner hotkey                  | -                                           | Yes (server) |
 | `BROKER_WS_PORT`       | Container broker WebSocket port      | `8090`                                      | No           |
 | `BROKER_JWT_SECRET`    | JWT secret for broker authentication | -                                           | Yes          |
 
 ## Binary
 
-The unified `platform` binary supports two subcommands:
+The `validator-node` binary runs the validator:
 
-- `platform server` - Run the platform-server (subnet owner only)
-- `platform validator` - Run a validator node
+```bash
+validator-node
+```
+
+Environment variables configure all options (see Configuration table above).
 
 ---
 
@@ -498,7 +452,7 @@ Platform creates a trustless, decentralized framework for evaluating miner submi
 - **PBFT Consensus** for Byzantine fault tolerance
 - **Stake-Weighted Aggregation** for Sybil resistance
 - **Docker Isolation** for deterministic evaluation (challenge-specific logic)
-- **Centralized Platform Server** for authoritative state management
+- **P2P Architecture** using libp2p gossipsub and DHT for fully decentralized state
 
 The system ensures that only genuine, high-performing submissions receive rewards, while making manipulation economically infeasible. Validators are incentivized to provide accurate evaluations through reputation mechanics, and miners are incentivized to submit quality solutions through the weight distribution mechanism.
 

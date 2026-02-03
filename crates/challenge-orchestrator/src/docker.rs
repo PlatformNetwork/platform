@@ -850,14 +850,15 @@ impl DockerClient {
         if let Ok(owner_hotkey) = std::env::var("OWNER_HOTKEY") {
             env.push(format!("OWNER_HOTKEY={}", owner_hotkey));
         }
-        // Pass broadcast secret for event broadcasting to platform-server
+        // Pass broadcast secret for event broadcasting (P2P gossipsub)
         if let Ok(broadcast_secret) = std::env::var("BROADCAST_SECRET") {
             env.push(format!("BROADCAST_SECRET={}", broadcast_secret));
         }
-        // Pass DATABASE_URL with challenge-specific database name
+        // Optional: Pass DATABASE_URL for challenges that need external database storage.
+        // Note: In a decentralized architecture, challenges should prefer local/embedded storage.
+        // This is provided for backward compatibility with challenges that require SQL databases.
         if let Ok(db_url) = std::env::var("DATABASE_URL") {
-            // Replace database name with challenge name
-            // Format: postgresql://user:pass@host:port/dbname -> postgresql://user:pass@host:port/challenge_name
+            // Replace database name with challenge-specific name
             let challenge_db_name = config.name.to_lowercase().replace(['-', ' '], "_");
             if let Some(last_slash) = db_url.rfind('/') {
                 let base_url = &db_url[..last_slash];
@@ -883,8 +884,7 @@ impl DockerClient {
                 })
             });
 
-        // In P2P mode, challenges communicate via libp2p, not HTTP
-        // PLATFORM_PUBLIC_URL is only needed for centralized/hybrid mode
+        // PLATFORM_PUBLIC_URL can be used for external access if needed
         let platform_url = std::env::var("PLATFORM_PUBLIC_URL").unwrap_or_else(|_| String::new());
         if !platform_url.is_empty() {
             env.push(format!("PLATFORM_URL={}", platform_url));
