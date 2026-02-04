@@ -84,6 +84,41 @@ pub const BURN_UID: u16 = 0;
 /// Maximum weight value for Bittensor
 pub const MAX_WEIGHT: u16 = 65535;
 
+/// Normalize hotkey weights proportionally if their sum exceeds 1.0
+///
+/// When a challenge returns weights that sum to more than 1.0, each weight
+/// is scaled down proportionally so the total equals 1.0. This ensures
+/// no challenge can exceed its allocated weight share.
+///
+/// - If sum > 1.0: all weights are scaled by (1.0 / sum)
+/// - If sum <= 1.0: weights are returned unchanged
+fn normalize_hotkey_weights(weights: Vec<HotkeyWeightEntry>) -> Vec<HotkeyWeightEntry> {
+    if weights.is_empty() {
+        return weights;
+    }
+
+    let sum: f64 = weights.iter().map(|w| w.weight).sum();
+
+    // Only normalize if sum exceeds 1.0
+    if sum > 1.0 {
+        tracing::info!(
+            "Normalizing {} weights: sum={:.4} -> 1.0 (scaling by {:.4})",
+            weights.len(),
+            sum,
+            1.0 / sum
+        );
+        weights
+            .into_iter()
+            .map(|w| HotkeyWeightEntry {
+                hotkey: w.hotkey,
+                weight: w.weight / sum,
+            })
+            .collect()
+    } else {
+        weights
+    }
+}
+
 /// Result of fetching weights from a single challenge
 #[derive(Clone, Debug)]
 pub struct ChallengeWeightResult {
@@ -318,8 +353,10 @@ impl ChallengeWeightCollector {
             Ok(Ok(response)) => {
                 // Check if challenge returned hotkey-based weights (preferred format)
                 let (uids, weights) = if !response.weights.is_empty() {
+                    // Normalize weights if sum > 1.0 to prevent exceeding allocation
+                    let normalized_weights = normalize_hotkey_weights(response.weights);
                     // Convert hotkeys to UIDs using metagraph
-                    self.convert_hotkeys_to_uids(&response.weights)
+                    self.convert_hotkeys_to_uids(&normalized_weights)
                 } else if !response.uids.is_empty() && !response.weight_values.is_empty() {
                     // Legacy format: challenge already provided UIDs
                     if response.uids.len() != response.weight_values.len() {
@@ -842,5 +879,227 @@ mod tests {
             weight: 1.0,
         }]);
         assert_eq!(uids, vec![12]);
+    }
+
+    // Tests for normalize_hotkey_weights
+
+    #[test]
+    fn test_normalize_hotkey_weights_sum_greater_than_one() {
+        // Weights sum to 2.0, should be scaled to sum to 1.0
+        let weights = vec![
+            HotkeyWeightEntry {
+                hotkey: "hk1".to_string(),
+                weight: 1.2,
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk2".to_string(),
+                weight: 0.8,
+            },
+        ];
+
+        let normalized = normalize_hotkey_weights(weights);
+
+        assert_eq!(normalized.len(), 2);
+        let sum: f64 = normalized.iter().map(|w| w.weight).sum();
+        assert!(
+            (sum - 1.0).abs() < 0.0001,
+            "Sum should be ~1.0, got {}",
+            sum
+        );
+
+        // Check proportions are preserved (1.2:0.8 = 60%:40%)
+        let hk1 = normalized.iter().find(|w| w.hotkey == "hk1").unwrap();
+        let hk2 = normalized.iter().find(|w| w.hotkey == "hk2").unwrap();
+        assert!(
+            (hk1.weight - 0.6).abs() < 0.0001,
+            "hk1 should be 0.6, got {}",
+            hk1.weight
+        );
+        assert!(
+            (hk2.weight - 0.4).abs() < 0.0001,
+            "hk2 should be 0.4, got {}",
+            hk2.weight
+        );
+    }
+
+    #[test]
+    fn test_normalize_hotkey_weights_sum_equal_to_one() {
+        // Weights sum to exactly 1.0, should remain unchanged
+        let weights = vec![
+            HotkeyWeightEntry {
+                hotkey: "hk1".to_string(),
+                weight: 0.7,
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk2".to_string(),
+                weight: 0.3,
+            },
+        ];
+
+        let normalized = normalize_hotkey_weights(weights);
+
+        assert_eq!(normalized.len(), 2);
+        let hk1 = normalized.iter().find(|w| w.hotkey == "hk1").unwrap();
+        let hk2 = normalized.iter().find(|w| w.hotkey == "hk2").unwrap();
+        assert!(
+            (hk1.weight - 0.7).abs() < 0.0001,
+            "hk1 should remain 0.7, got {}",
+            hk1.weight
+        );
+        assert!(
+            (hk2.weight - 0.3).abs() < 0.0001,
+            "hk2 should remain 0.3, got {}",
+            hk2.weight
+        );
+    }
+
+    #[test]
+    fn test_normalize_hotkey_weights_sum_less_than_one() {
+        // Weights sum to 0.5, should remain unchanged (not inflated)
+        let weights = vec![
+            HotkeyWeightEntry {
+                hotkey: "hk1".to_string(),
+                weight: 0.3,
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk2".to_string(),
+                weight: 0.2,
+            },
+        ];
+
+        let normalized = normalize_hotkey_weights(weights);
+
+        assert_eq!(normalized.len(), 2);
+        let sum: f64 = normalized.iter().map(|w| w.weight).sum();
+        assert!(
+            (sum - 0.5).abs() < 0.0001,
+            "Sum should remain 0.5, got {}",
+            sum
+        );
+
+        let hk1 = normalized.iter().find(|w| w.hotkey == "hk1").unwrap();
+        let hk2 = normalized.iter().find(|w| w.hotkey == "hk2").unwrap();
+        assert!(
+            (hk1.weight - 0.3).abs() < 0.0001,
+            "hk1 should remain 0.3, got {}",
+            hk1.weight
+        );
+        assert!(
+            (hk2.weight - 0.2).abs() < 0.0001,
+            "hk2 should remain 0.2, got {}",
+            hk2.weight
+        );
+    }
+
+    #[test]
+    fn test_normalize_hotkey_weights_empty() {
+        let weights: Vec<HotkeyWeightEntry> = vec![];
+        let normalized = normalize_hotkey_weights(weights);
+        assert!(normalized.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_hotkey_weights_single_entry_above_one() {
+        // Single weight of 1.5 should be scaled to 1.0
+        let weights = vec![HotkeyWeightEntry {
+            hotkey: "hk1".to_string(),
+            weight: 1.5,
+        }];
+
+        let normalized = normalize_hotkey_weights(weights);
+
+        assert_eq!(normalized.len(), 1);
+        assert!(
+            (normalized[0].weight - 1.0).abs() < 0.0001,
+            "Single weight should be scaled to 1.0, got {}",
+            normalized[0].weight
+        );
+    }
+
+    #[test]
+    fn test_normalize_hotkey_weights_preserves_relative_proportions() {
+        // Weights with varying magnitudes: sum = 3.0
+        let weights = vec![
+            HotkeyWeightEntry {
+                hotkey: "hk1".to_string(),
+                weight: 1.5, // 50%
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk2".to_string(),
+                weight: 0.9, // 30%
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk3".to_string(),
+                weight: 0.6, // 20%
+            },
+        ];
+
+        let normalized = normalize_hotkey_weights(weights);
+
+        assert_eq!(normalized.len(), 3);
+        let sum: f64 = normalized.iter().map(|w| w.weight).sum();
+        assert!(
+            (sum - 1.0).abs() < 0.0001,
+            "Sum should be ~1.0, got {}",
+            sum
+        );
+
+        // Check proportions: 1.5:0.9:0.6 = 50%:30%:20%
+        let hk1 = normalized.iter().find(|w| w.hotkey == "hk1").unwrap();
+        let hk2 = normalized.iter().find(|w| w.hotkey == "hk2").unwrap();
+        let hk3 = normalized.iter().find(|w| w.hotkey == "hk3").unwrap();
+
+        assert!(
+            (hk1.weight - 0.5).abs() < 0.0001,
+            "hk1 should be 0.5, got {}",
+            hk1.weight
+        );
+        assert!(
+            (hk2.weight - 0.3).abs() < 0.0001,
+            "hk2 should be 0.3, got {}",
+            hk2.weight
+        );
+        assert!(
+            (hk3.weight - 0.2).abs() < 0.0001,
+            "hk3 should be 0.2, got {}",
+            hk3.weight
+        );
+    }
+
+    #[test]
+    fn test_normalize_hotkey_weights_very_large_sum() {
+        // Extreme case: weights sum to 10.0
+        let weights = vec![
+            HotkeyWeightEntry {
+                hotkey: "hk1".to_string(),
+                weight: 6.0,
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk2".to_string(),
+                weight: 4.0,
+            },
+        ];
+
+        let normalized = normalize_hotkey_weights(weights);
+
+        let sum: f64 = normalized.iter().map(|w| w.weight).sum();
+        assert!(
+            (sum - 1.0).abs() < 0.0001,
+            "Sum should be ~1.0, got {}",
+            sum
+        );
+
+        let hk1 = normalized.iter().find(|w| w.hotkey == "hk1").unwrap();
+        let hk2 = normalized.iter().find(|w| w.hotkey == "hk2").unwrap();
+        assert!(
+            (hk1.weight - 0.6).abs() < 0.0001,
+            "hk1 should be 0.6, got {}",
+            hk1.weight
+        );
+        assert!(
+            (hk2.weight - 0.4).abs() < 0.0001,
+            "hk2 should be 0.4, got {}",
+            hk2.weight
+        );
     }
 }
