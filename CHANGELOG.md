@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.2.2](https://github.com/PlatformNetwork/platform/compare/v0.2.1...v0.2.2) (2026-02-04)
+
+
+### Features
+
+* pass EXTRA_* env vars to challenge containers ([509178d](https://github.com/PlatformNetwork/platform/commit/509178d5868a851db979149cd5c1c669b5b90fba))
+* **validator:** add periodic challenge refresh + apply emission_weight ([3cfbd77](https://github.com/PlatformNetwork/platform/commit/3cfbd77188bc405b02075023d2f7d2c4c7a2f84d))
+* **validator:** add periodic metagraph refresh every 5 minutes ([22c9f57](https://github.com/PlatformNetwork/platform/commit/22c9f57bb4bde0aad2858cc9b29ab8ce5d1c1c81))
+* **validator:** convert hotkey weights to UIDs using metagraph ([630990c](https://github.com/PlatformNetwork/platform/commit/630990c5203da34a3116bc46405db0db5ebcb09a))
+* **validator:** submit weights on startup if missed ([f8771fe](https://github.com/PlatformNetwork/platform/commit/f8771fedd2714fcf0771e50fb4713f124768b32f))
+
+
+### Bug Fixes
+
+* Add SSE streaming support to bridge proxy ([b223979](https://github.com/PlatformNetwork/platform/commit/b223979d61181b50d8e5c90cb9ca3c2b797f49f0))
+* auto-reconnect Bittensor on 'restart required' with exponential backoff ([b24aac5](https://github.com/PlatformNetwork/platform/commit/b24aac53866672de1cb3e736f402350fac914aca))
+* **bittensor:** improve reconnection by properly stopping old BlockSync ([15077d5](https://github.com/PlatformNetwork/platform/commit/15077d5bf4b2bf830357893f3ee619c06a9ef4c3))
+* **bittensor:** improve reconnection by properly stopping old BlockSync ([ff1882e](https://github.com/PlatformNetwork/platform/commit/ff1882e028067b91b852df5db100f7d54d76ea93))
+* **bridge:** route root-level endpoints without /api/v1 prefix ([b5102e5](https://github.com/PlatformNetwork/platform/commit/b5102e564cb81a2ea04b07e103938ed54989d2d7))
+* **ci:** separate coverage job to prevent cancellation ([8cd7b3e](https://github.com/PlatformNetwork/platform/commit/8cd7b3ef433385c8fb3891d47fac0c92a4b492a4))
+* **docker:** use external network to avoid compose label conflict ([8056f50](https://github.com/PlatformNetwork/platform/commit/8056f50da7d1b4169ada7d55f5ee92889ffda1d1))
+* merge weights by mechanism_id before submitting ([a6af2d5](https://github.com/PlatformNetwork/platform/commit/a6af2d52e34c1519bfa9f587a88a026a81009971))
+* Preserve original headers in SSE streaming passthrough ([0cd2759](https://github.com/PlatformNetwork/platform/commit/0cd27593934fbe88fd92f394cbde7c04a4c4a915))
+* **tests:** ensure storage persistence test properly flushes and releases sled lock ([0f51b83](https://github.com/PlatformNetwork/platform/commit/0f51b8351c52001828ff4966d7a279368b7b6d26))
+* validator-node timeout and skip unhealthy challenges ([26da2c8](https://github.com/PlatformNetwork/platform/commit/26da2c8b3e1d71b248b425aa4219162c86a0b249))
+* **validator:** add missing emission to burn to preserve weight proportions ([4a41d76](https://github.com/PlatformNetwork/platform/commit/4a41d761fc8dfdde41b7031fd51b19d80ccb7832))
+* **validator:** auto-reconnect BlockSync after Bittensor connection loss ([57a1d35](https://github.com/PlatformNetwork/platform/commit/57a1d35103053a48e224397fe19bb041feb3f0c9))
+* **validator:** correct weight merging for hotkeys without UIDs ([dcc363f](https://github.com/PlatformNetwork/platform/commit/dcc363fc13973486c84e5e4e9fcfcfcf9a63f16b))
+* **validator:** max-upscale weights to match Python SDK behavior ([63af164](https://github.com/PlatformNetwork/platform/commit/63af1641f65a5c307509747749dccda9565f6568))
+* **validator:** retry set_mechanism_weights up to 3 times on failure ([10332c3](https://github.com/PlatformNetwork/platform/commit/10332c35c8b8d0572a60a0dec46dad96eeec165b))
+* **validator:** send 100% burn when challenge returns no/empty/unresolved weights ([b180427](https://github.com/PlatformNetwork/platform/commit/b180427f95398271c552f42e55442068b38ee23d))
+* **validator:** unresolved hotkey weights go to burn instead of being lost ([969bf87](https://github.com/PlatformNetwork/platform/commit/969bf87fcf154ec28bac321ea5c8bc0666d2eb40))
+* **weights:** normalize challenge weights when sum exceeds 1.0 ([#34](https://github.com/PlatformNetwork/platform/issues/34)) ([168f138](https://github.com/PlatformNetwork/platform/commit/168f1384aa92586007263a9ac15c01c0d8eac0dc))
+
+
+### Performance Improvements
+
+* reuse HTTP client in bridge proxy to reduce CPU overhead ([5077c75](https://github.com/PlatformNetwork/platform/commit/5077c75b40750921688221b14192c244adb23e83))
+
+
+### Code Refactoring
+
+* remove P2P consensus and networking code ([7678293](https://github.com/PlatformNetwork/platform/commit/76782935d5efb0215746c11969cdcde8426535a4))
+
+
+### Documentation
+
+* add docker network create step to validator guide ([52d29f8](https://github.com/PlatformNetwork/platform/commit/52d29f86facf15d4575433ef2be0769aaa7f4c5d))
+
+
+### Miscellaneous
+
+* fix configuration table in the readme ([9f3fa85](https://github.com/PlatformNetwork/platform/commit/9f3fa8596a8d10387c8f87a0a423c992f4577776))
+* fix configuration table in the readme ([160541e](https://github.com/PlatformNetwork/platform/commit/160541e57ba9f29360ca072025b56aac471f1619))
+* nitpicks by coderabbitai ([3e21331](https://github.com/PlatformNetwork/platform/commit/3e21331fc594d17bb5f91b13343752bb28d6df28))
+* Remove unused crates and files ([371bec7](https://github.com/PlatformNetwork/platform/commit/371bec7cef5ad302803817673493488d3090a12a))
+* Remove unused crates and files ([88b3468](https://github.com/PlatformNetwork/platform/commit/88b3468ed2d0facf73bb0eef04cfc01334ebeaa3))
+* remove unused method `receive_write_proposal` ([2eabda6](https://github.com/PlatformNetwork/platform/commit/2eabda61b2871e11362b86c707c63e843981cda4))
+
+
+### Tests
+
+* add comprehensive unit tests to platform-server (+289 tests) ([cd15c6f](https://github.com/PlatformNetwork/platform/commit/cd15c6f73a829465068eadca08d47531aee02fc7))
+* add missing tests for command.rs ([a7d5f44](https://github.com/PlatformNetwork/platform/commit/a7d5f448282a228ae7454d15e8522319e3789d22))
+* add missing tests for config.rs ([7c94ac3](https://github.com/PlatformNetwork/platform/commit/7c94ac32972dcf0690277eef2a98532b885d3ab3))
+* cover missing paths for health.rs ([0f777ef](https://github.com/PlatformNetwork/platform/commit/0f777ef12bf3b5a814e69da0b370e6e3cf51b9eb))
+* **platform-storage:** add comprehensive test coverage for storage modules ([90940ce](https://github.com/PlatformNetwork/platform/commit/90940ce59a02bacf0dbc59b970349361c9268994))
+* **subnet-manager:** add comprehensive units tests ([59beb07](https://github.com/PlatformNetwork/platform/commit/59beb07939d0be70a7cce684aa39e5bb22bc272e))
+
 ## [0.2.1](https://github.com/PlatformNetwork/platform/compare/v0.2.0...v0.2.1) (2026-01-09)
 
 
