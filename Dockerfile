@@ -91,7 +91,7 @@ EXPOSE 9000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD test -f /data/distributed.db || exit 1
+    CMD test -e /data/distributed.db || exit 1
 
 # Default entrypoint
 ENTRYPOINT ["validator-node"]
