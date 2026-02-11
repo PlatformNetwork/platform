@@ -876,9 +876,12 @@ impl ContainerBroker {
         use bollard::image::BuildImageOptions;
 
         // Verify policy allows building this tag
-        // For now, only allow term-compiler images or specific tags
+        // Allow term-compiler, term-llm-reviewer, and ghcr.io images
         // This is a basic check, could be expanded in SecurityPolicy
-        if !tag.starts_with("term-compiler:") && !tag.starts_with("ghcr.io/") {
+        if !tag.starts_with("term-compiler:")
+            && !tag.starts_with("term-llm-reviewer:")
+            && !tag.starts_with("ghcr.io/")
+        {
             let err = format!("Image tag not allowed: {}", tag);
             self.audit(
                 AuditAction::ImageBuild,
