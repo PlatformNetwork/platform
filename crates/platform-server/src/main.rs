@@ -216,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ws/challenge", get(challenge_ws_handler))
         // === CONTROL PLANE API ===
         .route("/api/v1/auth", post(api::auth::authenticate))
+        .route("/api/v1/metagraph", get(api::metagraph::get_metagraph))
         .route("/api/v1/validators", get(api::validators::list_validators))
         .route(
             "/api/v1/validators",
