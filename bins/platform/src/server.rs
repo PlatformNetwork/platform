@@ -256,6 +256,8 @@ pub async fn run(args: ServerArgs) -> Result<()> {
             "/api/v1/evaluations",
             get(api::evaluations::get_evaluations),
         )
+        // Metagraph API
+        .route("/api/v1/metagraph", get(api::metagraph::get_metagraph))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
