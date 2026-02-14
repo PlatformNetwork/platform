@@ -8,3 +8,5 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+ipnet = "2.11.0"
+url = "2.5.8"

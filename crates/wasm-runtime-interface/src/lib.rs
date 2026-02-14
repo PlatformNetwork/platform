@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 /// Host functions that may be exposed to WASM challenges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,18 +20,14 @@ pub enum HostFunction {
 }
 
 /// Network policy aligned with secure-container-runtime patterns.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkPolicy {
-    /// Whether any outbound network access is allowed.
-    pub enabled: bool,
-    /// Allowed outbound hostnames or suffixes.
-    pub allowed_hosts: Vec<String>,
+    /// Whether outbound internet access is allowed.
+    pub allow_internet: bool,
+    /// HTTP access rules.
+    pub http: HttpPolicy,
     /// Allowed outbound IP CIDR ranges.
     pub allowed_ip_ranges: Vec<String>,
-    /// Allowed URL schemes (https only in production).
-    pub allowed_schemes: Vec<HttpScheme>,
-    /// Allowed outbound TCP ports.
-    pub allowed_ports: Vec<u16>,
     /// DNS resolution policy.
     pub dns_policy: DnsPolicy,
     /// Request/response limits.
@@ -38,27 +36,15 @@ pub struct NetworkPolicy {
     pub audit: AuditPolicy,
 }
 
-impl Default for NetworkPolicy {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowed_hosts: Vec::new(),
-            allowed_ip_ranges: Vec::new(),
-            allowed_schemes: vec![HttpScheme::Https],
-            allowed_ports: vec![443],
-            dns_policy: DnsPolicy::default(),
-            limits: RequestLimits::default(),
-            audit: AuditPolicy::default(),
-        }
-    }
-}
-
 impl NetworkPolicy {
     /// Strict policy with explicit allow-list and HTTPS only.
     pub fn strict(allowed_hosts: Vec<String>) -> Self {
         Self {
-            enabled: true,
-            allowed_hosts,
+            allow_internet: true,
+            http: HttpPolicy {
+                allowed_hosts,
+                ..HttpPolicy::default()
+            },
             ..Default::default()
         }
     }
@@ -66,14 +52,72 @@ impl NetworkPolicy {
     /// Development policy with relaxed defaults.
     pub fn development() -> Self {
         Self {
-            enabled: true,
-            allowed_schemes: vec![HttpScheme::Https, HttpScheme::Http],
-            allowed_ports: vec![80, 443],
+            allow_internet: true,
+            http: HttpPolicy::development(),
             dns_policy: DnsPolicy::development(),
             limits: RequestLimits::development(),
             audit: AuditPolicy::development(),
             ..Default::default()
         }
+    }
+
+    /// Validate and normalize network policy for runtime enforcement.
+    pub fn validate(&self) -> Result<ValidatedNetworkPolicy, NetworkPolicyError> {
+        let http = self.http.validate()?;
+        let dns = self.dns_policy.validate()?;
+        let allowed_ip_ranges = parse_ip_ranges(&self.allowed_ip_ranges)?;
+
+        Ok(ValidatedNetworkPolicy {
+            allow_internet: self.allow_internet,
+            http,
+            allowed_ip_ranges,
+            dns_policy: dns,
+            limits: self.limits.clone(),
+            audit: self.audit.clone(),
+        })
+    }
+}
+
+/// HTTP-specific access policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpPolicy {
+    /// Allowed outbound hostnames or suffixes.
+    pub allowed_hosts: Vec<String>,
+    /// Allowed URL schemes (https only in production).
+    pub allowed_schemes: Vec<HttpScheme>,
+    /// Allowed outbound TCP ports.
+    pub allowed_ports: Vec<u16>,
+}
+
+impl Default for HttpPolicy {
+    fn default() -> Self {
+        Self {
+            allowed_hosts: Vec::new(),
+            allowed_schemes: vec![HttpScheme::Https],
+            allowed_ports: vec![443],
+        }
+    }
+}
+
+impl HttpPolicy {
+    /// Development HTTP policy with relaxed defaults.
+    pub fn development() -> Self {
+        Self {
+            allowed_schemes: vec![HttpScheme::Https, HttpScheme::Http],
+            allowed_ports: vec![80, 443],
+            ..Default::default()
+        }
+    }
+
+    fn validate(&self) -> Result<ValidatedHttpPolicy, NetworkPolicyError> {
+        let allowed_hosts = normalize_hosts(&self.allowed_hosts)?;
+        let allowed_ports = normalize_ports(&self.allowed_ports)?;
+
+        Ok(ValidatedHttpPolicy {
+            allowed_hosts,
+            allowed_schemes: self.allowed_schemes.clone(),
+            allowed_ports,
+        })
     }
 }
 
@@ -90,6 +134,8 @@ pub enum HttpScheme {
 pub struct DnsPolicy {
     /// Whether DNS resolution is allowed.
     pub enabled: bool,
+    /// Allowed DNS hostnames or suffixes.
+    pub allowed_hosts: Vec<String>,
     /// Allowed DNS query types (A/AAAA/CNAME, etc.).
     pub allowed_record_types: Vec<DnsRecordType>,
     /// Maximum DNS lookups per execution.
@@ -104,6 +150,7 @@ impl Default for DnsPolicy {
     fn default() -> Self {
         Self {
             enabled: false,
+            allowed_hosts: Vec::new(),
             allowed_record_types: vec![DnsRecordType::A, DnsRecordType::Aaaa],
             max_lookups: 8,
             cache_ttl_secs: 60,
@@ -122,6 +169,19 @@ impl DnsPolicy {
             block_private_ranges: false,
             ..Default::default()
         }
+    }
+
+    fn validate(&self) -> Result<ValidatedDnsPolicy, NetworkPolicyError> {
+        let allowed_hosts = normalize_hosts(&self.allowed_hosts)?;
+
+        Ok(ValidatedDnsPolicy {
+            enabled: self.enabled,
+            allowed_hosts,
+            allowed_record_types: self.allowed_record_types.clone(),
+            max_lookups: self.max_lookups,
+            cache_ttl_secs: self.cache_ttl_secs,
+            block_private_ranges: self.block_private_ranges,
+        })
     }
 }
 
@@ -215,6 +275,243 @@ impl AuditPolicy {
     }
 }
 
+/// Normalized policy for runtime enforcement.
+#[derive(Debug, Clone)]
+pub struct ValidatedNetworkPolicy {
+    pub allow_internet: bool,
+    pub http: ValidatedHttpPolicy,
+    pub allowed_ip_ranges: Vec<ipnet::IpNet>,
+    pub dns_policy: ValidatedDnsPolicy,
+    pub limits: RequestLimits,
+    pub audit: AuditPolicy,
+}
+
+impl ValidatedNetworkPolicy {
+    /// Validate an outbound HTTP request against policy.
+    pub fn is_http_request_allowed(&self, url: &str) -> Result<(), NetworkPolicyError> {
+        if !self.allow_internet {
+            return Err(NetworkPolicyError::NetworkDisabled);
+        }
+
+        let parsed =
+            url::Url::parse(url).map_err(|err| NetworkPolicyError::InvalidUrl(err.to_string()))?;
+        let scheme = match parsed.scheme() {
+            "http" => HttpScheme::Http,
+            "https" => HttpScheme::Https,
+            other => return Err(NetworkPolicyError::SchemeNotAllowed(other.to_string())),
+        };
+
+        if !self.http.allowed_schemes.is_empty() && !self.http.allowed_schemes.contains(&scheme) {
+            return Err(NetworkPolicyError::SchemeNotAllowed(
+                parsed.scheme().to_string(),
+            ));
+        }
+
+        let host = parsed.host().ok_or(NetworkPolicyError::MissingHost)?;
+        let host_string = normalize_host_string(&host);
+        let port = parsed
+            .port_or_known_default()
+            .ok_or(NetworkPolicyError::MissingPort)?;
+
+        if !self.http.allowed_ports.is_empty() && !self.http.allowed_ports.contains(&port) {
+            return Err(NetworkPolicyError::PortNotAllowed(port));
+        }
+
+        if !self.is_host_allowed(&host, &host_string) {
+            return Err(NetworkPolicyError::HostNotAllowed(host_string));
+        }
+
+        Ok(())
+    }
+
+    /// Validate a DNS lookup against policy.
+    pub fn is_dns_lookup_allowed(
+        &self,
+        hostname: &str,
+        record_type: DnsRecordType,
+    ) -> Result<(), NetworkPolicyError> {
+        if !self.allow_internet {
+            return Err(NetworkPolicyError::NetworkDisabled);
+        }
+
+        if !self.dns_policy.enabled {
+            return Err(NetworkPolicyError::DnsDisabled);
+        }
+
+        if !self.dns_policy.allowed_record_types.is_empty()
+            && !self.dns_policy.allowed_record_types.contains(&record_type)
+        {
+            return Err(NetworkPolicyError::DnsRecordTypeNotAllowed(record_type));
+        }
+
+        let host = url::Host::parse(hostname)
+            .map_err(|_| NetworkPolicyError::InvalidHost(hostname.to_string()))?;
+        let host_string = normalize_host_string(&host);
+
+        if !self.dns_policy.allowed_hosts.is_empty()
+            && !self
+                .dns_policy
+                .allowed_hosts
+                .iter()
+                .any(|pattern| pattern.matches(&host_string))
+        {
+            return Err(NetworkPolicyError::HostNotAllowed(host_string));
+        }
+
+        Ok(())
+    }
+
+    fn is_host_allowed<T: AsRef<str>>(&self, host: &url::Host<T>, host_string: &str) -> bool {
+        let host_allowed = if self.http.allowed_hosts.is_empty() {
+            true
+        } else {
+            self.http
+                .allowed_hosts
+                .iter()
+                .any(|pattern| pattern.matches(host_string))
+        };
+
+        match host {
+            url::Host::Ipv4(ip) => host_allowed || self.is_ip_allowed(IpAddr::V4(*ip)),
+            url::Host::Ipv6(ip) => host_allowed || self.is_ip_allowed(IpAddr::V6(*ip)),
+            url::Host::Domain(_) => host_allowed,
+        }
+    }
+
+    fn is_ip_allowed(&self, ip: IpAddr) -> bool {
+        if self.allowed_ip_ranges.is_empty() {
+            return false;
+        }
+
+        self.allowed_ip_ranges.iter().any(|net| net.contains(&ip))
+    }
+}
+
+/// Normalized HTTP policy for runtime enforcement.
+#[derive(Debug, Clone)]
+pub struct ValidatedHttpPolicy {
+    pub allowed_hosts: Vec<NormalizedHostPattern>,
+    pub allowed_schemes: Vec<HttpScheme>,
+    pub allowed_ports: Vec<u16>,
+}
+
+/// Normalized DNS policy for runtime enforcement.
+#[derive(Debug, Clone)]
+pub struct ValidatedDnsPolicy {
+    pub enabled: bool,
+    pub allowed_hosts: Vec<NormalizedHostPattern>,
+    pub allowed_record_types: Vec<DnsRecordType>,
+    pub max_lookups: u32,
+    pub cache_ttl_secs: u64,
+    pub block_private_ranges: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedHostPattern {
+    pattern: String,
+    match_subdomains: bool,
+}
+
+impl NormalizedHostPattern {
+    fn matches(&self, host: &str) -> bool {
+        let host = host.trim_end_matches('.').to_lowercase();
+        if self.match_subdomains {
+            host == self.pattern || host.ends_with(&format!(".{}", self.pattern))
+        } else {
+            host == self.pattern
+        }
+    }
+}
+
+/// Errors emitted when validating network policies.
+#[derive(Debug, thiserror::Error)]
+pub enum NetworkPolicyError {
+    #[error("network access disabled")]
+    NetworkDisabled,
+    #[error("dns access disabled")]
+    DnsDisabled,
+    #[error("invalid host pattern: {0}")]
+    InvalidHost(String),
+    #[error("invalid ip range: {0}")]
+    InvalidIpRange(String),
+    #[error("invalid url: {0}")]
+    InvalidUrl(String),
+    #[error("missing host in url")]
+    MissingHost,
+    #[error("missing port in url")]
+    MissingPort,
+    #[error("scheme not allowed: {0}")]
+    SchemeNotAllowed(String),
+    #[error("host not allowed: {0}")]
+    HostNotAllowed(String),
+    #[error("port not allowed: {0}")]
+    PortNotAllowed(u16),
+    #[error("dns record type not allowed: {0:?}")]
+    DnsRecordTypeNotAllowed(DnsRecordType),
+}
+
+fn normalize_hosts(
+    allowed_hosts: &[String],
+) -> Result<Vec<NormalizedHostPattern>, NetworkPolicyError> {
+    allowed_hosts
+        .iter()
+        .map(|host| normalize_host_pattern(host))
+        .collect()
+}
+
+fn normalize_host_pattern(host: &str) -> Result<NormalizedHostPattern, NetworkPolicyError> {
+    let trimmed = host.trim();
+    if trimmed.is_empty() {
+        return Err(NetworkPolicyError::InvalidHost(host.to_string()));
+    }
+
+    let (pattern, match_subdomains) = if let Some(stripped) = trimmed.strip_prefix("*.") {
+        (stripped, true)
+    } else if let Some(stripped) = trimmed.strip_prefix('.') {
+        (stripped, true)
+    } else {
+        (trimmed, false)
+    };
+
+    let normalized = pattern.trim_end_matches('.').to_lowercase();
+    if normalized.is_empty() {
+        return Err(NetworkPolicyError::InvalidHost(host.to_string()));
+    }
+
+    url::Host::parse(&normalized).map_err(|_| NetworkPolicyError::InvalidHost(host.to_string()))?;
+
+    Ok(NormalizedHostPattern {
+        pattern: normalized,
+        match_subdomains,
+    })
+}
+
+fn normalize_ports(allowed_ports: &[u16]) -> Result<Vec<u16>, NetworkPolicyError> {
+    if allowed_ports.contains(&0) {
+        return Err(NetworkPolicyError::PortNotAllowed(0));
+    }
+
+    Ok(allowed_ports.to_vec())
+}
+
+fn parse_ip_ranges(ranges: &[String]) -> Result<Vec<ipnet::IpNet>, NetworkPolicyError> {
+    ranges
+        .iter()
+        .map(|range| {
+            ipnet::IpNet::from_str(range)
+                .map_err(|_| NetworkPolicyError::InvalidIpRange(range.to_string()))
+        })
+        .collect()
+}
+
+fn normalize_host_string<T: AsRef<str>>(host: &url::Host<T>) -> String {
+    match host {
+        url::Host::Domain(domain) => domain.as_ref().trim_end_matches('.').to_lowercase(),
+        url::Host::Ipv4(ip) => ip.to_string(),
+        url::Host::Ipv6(ip) => ip.to_string(),
+    }
+}
+
 /// HTTP request description for WASM host calls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpRequest {
@@ -298,4 +595,73 @@ pub enum NetworkError {
 /// Hook for emitting audit events from the runtime.
 pub trait NetworkAuditLogger: Send + Sync {
     fn record(&self, entry: NetworkAuditEntry);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_http_policy_allows_https() {
+        let policy = NetworkPolicy::strict(vec!["example.com".to_string()]);
+        let validated = policy.validate().expect("policy should validate");
+
+        assert!(validated
+            .is_http_request_allowed("https://example.com/path")
+            .is_ok());
+        assert!(validated
+            .is_http_request_allowed("http://example.com")
+            .is_err());
+    }
+
+    #[test]
+    fn test_http_policy_wildcard_hosts() {
+        let policy = NetworkPolicy::strict(vec!["*.example.com".to_string()]);
+        let validated = policy.validate().expect("policy should validate");
+
+        assert!(validated
+            .is_http_request_allowed("https://api.example.com")
+            .is_ok());
+        assert!(validated
+            .is_http_request_allowed("https://example.com")
+            .is_ok());
+        assert!(validated
+            .is_http_request_allowed("https://evil.com")
+            .is_err());
+    }
+
+    #[test]
+    fn test_http_policy_ports() {
+        let mut policy = NetworkPolicy::strict(vec!["example.com".to_string()]);
+        policy.http.allowed_ports = vec![443];
+        let validated = policy.validate().expect("policy should validate");
+
+        assert!(validated
+            .is_http_request_allowed("https://example.com:443")
+            .is_ok());
+        assert!(validated
+            .is_http_request_allowed("https://example.com:8443")
+            .is_err());
+    }
+
+    #[test]
+    fn test_dns_policy_allows_record() {
+        let mut policy = NetworkPolicy::strict(vec!["example.com".to_string()]);
+        policy.dns_policy.enabled = true;
+        policy.dns_policy.allowed_hosts = vec!["example.com".to_string()];
+        let validated = policy.validate().expect("policy should validate");
+
+        assert!(validated
+            .is_dns_lookup_allowed("example.com", DnsRecordType::A)
+            .is_ok());
+        assert!(validated
+            .is_dns_lookup_allowed("evil.com", DnsRecordType::A)
+            .is_err());
+    }
+
+    #[test]
+    fn test_invalid_host_rejected() {
+        let policy = NetworkPolicy::strict(vec!["bad host".to_string()]);
+        assert!(policy.validate().is_err());
+    }
 }
