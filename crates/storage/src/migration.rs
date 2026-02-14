@@ -193,7 +193,7 @@ pub struct MigrationChange {
 }
 
 /// Record of an applied migration
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MigrationRecord {
     pub version: MigrationVersion,
     pub name: String,
