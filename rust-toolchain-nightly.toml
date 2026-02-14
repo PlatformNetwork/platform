@@ -1,3 +1,6 @@
 [toolchain]
 channel = "nightly"
 profile = "default"
+
+[env]
+PLATFORM_NIGHTLY_RUSTFLAGS = "-Z threads=0"
