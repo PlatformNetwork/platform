@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 /// State of a challenge in its lifecycle
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-    #[default]
 pub enum LifecycleState {
     /// Challenge is registered but not started
+    #[default]
     Registered,
     /// Challenge is starting up
     Starting,
@@ -251,9 +251,7 @@ mod tests {
         let challenge_id = ChallengeId::new();
 
         // Test Registered event
-        let registered_event = LifecycleEvent::Registered {
-            challenge_id,
-        };
+        let registered_event = LifecycleEvent::Registered { challenge_id };
         match registered_event {
             LifecycleEvent::Registered { challenge_id: id } => {
                 assert_eq!(id, challenge_id);
@@ -262,9 +260,7 @@ mod tests {
         }
 
         // Test Unregistered event
-        let unregistered_event = LifecycleEvent::Unregistered {
-            challenge_id,
-        };
+        let unregistered_event = LifecycleEvent::Unregistered { challenge_id };
         match unregistered_event {
             LifecycleEvent::Unregistered { challenge_id: id } => {
                 assert_eq!(id, challenge_id);

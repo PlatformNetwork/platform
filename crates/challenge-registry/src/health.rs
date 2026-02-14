@@ -13,9 +13,9 @@ use std::time::Duration;
 
 /// Health status of a challenge
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-    #[default]
 pub enum HealthStatus {
     /// Health status is unknown (not yet checked)
+    #[default]
     Unknown,
     /// Challenge is healthy
     Healthy,
