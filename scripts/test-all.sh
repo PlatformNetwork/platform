@@ -10,11 +10,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./test-harness.sh
 source "${SCRIPT_DIR}/test-harness.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./test-harness.sh
+source "${SCRIPT_DIR}/test-harness.sh"
 
 PASSED=0
 FAILED=0
 SKIPPED=0
 
+platform_test_init
+trap platform_cleanup_run_dir EXIT
+
+if [ "${PLATFORM_TEST_DOCKER_MODE}" != "skip" ]; then
+    if ! platform_has_docker || ! platform_has_compose; then
+        log_info "Docker/Compose missing; attempting installation"
+        "${SCRIPT_DIR}/install-docker.sh"
+    fi
+fi
 platform_test_init
 trap platform_cleanup_run_dir EXIT
 
