@@ -24,36 +24,80 @@ log_info "Opt-out: PLATFORM_DISABLE_FAST_LINKER=1"
 log_info "Override: PLATFORM_FAST_LINKER_RUSTFLAGS/PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN"
 log_info "Override: PLATFORM_LINKER_RUSTFLAGS/PLATFORM_LINKER_RUSTFLAGS_DARWIN"
 
-    if [ -z "${PLATFORM_NIGHTLY_RUSTFLAGS+x}" ]; then
-        export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
+run_check() {
+    local label="$1"
+    local log_file="$2"
+    shift 2
+
+    PLATFORM_DISABLE_NIGHTLY=0
+    PLATFORM_RUST_NIGHTLY=0
+    RUSTUP_TOOLCHAIN=""
+    PLATFORM_NIGHTLY_RUSTFLAGS=""
+    PLATFORM_FAST_LINKER_RUSTFLAGS="${PLATFORM_FAST_LINKER_RUSTFLAGS:-}"
+    PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="${PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN:-}"
+    PLATFORM_LINKER_RUSTFLAGS="${PLATFORM_LINKER_RUSTFLAGS:-}"
+    PLATFORM_LINKER_RUSTFLAGS_DARWIN="${PLATFORM_LINKER_RUSTFLAGS_DARWIN:-}"
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --nightly)
+                PLATFORM_RUST_NIGHTLY=1
+                ;;
+            --stable)
+                PLATFORM_DISABLE_NIGHTLY=1
+                ;;
+            *)
+                log_failure "Unknown option: $1"
+                return 1
+                ;;
+        esac
+        shift
+    done
+
+    if [ "${PLATFORM_DISABLE_NIGHTLY:-0}" = "1" ]; then
+        PLATFORM_NIGHTLY_RUSTFLAGS=""
+        log_info "${label}: Nightly Rust disabled via opt-out"
+    elif [ "${PLATFORM_RUST_NIGHTLY:-0}" = "1" ] || [ "${RUSTUP_TOOLCHAIN:-}" = "nightly" ]; then
+        RUSTUP_TOOLCHAIN="nightly"
+        PLATFORM_NIGHTLY_RUSTFLAGS="${PLATFORM_NIGHTLY_RUSTFLAGS:--Z threads=0}"
+        log_info "${label}: Nightly Rust enabled (parallel rustc)"
+    else
+        log_info "${label}: Nightly Rust not requested; using default toolchain"
     fi
-    export PLATFORM_NIGHTLY_RUSTFLAGS=""
-    log_info "Nightly Rust disabled via opt-out"
-elif [ "${PLATFORM_RUST_NIGHTLY:-0}" = "1" ] || [ "${RUSTUP_TOOLCHAIN:-}" = "nightly" ]; then
-    export RUSTUP_TOOLCHAIN="nightly"
-    export PLATFORM_NIGHTLY_RUSTFLAGS="${PLATFORM_NIGHTLY_RUSTFLAGS:--Z threads=0}"
-    log_info "Nightly Rust enabled (parallel rustc)"
-else
-    log_info "Nightly Rust not requested; using default toolchain"
-fi
 
-if [ "${PLATFORM_DISABLE_FAST_LINKER:-0}" = "1" ]; then
-    export PLATFORM_FAST_LINKER_RUSTFLAGS=""
-    export PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN=""
-    export PLATFORM_LINKER_RUSTFLAGS=""
-    export PLATFORM_LINKER_RUSTFLAGS_DARWIN=""
-    log_info "Fast linker disabled via opt-out"
-fi
+    if [ "${PLATFORM_DISABLE_FAST_LINKER:-0}" = "1" ]; then
+        PLATFORM_FAST_LINKER_RUSTFLAGS=""
+        PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN=""
+        PLATFORM_LINKER_RUSTFLAGS=""
+        PLATFORM_LINKER_RUSTFLAGS_DARWIN=""
+        log_info "${label}: Fast linker disabled via opt-out"
+    fi
 
-log_info "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-default}"
-log_info "PLATFORM_NIGHTLY_RUSTFLAGS=${PLATFORM_NIGHTLY_RUSTFLAGS:-}"
-log_info "PLATFORM_LINKER_RUSTFLAGS=${PLATFORM_LINKER_RUSTFLAGS:-}"
-log_info "PLATFORM_LINKER_RUSTFLAGS_DARWIN=${PLATFORM_LINKER_RUSTFLAGS_DARWIN:-}"
+    log_info "${label}: Expected toolchain=${RUSTUP_TOOLCHAIN:-default}"
+    log_info "${label}: Expected nightly rustflags=${PLATFORM_NIGHTLY_RUSTFLAGS:-<empty>}"
+    log_info "${label}: Expected linker rustflags=${PLATFORM_LINKER_RUSTFLAGS:-<empty>}"
+    log_info "${label}: Expected linker rustflags darwin=${PLATFORM_LINKER_RUSTFLAGS_DARWIN:-<empty>}"
 
-log_info "Running cargo check (dry-run build)"
-if cargo check --workspace 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/nightly-config-check.log"; then
-    log_success "Config verification completed"
-else
-    log_failure "Config verification failed"
-    exit 1
-fi
+    export PLATFORM_DISABLE_NIGHTLY
+    export PLATFORM_RUST_NIGHTLY
+    export RUSTUP_TOOLCHAIN
+    export PLATFORM_NIGHTLY_RUSTFLAGS
+    export PLATFORM_FAST_LINKER_RUSTFLAGS
+    export PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN
+    export PLATFORM_LINKER_RUSTFLAGS
+    export PLATFORM_LINKER_RUSTFLAGS_DARWIN
+
+    log_info "${label}: Running cargo check (dry-run build)"
+    if cargo check --workspace 2>&1 | tee "${log_file}"; then
+        log_success "${label}: Config verification completed"
+    else
+        log_failure "${label}: Config verification failed"
+        return 1
+    fi
+}
+
+log_info "Stable verification (nightly opt-out)"
+run_check "Stable" "${PLATFORM_TEST_LOG_DIR}/nightly-config-stable.log" --stable
+
+log_info "Nightly verification (defaults apply)"
+run_check "Nightly" "${PLATFORM_TEST_LOG_DIR}/nightly-config-nightly.log" --nightly
