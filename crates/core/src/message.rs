@@ -1613,7 +1613,7 @@ mod tests {
     #[test]
     fn test_challenge_weight_allocation_new() {
         let challenge_id = ChallengeId::new();
-        let allocation = ChallengeWeightAllocation::new(challenge_id.clone(), 1, 0.7);
+        let allocation = ChallengeWeightAllocation::new(challenge_id, 1, 0.7);
         assert_eq!(allocation.challenge_id, challenge_id);
         assert_eq!(allocation.mechanism_id, 1);
         assert_eq!(allocation.weight_ratio, 0.7);

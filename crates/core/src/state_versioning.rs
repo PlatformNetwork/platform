@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_version_constants() {
-        assert!(CURRENT_STATE_VERSION >= MIN_SUPPORTED_VERSION);
+        const _: () = assert!(CURRENT_STATE_VERSION >= MIN_SUPPORTED_VERSION);
         assert_eq!(CURRENT_STATE_VERSION, 3);
     }
 
