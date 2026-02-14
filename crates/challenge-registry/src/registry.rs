@@ -25,6 +25,12 @@ pub struct WasmModuleMetadata {
     /// Network policy for WASM execution
     #[serde(default)]
     pub network_policy: NetworkPolicy,
+    /// Restartable configuration identifier
+    #[serde(default)]
+    pub restart_id: Option<String>,
+    /// Configuration version for hot-restarts
+    #[serde(default)]
+    pub config_version: u64,
 }
 
 impl WasmModuleMetadata {
@@ -39,6 +45,8 @@ impl WasmModuleMetadata {
             module_location,
             entrypoint,
             network_policy,
+            restart_id: None,
+            config_version: 0,
         }
     }
 }
@@ -59,6 +67,12 @@ pub struct ChallengeEntry {
     /// WASM module metadata
     #[serde(default)]
     pub wasm_module: Option<WasmModuleMetadata>,
+    /// Restartable configuration identifier
+    #[serde(default)]
+    pub restart_id: Option<String>,
+    /// Configuration version for hot-restarts
+    #[serde(default)]
+    pub config_version: u64,
     /// Current lifecycle state
     pub lifecycle_state: LifecycleState,
     /// Health status
@@ -81,6 +95,8 @@ impl ChallengeEntry {
             docker_image,
             endpoint: None,
             wasm_module: None,
+            restart_id: None,
+            config_version: 0,
             lifecycle_state: LifecycleState::Registered,
             health_status: HealthStatus::Unknown,
             registered_at: now,
@@ -297,6 +313,58 @@ impl ChallengeRegistry {
         Ok(old_version)
     }
 
+    /// Update restart configuration metadata
+    pub fn update_restart_config(
+        &self,
+        id: &ChallengeId,
+        restart_id: Option<String>,
+        config_version: u64,
+    ) -> RegistryResult<(Option<String>, u64)> {
+        let mut challenges = self.challenges.write();
+        let registered = challenges
+            .get_mut(id)
+            .ok_or_else(|| RegistryError::ChallengeNotFound(id.to_string()))?;
+
+        let previous_restart_id = registered.entry.restart_id.clone();
+        let previous_config_version = registered.entry.config_version;
+
+        let restart_required = self.lifecycle.restart_required(
+            previous_restart_id.as_deref(),
+            restart_id.as_deref(),
+            previous_config_version,
+            config_version,
+        );
+
+        registered.entry.restart_id = restart_id.clone();
+        registered.entry.config_version = config_version;
+        registered.entry.updated_at = chrono::Utc::now().timestamp_millis();
+
+        if let Some(wasm_module) = registered.entry.wasm_module.as_mut() {
+            wasm_module.restart_id = restart_id.clone();
+            wasm_module.config_version = config_version;
+        }
+
+        if restart_required {
+            info!(
+                challenge_id = %id,
+                previous_restart_id = ?previous_restart_id,
+                new_restart_id = ?restart_id,
+                previous_config_version = previous_config_version,
+                new_config_version = config_version,
+                "Challenge restart configuration updated"
+            );
+            self.emit_event(LifecycleEvent::Restarted {
+                challenge_id: *id,
+                previous_restart_id: previous_restart_id.clone(),
+                new_restart_id: restart_id,
+                previous_config_version,
+                new_config_version: config_version,
+            });
+        }
+
+        Ok((previous_restart_id, previous_config_version))
+    }
+
     /// Get state store for a challenge
     pub fn state_store(&self, id: &ChallengeId) -> Option<Arc<StateStore>> {
         self.challenges
@@ -345,7 +413,6 @@ impl Default for ChallengeRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_register_challenge() {
         let registry = ChallengeRegistry::new();
@@ -447,10 +514,39 @@ mod tests {
     }
 
     #[test]
+    fn test_update_restart_config() {
+        let registry = ChallengeRegistry::new();
+        let entry = ChallengeEntry::new(
+            "test".to_string(),
+            ChallengeVersion::new(1, 0, 0),
+            "test:latest".to_string(),
+        )
+        .with_wasm_module(WasmModuleMetadata::new(
+            "hash".to_string(),
+            "module.wasm".to_string(),
+            "evaluate".to_string(),
+            NetworkPolicy::default(),
+        ));
+
+        let id = registry.register(entry).unwrap();
+        let previous = registry
+            .update_restart_config(&id, Some("restart-1".to_string()), 1)
+            .unwrap();
+
+        assert_eq!(previous, (None, 0));
+
+        let challenge = registry.get(&id).unwrap();
+        assert_eq!(challenge.entry.restart_id, Some("restart-1".to_string()));
+        assert_eq!(challenge.entry.config_version, 1);
+        let wasm_module = challenge.entry.wasm_module.unwrap();
+        assert_eq!(wasm_module.restart_id, Some("restart-1".to_string()));
+        assert_eq!(wasm_module.config_version, 1);
+    }
+
+    #[test]
     fn test_list_active() {
         let registry = ChallengeRegistry::new();
 
-        // Register two challenges
         let entry1 = ChallengeEntry::new(
             "active".to_string(),
             ChallengeVersion::new(1, 0, 0),
@@ -465,7 +561,6 @@ mod tests {
         let id1 = registry.register(entry1).unwrap();
         registry.register(entry2).unwrap();
 
-        // Make first one active
         registry
             .update_state(&id1, LifecycleState::Running)
             .unwrap();

@@ -32,7 +32,8 @@ use tracing::{info, warn};
 /// V2: Added registered_hotkeys
 /// V3: Added x25519_pubkey to ValidatorInfo
 /// V4: Added wasm_challenge_configs
-pub const CURRENT_STATE_VERSION: u32 = 4;
+/// V5: Added WASM restart metadata
+pub const CURRENT_STATE_VERSION: u32 = 5;
 
 /// Minimum supported version for migration
 pub const MIN_SUPPORTED_VERSION: u32 = 1;
@@ -223,41 +224,53 @@ impl ChainStateV2 {
 fn migrate_state(version: u32, data: &[u8]) -> Result<crate::ChainState> {
     match version {
         1 => {
-            // V1 -> V4: Add registered_hotkeys, x25519_pubkey, wasm_challenge_configs
+            // V1 -> V5: Add registered_hotkeys, x25519_pubkey, wasm_challenge_configs
             let v1: ChainStateV1 = bincode::deserialize(data).map_err(|e| {
                 crate::MiniChainError::Serialization(format!("V1 migration failed: {}", e))
             })?;
             info!(
-                "Migrated state V1->V4: block_height={}, validators={}",
+                "Migrated state V1->V5: block_height={}, validators={}",
                 v1.block_height,
                 v1.validators.len()
             );
             Ok(v1.migrate())
         }
         2 => {
-            // V2 -> V4: Add x25519_pubkey to ValidatorInfo and wasm_challenge_configs
+            // V2 -> V5: Add x25519_pubkey to ValidatorInfo and wasm_challenge_configs
             let v2: ChainStateV2 = bincode::deserialize(data).map_err(|e| {
                 crate::MiniChainError::Serialization(format!("V2 migration failed: {}", e))
             })?;
             info!(
-                "Migrated state V2->V4: block_height={}, validators={}",
+                "Migrated state V2->V5: block_height={}, validators={}",
                 v2.block_height,
                 v2.validators.len()
             );
             Ok(v2.migrate())
         }
         3 => {
-            // V3 -> V4: Add wasm_challenge_configs
+            // V3 -> V5: Add wasm_challenge_configs
             let mut v3: crate::ChainState = bincode::deserialize(data).map_err(|e| {
                 crate::MiniChainError::Serialization(format!("V3 migration failed: {}", e))
             })?;
             v3.wasm_challenge_configs = HashMap::new();
             info!(
-                "Migrated state V3->V4: block_height={}, validators={}",
+                "Migrated state V3->V5: block_height={}, validators={}",
                 v3.block_height,
                 v3.validators.len()
             );
             Ok(v3)
+        }
+        4 => {
+            // V4 -> V5: Added WASM restart metadata (handled by serde defaults)
+            let v4: crate::ChainState = bincode::deserialize(data).map_err(|e| {
+                crate::MiniChainError::Serialization(format!("V4 migration failed: {}", e))
+            })?;
+            info!(
+                "Migrated state V4->V5: block_height={}, validators={}",
+                v4.block_height,
+                v4.validators.len()
+            );
+            Ok(v4)
         }
         _ => Err(crate::MiniChainError::Serialization(format!(
             "Unknown state version: {}",
@@ -456,7 +469,7 @@ mod tests {
     #[test]
     fn test_version_constants() {
         const _: () = assert!(CURRENT_STATE_VERSION >= MIN_SUPPORTED_VERSION);
-        assert_eq!(CURRENT_STATE_VERSION, 4);
+        assert_eq!(CURRENT_STATE_VERSION, 5);
     }
 
     #[test]

@@ -86,6 +86,7 @@ impl Challenge {
 
 /// Challenge configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChallengeConfig {
     /// Mechanism ID on Bittensor (1, 2, 3... - 0 is reserved for default)
     /// Each challenge has its own mechanism for weight setting
@@ -168,6 +169,7 @@ impl WasmModuleMetadata {
 
 /// WASM execution configuration
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct WasmConfig {
     /// Network policy for WASM host functions
     #[serde(default)]
@@ -175,6 +177,9 @@ pub struct WasmConfig {
     /// Restartable configuration identifier
     #[serde(default)]
     pub restart_id: String,
+    /// Configuration version for hot-restarts
+    #[serde(default)]
+    pub config_version: u64,
 }
 
 /// WASM-only challenge configuration stored in chain state

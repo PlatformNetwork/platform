@@ -111,6 +111,21 @@ pub fn expected_schema_hashes() -> BTreeMap<u32, SchemaRegistry> {
         description: "Added wasm_challenge_configs to ChainState",
     });
 
+    // Version 5: Added WASM restart metadata
+    registry.insert(5, SchemaRegistry {
+        version: 5,
+        validator_info_hash: const_hash("ValidatorInfo:hotkey:Hotkey,stake:Stake,is_active:bool,last_seen:DateTime,peer_id:Option<String>,x25519_pubkey:Option<String>"),
+        chain_state_hash: const_hash("ChainState:block_height:u64,epoch:u64,config:NetworkConfig,sudo_key:Hotkey,validators:HashMap<Hotkey,ValidatorInfo>,challenges:HashMap<ChallengeId,Challenge>,challenge_configs:HashMap,wasm_challenge_configs:HashMap,mechanism_configs:HashMap,challenge_weights:HashMap,required_version:Option,pending_jobs:Vec,state_hash:[u8;32],last_updated:DateTime,registered_hotkeys:HashSet<Hotkey>"),
+        description: "Added WASM restart metadata",
+    });
+    // Version 4: Added wasm_challenge_configs to ChainState
+    registry.insert(4, SchemaRegistry {
+        version: 4,
+        validator_info_hash: const_hash("ValidatorInfo:hotkey:Hotkey,stake:Stake,is_active:bool,last_seen:DateTime,peer_id:Option<String>,x25519_pubkey:Option<String>"),
+        chain_state_hash: const_hash("ChainState:block_height:u64,epoch:u64,config:NetworkConfig,sudo_key:Hotkey,validators:HashMap<Hotkey,ValidatorInfo>,challenges:HashMap<ChallengeId,Challenge>,challenge_configs:HashMap,wasm_challenge_configs:HashMap,mechanism_configs:HashMap,challenge_weights:HashMap,required_version:Option,pending_jobs:Vec,state_hash:[u8;32],last_updated:DateTime,registered_hotkeys:HashSet<Hotkey>"),
+        description: "Added wasm_challenge_configs to ChainState",
+    });
+
     registry
 }
 

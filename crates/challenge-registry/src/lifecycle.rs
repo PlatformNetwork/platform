@@ -46,6 +46,14 @@ pub enum LifecycleEvent {
         old_version: ChallengeVersion,
         new_version: ChallengeVersion,
     },
+    /// Challenge restart configuration changed
+    Restarted {
+        challenge_id: ChallengeId,
+        previous_restart_id: Option<String>,
+        new_restart_id: Option<String>,
+        previous_config_version: u64,
+        new_config_version: u64,
+    },
 }
 
 /// Manages challenge lifecycle transitions
@@ -112,7 +120,25 @@ impl ChallengeLifecycle {
         self.auto_restart
     }
 
-    /// Get max restart attempts
+    /// Check if restart configuration should trigger a restart
+    pub fn restart_required(
+        &self,
+        previous_restart_id: Option<&str>,
+        new_restart_id: Option<&str>,
+        previous_config_version: u64,
+        new_config_version: u64,
+    ) -> bool {
+        if previous_config_version != new_config_version {
+            return true;
+        }
+
+        match (previous_restart_id, new_restart_id) {
+            (Some(prev), Some(next)) => prev != next,
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (None, None) => false,
+        }
+    }
     pub fn max_restart_attempts(&self) -> u32 {
         self.max_restart_attempts
     }
@@ -307,6 +333,43 @@ mod tests {
             }
             _ => panic!("Expected VersionChanged event"),
         }
+
+        // Test Restarted event
+        let restarted_event = LifecycleEvent::Restarted {
+            challenge_id,
+            previous_restart_id: Some("old".to_string()),
+            new_restart_id: Some("new".to_string()),
+            previous_config_version: 1,
+            new_config_version: 2,
+        };
+        match restarted_event {
+            LifecycleEvent::Restarted {
+                challenge_id: id,
+                previous_restart_id,
+                new_restart_id,
+                previous_config_version,
+                new_config_version,
+            } => {
+                assert_eq!(id, challenge_id);
+                assert_eq!(previous_restart_id, Some("old".to_string()));
+                assert_eq!(new_restart_id, Some("new".to_string()));
+                assert_eq!(previous_config_version, 1);
+                assert_eq!(new_config_version, 2);
+            }
+            _ => panic!("Expected Restarted event"),
+        }
+    }
+
+    #[test]
+    fn test_restart_required() {
+        let lifecycle = ChallengeLifecycle::new();
+
+        assert!(lifecycle.restart_required(Some("a"), Some("b"), 0, 0));
+        assert!(lifecycle.restart_required(None, Some("b"), 0, 0));
+        assert!(lifecycle.restart_required(Some("a"), None, 0, 0));
+        assert!(!lifecycle.restart_required(None, None, 0, 0));
+        assert!(lifecycle.restart_required(Some("a"), Some("a"), 1, 2));
+        assert!(!lifecycle.restart_required(Some("a"), Some("a"), 2, 2));
     }
 
     #[test]
