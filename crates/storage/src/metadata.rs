@@ -19,20 +19,15 @@ use std::time::SystemTime;
 use tracing::{debug, info, warn};
 
 /// Storage format version for challenge data
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum StorageFormat {
     /// Original storage format
+    #[default]
     V1,
     /// Updated storage format with improved serialization
     V2,
     /// Challenge-specific custom format
     Custom,
-}
-
-impl Default for StorageFormat {
-    fn default() -> Self {
-        StorageFormat::V1
-    }
 }
 
 /// Metadata for a single challenge
