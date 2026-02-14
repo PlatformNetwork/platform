@@ -24,6 +24,22 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 log_info() {
+}
+
+platform_install_docker_if_needed() {
+    if [ "${PLATFORM_TEST_DOCKER_MODE}" = "skip" ]; then
+        return 0
+    fi
+
+    if platform_has_docker && platform_has_compose; then
+        return 0
+    fi
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    log_info "Docker/Compose missing; attempting installation"
+    "${script_dir}/install-docker.sh"
+}
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
@@ -96,6 +112,9 @@ platform_require_command() {
 platform_has_docker() {
     command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
+platform_has_docker() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
 
 platform_require_docker() {
     if ! platform_has_docker; then
@@ -104,6 +123,7 @@ platform_require_docker() {
     fi
 }
 
+platform_has_compose() {
 platform_has_compose() {
     if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
         return 0
