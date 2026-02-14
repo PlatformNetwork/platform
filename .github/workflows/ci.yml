@@ -35,6 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify nightly config (stable dry-run)
+        run: scripts/verify-nightly-config.sh
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "platform-ci"
@@ -254,11 +256,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      - name: Verify nightly config (nightly dry-run)
+        run: PLATFORM_RUST_NIGHTLY=1 PLATFORM_FAST_LINKER=mold scripts/verify-nightly-config.sh
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "platform-ci-nightly"
           save-if: false
       - name: Nightly build
         run: cargo build --release
+      - name: Nightly tests
+        run: cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
       - name: Nightly tests
         run: cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
