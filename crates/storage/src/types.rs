@@ -375,7 +375,7 @@ mod tests {
     fn test_storage_key_to_bytes() {
         let key = StorageKey::system("version");
         let bytes = key.to_bytes();
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
         assert!(bytes.contains(&0x00)); // Separator
     }
 

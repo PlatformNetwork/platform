@@ -1450,9 +1450,11 @@ mod async_tests {
 
     #[tokio::test]
     async fn test_validate_errors_and_warnings() {
-        let mut challenge = TestChallenge::default();
-        challenge.validation_errors = vec!["Error 1".to_string()];
-        challenge.validation_warnings = vec!["Warning 1".to_string()];
+        let challenge = TestChallenge {
+            validation_errors: vec!["Error 1".to_string()],
+            validation_warnings: vec!["Warning 1".to_string()],
+            ..Default::default()
+        };
 
         let req = ValidationRequest { data: json!({}) };
 

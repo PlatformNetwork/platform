@@ -317,7 +317,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_decentralized_processes_submissions() {
-        let (tx, mut rx) = mpsc::channel(10);
+        let (tx, rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
 
         let challenge = MockChallenge { should_fail: false };
