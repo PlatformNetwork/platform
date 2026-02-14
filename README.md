@@ -54,7 +54,15 @@ The repository ships with `.cargo/config.toml` configured to use all available C
 (`build.jobs = "default"`). You can override this locally with `CARGO_BUILD_JOBS=8` (or any integer) when
 you want a smaller build footprint.
 
-To enable nightly-only parallel rustc and a faster linker, set the environment variables below:
+Nightly-only parallel rustc is enabled by default when you use the nightly toolchain file
+(`rust-toolchain-nightly.toml`), which sets `PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"`. If you opt into
+nightly via `RUSTUP_TOOLCHAIN=nightly` or `cargo +nightly`, you can still enable parallel rustc by setting
+`PLATFORM_NIGHTLY_RUSTFLAGS` manually.
+
+Fast linker support is opt-in via environment variables. Supported linkers:
+
+- **Linux**: `mold`, `lld`
+- **macOS**: `lld`, `zld`
 
 ```bash
 # Nightly parallel rustc (requires nightly toolchain)
@@ -62,11 +70,19 @@ export RUSTUP_TOOLCHAIN=nightly
 export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
 
 # Fast linker (install one of mold or lld, then select it)
-export PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
-# export PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+# export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+
+# macOS linker selection
+# export PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=lld"
+# export PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=zld"
 
 cargo build
 ```
+
+Opt out of parallel rustc by unsetting `PLATFORM_NIGHTLY_RUSTFLAGS` or setting it to an empty string.
+To override the default fast-linker flags, set `PLATFORM_LINKER_RUSTFLAGS` (Linux) or
+`PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS).
 
 Fast linker prerequisites (Ubuntu/Debian):
 
@@ -81,14 +97,14 @@ sudo apt-get install -y lld
 
 CI runs stable by default. To run nightly builds/tests, trigger the workflow manually and set
 `run_nightly=true` in the GitHub Actions workflow dispatch input. The nightly job sets
-`PLATFORM_NIGHTLY_RUSTFLAGS` and `PLATFORM_LINKER_RUSTFLAGS` automatically.
+`PLATFORM_NIGHTLY_RUSTFLAGS` and `PLATFORM_FAST_LINKER_RUSTFLAGS` automatically.
 
 Example for a custom CI step:
 
 ```bash
 export RUSTUP_TOOLCHAIN=nightly
 export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
-export PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 cargo test
 ```
 
@@ -99,7 +115,7 @@ Dockerfiles are only used for Docker-backed test harnesses. The validator runs d
 ```bash
 docker build \
   --build-arg INSTALL_FAST_LINKER=mold \
-  --build-arg PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold" \
+  --build-arg PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold" \
   --build-arg PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0" \
   -t platform:nightly .
 ```

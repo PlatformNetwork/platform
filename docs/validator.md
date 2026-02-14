@@ -85,6 +85,35 @@ The validator will auto-connect to the network and sync. No GPUs, no third-party
 
 - Linux (Ubuntu 22.04+ recommended)
 
+### Build Tooling (Nightly Parallel rustc + Fast Linker)
+
+Validator development builds can take advantage of nightly parallel rustc and fast linkers.
+Nightly defaults are enabled when using `rust-toolchain-nightly.toml` (it sets
+`PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"`). If you opt into nightly with `RUSTUP_TOOLCHAIN=nightly`
+or `cargo +nightly`, set the variable yourself.
+
+Supported fast linkers:
+
+- **Linux**: `mold`, `lld`
+- **macOS**: `lld`, `zld`
+
+```bash
+export RUSTUP_TOOLCHAIN=nightly
+export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
+
+export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+# export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+
+# macOS linker selection
+# export PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=lld"
+# export PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=zld"
+
+cargo build
+```
+
+Opt out by unsetting `PLATFORM_NIGHTLY_RUSTFLAGS` or setting it to an empty string. To override defaults,
+set `PLATFORM_LINKER_RUSTFLAGS` (Linux) or `PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS).
+
 ### Bittensor
 
 - **Minimum stake**: 1000 TAO
@@ -167,7 +196,7 @@ To opt into nightly-only parallel rustc and a faster linker, set:
 ```bash
 export RUSTUP_TOOLCHAIN=nightly
 export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
-export PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 ```
 
 Install a fast linker (Ubuntu/Debian):
