@@ -51,13 +51,17 @@ If you prefer explicit file selection, temporarily copy or symlink `rust-toolcha
 ### Faster Builds (Parallel rustc + Fast Linker)
 
 The repository ships with `.cargo/config.toml` configured to use all available CPU cores for compilation
-(`build.jobs = "default"`). You can override this locally with `CARGO_BUILD_JOBS=8` (or any integer) when
-you want a smaller build footprint.
+(`build.jobs = "default"`). Override this locally with `CARGO_BUILD_JOBS=8` (or any integer) when you want
+a smaller build footprint.
 
 Nightly-only parallel rustc is enabled by default when you use the nightly toolchain file
-(`rust-toolchain-nightly.toml`), which sets `PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"`. If you opt into
-nightly via `RUSTUP_TOOLCHAIN=nightly` or `cargo +nightly`, you can still enable parallel rustc by setting
-`PLATFORM_NIGHTLY_RUSTFLAGS` manually.
+(`rust-toolchain-nightly.toml`). It sets `PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"`, which lets nightly
+use all CPU threads. If you opt into nightly via `RUSTUP_TOOLCHAIN=nightly` or `cargo +nightly`, set
+`PLATFORM_NIGHTLY_RUSTFLAGS` yourself (for example, `-Z threads=0` or `-Z threads=8`). Opt out by
+unsetting `PLATFORM_NIGHTLY_RUSTFLAGS` (or setting it to an empty string). The
+`scripts/verify-nightly-config.sh`, `scripts/test-all.sh`, and `scripts/test-comprehensive.sh` helpers also
+honor `PLATFORM_DISABLE_NIGHTLY=1` for an explicit opt-out, and accept `PLATFORM_RUST_NIGHTLY=1` to force
+nightly toolchains during scripted runs.
 
 Fast linker support is opt-in via environment variables. Supported linkers:
 
@@ -80,9 +84,12 @@ export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 cargo build
 ```
 
-Opt out of parallel rustc by unsetting `PLATFORM_NIGHTLY_RUSTFLAGS` or setting it to an empty string.
-To override the default fast-linker flags, set `PLATFORM_LINKER_RUSTFLAGS` (Linux) or
-`PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS).
+Opt out of fast linker flags by unsetting `PLATFORM_FAST_LINKER_RUSTFLAGS`/
+`PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN`, setting `PLATFORM_LINKER_RUSTFLAGS` (Linux) /
+`PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS) to an empty string, or exporting
+`PLATFORM_DISABLE_FAST_LINKER=1` for scripted runs. To override defaults explicitly, set
+`PLATFORM_LINKER_RUSTFLAGS` (Linux) or `PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS); these override the
+opt-in fast-linker values when present.
 
 Fast linker prerequisites (Ubuntu/Debian):
 
