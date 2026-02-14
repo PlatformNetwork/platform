@@ -117,6 +117,11 @@ platform_install_docker_if_needed() {
 
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ ! -x "${script_dir}/install-docker.sh" ]; then
+        log_failure "scripts/install-docker.sh not found or not executable"
+        return 1
+    fi
+
     log_info "Docker/Compose missing; attempting installation via scripts/install-docker.sh"
     "${script_dir}/install-docker.sh"
 

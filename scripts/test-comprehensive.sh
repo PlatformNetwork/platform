@@ -53,13 +53,6 @@ log_info "======================================================================
 if platform_should_run_docker; then
     if platform_require_compose; then
         platform_ensure_network
-platform_install_docker_if_needed
-log_info "============================================================================="
-log_info "Phase 3: Docker Integration Tests"
-log_info "============================================================================="
-if platform_should_run_docker; then
-    if platform_require_compose; then
-        platform_ensure_network
         log_info "Running secure-container-runtime Docker tests..."
         if cargo test -p secure-container-runtime --release -- --ignored 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/docker-secure-container.log"; then
             log_success "Secure container runtime Docker tests passed"
@@ -143,13 +136,6 @@ else
     log_failure "Distributed storage tests failed"
 fi
 
-log_info "============================================================================="
-log_info "Phase 8: Multi-validator Docker Compose"
-log_info "============================================================================="
-if platform_should_run_docker; then
-    if platform_require_compose; then
-        platform_ensure_network
-platform_install_docker_if_needed
 log_info "============================================================================="
 log_info "Phase 8: Multi-validator Docker Compose"
 log_info "============================================================================="

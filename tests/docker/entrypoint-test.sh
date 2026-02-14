@@ -20,6 +20,10 @@ fi
 ARGS="--data-dir ${DATA_DIR:-/data}"
 ARGS="$ARGS --listen-addr ${P2P_LISTEN_ADDR:-/ip4/0.0.0.0/tcp/9000}"
 
+if [ "${PLATFORM_TEST_DOCKER_MODE:-auto}" = "required" ] && command -v platform_install_docker_if_needed >/dev/null 2>&1; then
+    platform_install_docker_if_needed
+fi
+
 if [ -n "${VALIDATOR_SECRET_KEY:-}" ]; then
     ARGS="$ARGS --secret-key ${VALIDATOR_SECRET_KEY}"
 fi

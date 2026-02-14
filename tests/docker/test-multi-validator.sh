@@ -4,7 +4,7 @@
 # =============================================================================
 # Tests multiple validators in a P2P network without Docker build issues
 # Uses locally built binary
-# Note: This script does not require Docker; see scripts/test-comprehensive.sh
+# Note: This script does not require Docker; see scripts/test-comprehensive.sh for Docker-based suites
 # =============================================================================
 
 set -euo pipefail
@@ -15,12 +15,14 @@ source "${SCRIPT_DIR}/../../scripts/test-harness.sh"
 
 platform_test_init
 trap platform_cleanup_run_dir EXIT
-platform_test_init
-trap platform_cleanup_run_dir EXIT
 
-VALIDATOR_BINARY="${VALIDATOR_BINARY:-${PLATFORM_TEST_ROOT}/target/release/validator-node}"
+if [ "${PLATFORM_TEST_DOCKER_MODE:-auto}" = "required" ]; then
+    platform_install_docker_if_needed
+fi
+
 NUM_VALIDATORS="${NUM_VALIDATORS:-3}"
 BASE_PORT="${BASE_PORT:-9100}"
+VALIDATOR_BINARY="${VALIDATOR_BINARY:-${PLATFORM_TEST_ROOT}/target/release/validator-node}"
 PLATFORM_TEST_RUN_DIR="${PLATFORM_TEST_RUN_DIR:-${PLATFORM_TEST_TMP_BASE}/multi-validator}"
 
 log_info "Test directory: ${PLATFORM_TEST_RUN_DIR}"

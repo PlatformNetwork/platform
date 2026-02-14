@@ -22,6 +22,9 @@ cd platform
 cp .env.example .env
 # Edit .env: add your VALIDATOR_SECRET_KEY (BIP39 mnemonic)
 
+# Optional: install Docker + Compose (used by test scripts)
+./scripts/install-docker.sh
+
 # Create the Docker network (required, one-time setup)
 docker network create platform-network
 
@@ -55,6 +58,7 @@ The validator will auto-connect to the network and sync. No GPUs, no third-party
 - Docker 24.0+
 - Docker Compose v2
 - Linux (Ubuntu 22.04+ recommended)
+- `scripts/install-docker.sh` (automated installer used by test scripts)
 
 ### Bittensor
 
@@ -189,6 +193,15 @@ Expected response:
 | `Block sync started` | Listening to Bittensor blocks |
 | `DB in consensus` | Synchronized with other validators |
 | `Mechanism weights submitted` | Weights sent to Bittensor |
+
+---
+
+## Testing and Validation
+
+Validator deployment tests rely on Docker and Docker Compose. The test harness automatically invokes `scripts/install-docker.sh` when Docker is missing (unless `PLATFORM_TEST_DOCKER_MODE=skip`).
+
+- Run `./scripts/test-comprehensive.sh` to execute Docker-backed integration and multi-validator tests.
+- Run `./scripts/test-all.sh` for build/unit-only runs (Docker not required).
 
 ---
 

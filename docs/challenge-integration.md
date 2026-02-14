@@ -33,6 +33,12 @@ Platform uses a modular challenge architecture where each challenge:
     └─────────────┘   └─────────────┘  └─────────────┘
 ```
 
+## Testing With Docker
+
+Challenge containers are exercised by the validator test harness. Use `./scripts/test-comprehensive.sh` to run Docker-backed integration tests; it will call `scripts/install-docker.sh` if Docker or Compose are missing (unless `PLATFORM_TEST_DOCKER_MODE=skip`).
+
+---
+
 ## Creating a Challenge Crate
 
 ### 1. Project Structure
