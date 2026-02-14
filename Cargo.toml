@@ -17,6 +17,24 @@ members = [
     "bins/utils",
     "tests",
 ]
+    "crates/wasm-runtime-interface",
+members = [
+    "crates/core",
+    "crates/storage",
+    "crates/distributed-storage",
+    "crates/challenge-sdk",
+    "crates/challenge-registry",
+    "crates/epoch",
+    "crates/bittensor-integration",
+    "crates/subnet-manager",
+    "crates/rpc-server",
+    "crates/challenge-orchestrator",
+    "crates/secure-container-runtime",
+    "crates/p2p-consensus",
+    "bins/validator-node",
+    "bins/utils",
+    "tests",
+]
 # Note: Challenges are in separate repositories and import platform-challenge-sdk as a git dependency
 # Note: WASM runtime removed - updates via git, version checked at handshake
 # Note: P2P-only architecture - no centralized platform-server
