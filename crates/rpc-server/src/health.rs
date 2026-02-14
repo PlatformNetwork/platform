@@ -24,18 +24,18 @@ pub enum HealthStatus {
     /// Component is unhealthy
     Unhealthy,
     /// Component status is unknown
+    #[default]
     Unknown,
 }
-    #[default]
 
 /// Readiness status for traffic handling
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-    #[default]
 #[serde(rename_all = "lowercase")]
 pub enum ReadinessStatus {
     /// Ready to accept traffic
     Ready,
     /// Not ready (initializing, draining, etc.)
+    #[default]
     NotReady,
     /// Draining - finishing current work, not accepting new
     Draining,
