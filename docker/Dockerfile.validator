@@ -4,13 +4,25 @@
 # ===== Build Stage =====
 FROM rust:1.92-bookworm as builder
 
+ARG PLATFORM_NIGHTLY_RUSTFLAGS=""
+ARG PLATFORM_LINKER_RUSTFLAGS=""
+ARG INSTALL_FAST_LINKER=auto
+ENV PLATFORM_NIGHTLY_RUSTFLAGS=${PLATFORM_NIGHTLY_RUSTFLAGS}
+ENV PLATFORM_LINKER_RUSTFLAGS=${PLATFORM_LINKER_RUSTFLAGS}
+ENV INSTALL_FAST_LINKER=${INSTALL_FAST_LINKER}
+
 WORKDIR /app
 
 # Install dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
+RUN apt-get update \
+    && apt-get install -y \
+        pkg-config \
+        libssl-dev \
+        protobuf-compiler \
+        lld \
+    && if [ "$INSTALL_FAST_LINKER" = "mold" ]; then \
+        apt-get install -y mold; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace files
