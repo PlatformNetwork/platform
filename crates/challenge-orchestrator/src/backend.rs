@@ -28,7 +28,7 @@ use secure_container_runtime::{
 };
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Default broker socket path
 pub const DEFAULT_BROKER_SOCKET: &str = "/var/run/platform/broker.sock";
@@ -490,34 +490,17 @@ pub async fn create_backend() -> anyhow::Result<Box<dyn ContainerBackend>> {
                 info!("Using secure container broker (production mode)");
                 Ok(Box::new(secure))
             } else {
-                warn!(
-                    "Secure backend reported as available but failed to initialize; falling back to Docker"
-                );
-                create_docker_fallback_backend().await
+                let default_socket = default_broker_socket_path();
+                Err(anyhow::anyhow!(
+                    "Secure container broker is unavailable. Start broker at {} or set CONTAINER_BROKER_SOCKET.",
+                    default_socket
+                ))
             }
         }
-        BackendMode::Fallback => create_docker_fallback_backend().await,
-    }
-}
-
-async fn create_docker_fallback_backend() -> anyhow::Result<Box<dyn ContainerBackend>> {
-    warn!("Broker not available. Attempting Docker fallback...");
-    warn!("This should only happen in local development!");
-    warn!("Set DEVELOPMENT_MODE=true to suppress this warning, or start the broker.");
-
-    match DirectDockerBackend::new().await {
-        Ok(direct) => {
-            warn!("Using direct Docker - NOT RECOMMENDED FOR PRODUCTION");
-            Ok(Box::new(direct))
-        }
-        Err(e) => {
-            error!("Cannot connect to Docker: {}", e);
-            error!("For production: Start the container-broker service");
-            error!("For development: Set DEVELOPMENT_MODE=true and ensure Docker is running");
+        BackendMode::Unavailable => {
             let default_socket = default_broker_socket_path();
             Err(anyhow::anyhow!(
-                "No container backend available. \
-                 Start broker at {} or set DEVELOPMENT_MODE=true for local Docker",
+                "No container backend available. Start broker at {} or set DEVELOPMENT_MODE=true for local Docker.",
                 default_socket
             ))
         }
@@ -528,7 +511,7 @@ async fn create_docker_fallback_backend() -> anyhow::Result<Box<dyn ContainerBac
 pub enum BackendMode {
     Development,
     Secure,
-    Fallback,
+    Unavailable,
 }
 
 pub fn select_backend_mode() -> BackendMode {
@@ -537,7 +520,7 @@ pub fn select_backend_mode() -> BackendMode {
     } else if SecureBackend::is_available() {
         BackendMode::Secure
     } else {
-        BackendMode::Fallback
+        BackendMode::Unavailable
     }
 }
 
@@ -660,13 +643,13 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_select_backend_mode_falls_back_without_broker() {
+    fn test_select_backend_mode_unavailable_without_broker() {
         reset_env();
         let dir = tempdir().expect("temp dir");
         let missing_socket = dir.path().join("missing.sock");
         std::env::set_var(BROKER_SOCKET_OVERRIDE_ENV, &missing_socket);
 
-        assert_eq!(select_backend_mode(), BackendMode::Fallback);
+        assert_eq!(select_backend_mode(), BackendMode::Unavailable);
 
         reset_env();
     }
@@ -903,34 +886,18 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_create_backend_falls_back_when_secure_missing() {
+    async fn test_create_backend_reports_error_without_broker() {
         reset_env();
         let dir = tempdir().expect("temp dir");
         let missing_socket = dir.path().join("missing.sock");
         std::env::set_var(BROKER_SOCKET_OVERRIDE_ENV, &missing_socket);
-        DirectDockerBackend::set_test_result(Ok(DirectDockerBackend::with_docker(
-            RecordingChallengeDocker::default(),
-        )));
 
-        let backend = create_backend().await.expect("fallback backend");
-        backend
-            .pull_image("ghcr.io/platformnetwork/fallback:v1")
-            .await
-            .unwrap();
-
-        reset_env();
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_create_docker_fallback_backend_reports_error() {
-        reset_env();
-        DirectDockerBackend::set_test_result(Err(anyhow::anyhow!("boom")));
-        let err = match create_docker_fallback_backend().await {
+        let err = match create_backend().await {
             Ok(_) => panic!("expected error"),
             Err(err) => err,
         };
         assert!(err.to_string().contains("No container backend available"));
+
         reset_env();
     }
 

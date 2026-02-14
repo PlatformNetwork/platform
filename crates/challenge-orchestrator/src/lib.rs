@@ -21,7 +21,7 @@
 //! Priority order:
 //! 1. `DEVELOPMENT_MODE=true` -> Direct Docker (local dev only)
 //! 2. Broker socket exists -> Secure broker (production default)
-//! 3. No broker + not dev mode -> Fallback to Docker with warnings
+//! 3. No broker + not dev mode -> Error (production requires broker)
 //!
 //! Default broker socket: `/var/run/platform/broker.sock`
 

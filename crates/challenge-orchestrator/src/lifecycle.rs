@@ -17,7 +17,7 @@ use tracing::{error, info};
 /// Manages the lifecycle of challenge containers, retaining both the live
 /// container handles and the configs needed to recreate them during restarts.
 pub struct LifecycleManager {
-    docker: Box<dyn ChallengeDocker>,
+    docker: Option<Box<dyn ChallengeDocker>>,
     challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>,
     configs: Arc<RwLock<HashMap<ChallengeId, ChallengeContainerConfig>>>,
 }
@@ -27,22 +27,42 @@ impl LifecycleManager {
         docker: impl ChallengeDocker + 'static,
         challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>,
     ) -> Self {
+        Self::new_with_dev_docker(Some(Box::new(docker)), challenges)
+    }
+
+    pub fn new_with_dev_docker(
+        docker: Option<Box<dyn ChallengeDocker>>,
+        challenges: Arc<RwLock<HashMap<ChallengeId, ChallengeInstance>>>,
+    ) -> Self {
+        let docker = if crate::backend::is_development_mode() {
+            docker
+        } else {
+            None
+        };
+
         Self {
-            docker: Box::new(docker),
+            docker,
             challenges,
             configs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
+    fn docker(&self) -> anyhow::Result<&dyn ChallengeDocker> {
+        self.docker.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("LifecycleManager docker backend is disabled outside DEVELOPMENT_MODE")
+        })
+    }
+
     /// Add a challenge configuration (will start container)
     pub async fn add(&mut self, config: ChallengeContainerConfig) -> anyhow::Result<()> {
         let challenge_id = config.challenge_id;
+        let docker = self.docker()?;
 
         // Pull image first
-        self.docker.pull_image(&config.docker_image).await?;
+        docker.pull_image(&config.docker_image).await?;
 
         // Start container
-        let instance = self.docker.start_challenge(&config).await?;
+        let instance = docker.start_challenge(&config).await?;
 
         // Store config and instance
         self.configs.write().insert(challenge_id, config);
@@ -55,6 +75,7 @@ impl LifecycleManager {
     /// Update a challenge (new image version)
     pub async fn update(&mut self, config: ChallengeContainerConfig) -> anyhow::Result<()> {
         let challenge_id = config.challenge_id;
+        let docker = self.docker()?;
 
         // Stop existing container - get container_id first, then release lock before await
         let container_id = self
@@ -63,15 +84,15 @@ impl LifecycleManager {
             .get(&challenge_id)
             .map(|i| i.container_id.clone());
         if let Some(container_id) = container_id {
-            self.docker.stop_container(&container_id).await?;
-            self.docker.remove_container(&container_id).await?;
+            docker.stop_container(&container_id).await?;
+            docker.remove_container(&container_id).await?;
         }
 
         // Pull new image
-        self.docker.pull_image(&config.docker_image).await?;
+        docker.pull_image(&config.docker_image).await?;
 
         // Start new container
-        let instance = self.docker.start_challenge(&config).await?;
+        let instance = docker.start_challenge(&config).await?;
 
         // Update config and instance
         self.configs.write().insert(challenge_id, config);
@@ -83,11 +104,13 @@ impl LifecycleManager {
 
     /// Remove a challenge
     pub async fn remove(&mut self, challenge_id: ChallengeId) -> anyhow::Result<()> {
+        let docker = self.docker()?;
+
         // Remove instance and get container_id before await
         let instance = self.challenges.write().remove(&challenge_id);
         if let Some(instance) = instance {
-            self.docker.stop_container(&instance.container_id).await?;
-            self.docker.remove_container(&instance.container_id).await?;
+            docker.stop_container(&instance.container_id).await?;
+            docker.remove_container(&instance.container_id).await?;
         }
 
         self.configs.write().remove(&challenge_id);
@@ -264,6 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_restart_unhealthy_restarts_only_unhealthy() {
+        std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
         let mut manager =
             LifecycleManager::new(mock.clone(), Arc::new(RwLock::new(HashMap::new())));
@@ -318,10 +342,13 @@ mod tests {
         assert!(!ops
             .iter()
             .any(|op| op == &format!("stop:{healthy_container_id}")));
+
+        std::env::remove_var("DEVELOPMENT_MODE");
     }
 
     #[tokio::test]
     async fn test_sync_handles_add_update_remove() {
+        std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
         let challenges = Arc::new(RwLock::new(HashMap::new()));
         let mut manager = LifecycleManager::new(mock.clone(), challenges);
@@ -387,10 +414,13 @@ mod tests {
         assert!(ops.iter().any(|op| op == "remove:container-update-old"));
         assert!(ops.iter().any(|op| op == "stop:container-remove-old"));
         assert!(ops.iter().any(|op| op == "remove:container-remove-old"));
+
+        std::env::remove_var("DEVELOPMENT_MODE");
     }
 
     #[tokio::test]
     async fn test_add_records_config_and_instance_state() {
+        std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
         let challenges = Arc::new(RwLock::new(HashMap::new()));
         let mut manager = LifecycleManager::new(mock.clone(), challenges);
@@ -405,10 +435,13 @@ mod tests {
         let ops = mock.operations();
         assert!(ops.contains(&format!("pull:{}", config.docker_image)));
         assert!(ops.contains(&format!("start:{}", challenge_id)));
+
+        std::env::remove_var("DEVELOPMENT_MODE");
     }
 
     #[tokio::test]
     async fn test_stop_all_removes_every_challenge() {
+        std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
         let challenges = Arc::new(RwLock::new(HashMap::new()));
         let mut manager = LifecycleManager::new(mock.clone(), challenges);
@@ -456,6 +489,23 @@ mod tests {
         assert!(ops.contains(&"remove:container-first".to_string()));
         assert!(ops.contains(&"stop:container-second".to_string()));
         assert!(ops.contains(&"remove:container-second".to_string()));
+
+        std::env::remove_var("DEVELOPMENT_MODE");
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_manager_disabled_outside_dev_mode() {
+        std::env::remove_var("DEVELOPMENT_MODE");
+        let mock = MockDocker::default();
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut manager = LifecycleManager::new(mock, challenges);
+        let challenge_id = ChallengeId::new();
+        let config = sample_config(challenge_id, "ghcr.io/org/add:v1");
+
+        let err = manager.add(config).await.expect_err("expected error");
+        assert!(err
+            .to_string()
+            .contains("LifecycleManager docker backend is disabled"));
     }
 
     #[derive(Clone, Default)]
