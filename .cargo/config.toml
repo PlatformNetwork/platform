@@ -6,8 +6,19 @@ jobs = "default"
 # Optional flags gated by environment variables.
 # PLATFORM_NIGHTLY_RUSTFLAGS: nightly-only parallel rustc flags (2023-11-09 blog).
 #   Example: PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
-# PLATFORM_LINKER_RUSTFLAGS: fast linker selection (mold or lld) when installed.
+# PLATFORM_FAST_LINKER_RUSTFLAGS: fast linker defaults for Linux (mold or lld).
+#   Example: PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+#   Example: PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+# PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN: fast linker defaults for macOS (lld or zld).
+#   Example: PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=lld"
+#   Example: PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=zld"
+# PLATFORM_LINKER_RUSTFLAGS: explicit fast linker flags (overrides defaults).
 #   Example: PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 #   Example: PLATFORM_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+# PLATFORM_LINKER_RUSTFLAGS_DARWIN: explicit fast linker flags for macOS.
+#   Example: PLATFORM_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=lld"
+#   Example: PLATFORM_LINKER_RUSTFLAGS_DARWIN="-C link-arg=-fuse-ld=zld"
 # RUSTFLAGS is composed from the env-gated values above.
-RUSTFLAGS = { value = "${PLATFORM_NIGHTLY_RUSTFLAGS} ${PLATFORM_LINKER_RUSTFLAGS}", force = false }
+PLATFORM_LINKER_RUSTFLAGS = { value = "${PLATFORM_FAST_LINKER_RUSTFLAGS}", force = false }
+PLATFORM_LINKER_RUSTFLAGS_DARWIN = { value = "${PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN}", force = false }
+RUSTFLAGS = { value = "${PLATFORM_NIGHTLY_RUSTFLAGS} ${PLATFORM_LINKER_RUSTFLAGS} ${PLATFORM_LINKER_RUSTFLAGS_DARWIN}", force = false }
