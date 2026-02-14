@@ -1027,15 +1027,19 @@ mod tests {
             .expect("put 1 failed");
 
         // Should succeed with correct version
-        let mut options = PutOptions::default();
-        options.expected_version = Some(1);
+        let options = PutOptions {
+            expected_version: Some(1),
+            ..Default::default()
+        };
 
         let result = storage.put(key.clone(), b"v2".to_vec(), options).await;
         assert!(result.is_ok());
 
         // Should fail with wrong version
-        let mut options = PutOptions::default();
-        options.expected_version = Some(1); // Still expecting 1, but it's now 2
+        let options = PutOptions {
+            expected_version: Some(1), // Still expecting 1, but it's now 2
+            ..Default::default()
+        };
 
         let result = storage.put(key.clone(), b"v3".to_vec(), options).await;
         assert!(matches!(result, Err(StorageError::Conflict(_))));

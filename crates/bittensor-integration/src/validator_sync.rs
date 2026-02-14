@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(result.total, 1);
 
         let guard = state.read();
-        assert!(guard.validators.get(&remove_hotkey).is_none());
+        assert!(!guard.validators.contains_key(&remove_hotkey));
         let updated = guard.validators.get(&keep_hotkey).unwrap();
         assert_eq!(updated.stake, Stake::new(3_000_000_000));
         assert!(!updated.is_active);

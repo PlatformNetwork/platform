@@ -876,8 +876,10 @@ mod tests {
 
     #[test]
     fn test_persisted_commit_state_round_trip() {
-        let mut state = PersistedCommitState::default();
-        state.committed_epoch = Some(5);
+        let mut state = PersistedCommitState {
+            committed_epoch: Some(5),
+            ..Default::default()
+        };
         state
             .pending_mechanism_commits
             .insert(1, sample_pending_mechanism_commit());
@@ -904,8 +906,10 @@ mod tests {
 
     #[test]
     fn test_new_epoch_clears_old_commits() {
-        let mut state = PersistedCommitState::default();
-        state.committed_epoch = Some(1);
+        let mut state = PersistedCommitState {
+            committed_epoch: Some(1),
+            ..Default::default()
+        };
         state
             .pending_mechanism_commits
             .insert(1, sample_pending_mechanism_commit());
@@ -919,8 +923,10 @@ mod tests {
 
     #[test]
     fn test_new_epoch_same_epoch_preserves_commits() {
-        let mut state = PersistedCommitState::default();
-        state.committed_epoch = Some(7);
+        let mut state = PersistedCommitState {
+            committed_epoch: Some(7),
+            ..Default::default()
+        };
         state
             .pending_mechanism_commits
             .insert(1, sample_pending_mechanism_commit());
@@ -956,8 +962,10 @@ mod tests {
 
     #[test]
     fn test_has_commits_for_epoch() {
-        let mut state = PersistedCommitState::default();
-        state.committed_epoch = Some(3);
+        let mut state = PersistedCommitState {
+            committed_epoch: Some(3),
+            ..Default::default()
+        };
         state
             .pending_mechanism_commits
             .insert(1, sample_pending_mechanism_commit());

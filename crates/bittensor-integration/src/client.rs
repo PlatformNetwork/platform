@@ -231,7 +231,8 @@ mod tests {
         let mut client = SubtensorClient::new(BittensorConfig::local(4));
         client.set_uid_overrides(vec![("hk".to_string(), 11)]);
 
-        let pairs = client.get_uids_for_hotkeys(&vec!["hk".to_string(), "unknown".to_string()]);
+        let pairs =
+            client.get_uids_for_hotkeys(&["hk".to_string(), "unknown".to_string()]);
 
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0], ("hk".to_string(), 11));

@@ -52,7 +52,7 @@ mod mock_metagraph_tests {
 
         // Verify validator 0
         let v0 = metagraph.neurons.get(&0).expect("validator 0");
-        assert_eq!(v0.stake, 1000_000_000_000); // 1000 TAO
+        assert_eq!(v0.stake, 1_000_000_000_000); // 1000 TAO
         assert_eq!(v0.root_stake, 500_000_000_000); // 500 TAO
 
         // Verify validator 1
@@ -89,7 +89,7 @@ mod mock_metagraph_tests {
             assert_eq!(v.uid, i as u64);
             let stake_tao = v.stake as f64 / 1_000_000_000.0;
             assert!(
-                stake_tao >= 100.0 && stake_tao <= 1000.0,
+                (100.0..=1000.0).contains(&stake_tao),
                 "Validator {} stake {} TAO out of range",
                 i,
                 stake_tao
@@ -229,8 +229,8 @@ mod mock_metagraph_tests {
         let v0_t1 = metagraph_t1.neurons.get(&0).expect("validator at t1");
         let v0_t2 = metagraph_t2.neurons.get(&0).expect("validator at t2");
 
-        assert_eq!(v0_t1.stake, 1000_000_000_000);
-        assert_eq!(v0_t2.stake, 2000_000_000_000);
+        assert_eq!(v0_t1.stake, 1_000_000_000_000);
+        assert_eq!(v0_t2.stake, 2_000_000_000_000);
     }
 
     #[test]

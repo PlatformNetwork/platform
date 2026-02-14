@@ -460,7 +460,7 @@ mod tests {
         let neuron0 = metagraph.neurons.get(&0).expect("neuron 0 exists");
         let neuron1 = metagraph.neurons.get(&1).expect("neuron 1 exists");
 
-        assert_eq!(neuron0.stake, 1000_000_000_000);
+        assert_eq!(neuron0.stake, 1_000_000_000_000);
         assert_eq!(neuron1.stake, 500_000_000_000);
     }
 
@@ -473,7 +473,7 @@ mod tests {
 
         assert_eq!(metagraph.n, 2);
 
-        for (_, neuron) in &metagraph.neurons {
+        for neuron in metagraph.neurons.values() {
             assert_eq!(neuron.stake, 0);
         }
     }
@@ -499,7 +499,7 @@ mod tests {
             assert!(v.validator_permit);
             // Stake should be between 100 and 1000 TAO
             let stake_tao = v.stake as f64 / 1_000_000_000.0;
-            assert!(stake_tao >= 100.0 && stake_tao <= 1000.0);
+            assert!((100.0..=1000.0).contains(&stake_tao));
         }
     }
 
@@ -564,7 +564,7 @@ mod tests {
 
         assert_eq!(neuron_info.uid, 5);
         assert_eq!(neuron_info.netuid, 100);
-        assert_eq!(neuron_info.stake, 1000_000_000_000);
+        assert_eq!(neuron_info.stake, 1_000_000_000_000);
         assert_eq!(neuron_info.root_stake, 500_000_000_000);
         assert!(neuron_info.validator_permit);
         assert!(neuron_info.active);
