@@ -255,6 +255,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::Utc;
+    use serial_test::serial;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -286,6 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_restart_unhealthy_restarts_only_unhealthy() {
         std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
@@ -347,6 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_sync_handles_add_update_remove() {
         std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
@@ -419,6 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_add_records_config_and_instance_state() {
         std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
@@ -440,6 +444,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_stop_all_removes_every_challenge() {
         std::env::set_var("DEVELOPMENT_MODE", "true");
         let mock = MockDocker::default();
@@ -494,6 +499,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_lifecycle_manager_disabled_outside_dev_mode() {
         std::env::remove_var("DEVELOPMENT_MODE");
         let mock = MockDocker::default();
