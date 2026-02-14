@@ -5,15 +5,15 @@
 # Shared environment defaults and preflight checks for test entrypoints.
 #
 # Environment variables:
-#   PLATFORM_TEST_ROOT           Repo root (auto-detected)
-#   PLATFORM_TEST_ARTIFACTS_DIR  Base artifacts directory
-#   PLATFORM_TEST_LOG_DIR        Log output directory
-#   PLATFORM_TEST_TMP_BASE       Base temp directory
-#   PLATFORM_TEST_RUN_DIR        Specific run directory
-#   PLATFORM_TEST_COMPOSE_FILE   Docker compose file path
-#   PLATFORM_TEST_COMPOSE_PROJECT Compose project name
-#   PLATFORM_TEST_NETWORK        Docker network name
-#   PLATFORM_TEST_DOCKER_MODE    auto|skip|required
+#   PLATFORM_TEST_ROOT             Repo root (auto-detected)
+#   PLATFORM_TEST_ARTIFACTS_DIR    Base artifacts directory
+#   PLATFORM_TEST_LOG_DIR          Log output directory
+#   PLATFORM_TEST_TMP_BASE         Base temp directory
+#   PLATFORM_TEST_RUN_DIR          Specific run directory
+#   PLATFORM_TEST_COMPOSE_FILE     Docker compose file path
+#   PLATFORM_TEST_COMPOSE_PROJECT  Compose project name
+#   PLATFORM_TEST_NETWORK          Docker network name
+#   PLATFORM_TEST_DOCKER_MODE      auto|skip|required
 #   PLATFORM_TEST_PRESERVE_RUN_DIR true to skip cleanup
 # =============================================================================
 
@@ -24,22 +24,6 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 log_info() {
-}
-
-platform_install_docker_if_needed() {
-    if [ "${PLATFORM_TEST_DOCKER_MODE}" = "skip" ]; then
-        return 0
-    fi
-
-    if platform_has_docker && platform_has_compose; then
-        return 0
-    fi
-
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    log_info "Docker/Compose missing; attempting installation"
-    "${script_dir}/install-docker.sh"
-}
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
@@ -112,8 +96,39 @@ platform_require_command() {
 platform_has_docker() {
     command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
-platform_has_docker() {
-    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+
+platform_has_compose() {
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        return 0
+    fi
+
+    command -v docker-compose >/dev/null 2>&1
+}
+
+platform_install_docker_if_needed() {
+    if [ "${PLATFORM_TEST_DOCKER_MODE}" = "skip" ]; then
+        log_skip "Docker checks disabled (PLATFORM_TEST_DOCKER_MODE=skip)"
+        return 0
+    fi
+
+    if platform_has_docker && platform_has_compose; then
+        return 0
+    fi
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    log_info "Docker/Compose missing; attempting installation via scripts/install-docker.sh"
+    "${script_dir}/install-docker.sh"
+
+    if ! platform_has_docker; then
+        log_failure "Docker daemon is still unavailable after installation"
+        return 1
+    fi
+
+    if ! platform_has_compose; then
+        log_failure "Docker Compose is still unavailable after installation"
+        return 1
+    fi
 }
 
 platform_require_docker() {
@@ -121,15 +136,6 @@ platform_require_docker() {
         log_failure "Docker daemon not available"
         return 1
     fi
-}
-
-platform_has_compose() {
-platform_has_compose() {
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        return 0
-    fi
-
-    command -v docker-compose >/dev/null 2>&1
 }
 
 platform_require_compose() {
@@ -159,13 +165,20 @@ platform_should_run_docker() {
             return 1
             ;;
         required)
+            platform_install_docker_if_needed || return 1
             platform_require_docker
             ;;
         auto)
+            if ! platform_has_docker || ! platform_has_compose; then
+                platform_install_docker_if_needed || return 1
+            fi
             platform_has_docker
             ;;
         *)
             log_warning "Unknown PLATFORM_TEST_DOCKER_MODE=${PLATFORM_TEST_DOCKER_MODE}, defaulting to auto"
+            if ! platform_has_docker || ! platform_has_compose; then
+                platform_install_docker_if_needed || return 1
+            fi
             platform_has_docker
             ;;
     esac

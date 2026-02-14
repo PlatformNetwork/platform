@@ -2,7 +2,7 @@
 # =============================================================================
 # Platform Standard Test Suite
 # =============================================================================
-# Entry point for local/unit test runs.
+# Entry point for local/unit test runs. Docker is not required.
 # =============================================================================
 
 set -euo pipefail
@@ -17,8 +17,6 @@ SKIPPED=0
 
 platform_test_init
 trap platform_cleanup_run_dir EXIT
-platform_install_docker_if_needed
-
 log_info "=== Platform Test Suite ==="
 log_info "Artifacts: ${PLATFORM_TEST_ARTIFACTS_DIR}"
 log_info "Run dir: ${PLATFORM_TEST_RUN_DIR}"

@@ -4,6 +4,7 @@
 # =============================================================================
 # Tests multiple validators in a P2P network without Docker build issues
 # Uses locally built binary
+# Note: This script does not require Docker; see scripts/test-comprehensive.sh
 # =============================================================================
 
 set -euo pipefail
@@ -12,6 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../scripts/test-harness.sh
 source "${SCRIPT_DIR}/../../scripts/test-harness.sh"
 
+platform_test_init
+trap platform_cleanup_run_dir EXIT
 platform_test_init
 trap platform_cleanup_run_dir EXIT
 
