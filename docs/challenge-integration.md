@@ -10,6 +10,22 @@ Platform uses a modular challenge architecture where each challenge:
 - Has its own state persistence
 - Supports hot-reload without losing evaluation progress
 
+Challenge outputs feed directly into validator consensus. The validator network is fully peer-to-peer: challenge scores and derived weights are exchanged only via libp2p, with no centralized relays.
+
+---
+
+## P2P-Only Consensus Inputs
+
+Validators evaluate challenges locally and publish weight commitments over the P2P mesh. Each validator’s voting power is proportional to its Bittensor stake, so higher-stake validators have higher influence in the aggregated weights.
+
+1. **Stake-weighted validator set**: Active validators are derived from the metagraph, with voting power proportional to stake.
+2. **Commit phase**: Validators broadcast commitments to their challenge weight vectors over libp2p.
+3. **Reveal phase**: Validators reveal the weight vectors that match their commitments.
+4. **Epoch boundary aggregation**: At each epoch boundary, weights are aggregated with stake weighting to produce the canonical weight matrix.
+5. **Consensus finalization**: Validators finalize the epoch by agreeing on the aggregated weights and resulting state hash via P2P.
+
+These aggregated weights are submitted to Bittensor as the subnet’s consensus output.
+
 ## Architecture
 
 ```text

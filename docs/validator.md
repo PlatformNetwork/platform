@@ -12,6 +12,30 @@ This guide explains how to run a Platform validator node on the Bittensor networ
 
 ---
 
+## P2P-Only Architecture
+
+Platform validators run as a fully peer-to-peer network with no centralized fallback services. All validator-to-validator traffic happens over libp2p on port 9000, and consensus data is exchanged directly between peers.
+
+- **Peer discovery**: Validators connect to the libp2p mesh and maintain a live peer set.
+- **State sync**: Checkpoints, block proposals, and commits are shared only through the P2P network.
+- **No central coordinator**: There are no HTTP relays or centralized aggregators for consensus.
+- **Bittensor anchoring**: The metagraph provides stake and identity, but consensus payloads flow through P2P.
+
+---
+
+## Weight-Based Consensus Flow
+
+Consensus is driven by validator weights derived from challenge evaluations. The validator set is stake-weighted, meaning higher-stake hotkeys carry more voting power when aggregating challenge results.
+
+1. **Stake-weighted validator set**: Each validator’s voting power is proportional to its Bittensor stake in the metagraph.
+2. **Challenge evaluation**: Validators execute the active challenges, producing raw scores for miners or submissions.
+3. **Commit-reveal weights**: Validators commit their weight vectors during the commit phase and reveal them in the reveal phase, preventing copycat behavior.
+4. **Epoch boundary aggregation**: At the end of each epoch, revealed weights are aggregated using stake weighting to compute the canonical weight matrix.
+5. **Consensus agreement**: Validators finalize the epoch by agreeing on the aggregated weights and resulting state hash over the P2P mesh.
+6. **Weight submission**: The finalized weight matrix is submitted back to Bittensor as the subnet consensus output.
+
+---
+
 ## Quick start for validators
 
 That's all you need to do:
