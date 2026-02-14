@@ -36,6 +36,20 @@
 
 ---
 
+## Rust Toolchain
+
+This repository targets the Rust 2021 edition and defaults to the stable toolchain via `rust-toolchain.toml`.
+To opt into nightly (for parallel rustc or other nightly-only features), use one of the following:
+
+- `RUSTUP_TOOLCHAIN=nightly cargo build`
+- `cargo +nightly build`
+- `rustup override set nightly` inside the repo
+
+If you prefer explicit file selection, temporarily copy or symlink `rust-toolchain-nightly.toml` to
+`rust-toolchain.toml`. Stable builds do not enable nightly-only flags globally.
+
+---
+
 ## System Overview
 
 Platform uses a fully decentralized P2P architecture where validators communicate directly via libp2p gossipsub and store data in a distributed hash table (DHT).
