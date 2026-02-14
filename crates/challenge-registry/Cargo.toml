@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Challenge registry and lifecycle management for Platform Network"
 
 [dependencies]
+wasm-runtime-interface = { path = "../wasm-runtime-interface" }
 platform-core = { path = "../core" }
 platform-challenge-sdk = { path = "../challenge-sdk" }
 platform-storage = { path = "../storage" }

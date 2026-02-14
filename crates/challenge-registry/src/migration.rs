@@ -26,6 +26,15 @@ pub enum MigrationStatus {
     RolledBack,
 }
 
+/// Migration metadata describing schema changes
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MigrationMetadata {
+    /// Registry schema version when migration starts
+    pub registry_schema_version: u32,
+    /// Whether WASM module metadata was introduced
+    pub adds_wasm_module_metadata: bool,
+}
+
 /// A single migration step
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MigrationStep {
@@ -41,6 +50,9 @@ pub struct MigrationStep {
     pub reversible: bool,
     /// Estimated duration in seconds
     pub estimated_duration_secs: u64,
+    /// Optional metadata describing schema changes
+    #[serde(default)]
+    pub metadata: Option<MigrationMetadata>,
 }
 
 impl MigrationStep {
@@ -58,6 +70,7 @@ impl MigrationStep {
             to_version: to,
             reversible: true,
             estimated_duration_secs: 60,
+            metadata: None,
         }
     }
 
@@ -70,6 +83,12 @@ impl MigrationStep {
     /// Set estimated duration
     pub fn with_duration(mut self, secs: u64) -> Self {
         self.estimated_duration_secs = secs;
+        self
+    }
+
+    /// Attach migration metadata
+    pub fn with_metadata(mut self, metadata: MigrationMetadata) -> Self {
+        self.metadata = Some(metadata);
         self
     }
 }
@@ -253,6 +272,10 @@ impl ChallengeMigration {
                     to_version.clone(),
                 )
                 .irreversible()
+                .with_metadata(MigrationMetadata {
+                    registry_schema_version: 2,
+                    adds_wasm_module_metadata: true,
+                })
                 .with_duration(300),
             );
         } else if from_version.minor != to_version.minor {
@@ -266,6 +289,10 @@ impl ChallengeMigration {
                     from_version.clone(),
                     to_version.clone(),
                 )
+                .with_metadata(MigrationMetadata {
+                    registry_schema_version: 2,
+                    adds_wasm_module_metadata: true,
+                })
                 .with_duration(60),
             );
         } else if from_version.patch != to_version.patch {
@@ -279,6 +306,10 @@ impl ChallengeMigration {
                     from_version,
                     to_version,
                 )
+                .with_metadata(MigrationMetadata {
+                    registry_schema_version: 2,
+                    adds_wasm_module_metadata: true,
+                })
                 .with_duration(10),
             );
         }

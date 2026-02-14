@@ -11,6 +11,37 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use wasm_runtime_interface::NetworkPolicy;
+
+/// WASM module metadata for a challenge
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WasmModuleMetadata {
+    /// Hash of the WASM module
+    pub module_hash: String,
+    /// Location of the WASM module (URL or path)
+    pub module_location: String,
+    /// Entrypoint function name
+    pub entrypoint: String,
+    /// Network policy for WASM execution
+    #[serde(default)]
+    pub network_policy: NetworkPolicy,
+}
+
+impl WasmModuleMetadata {
+    pub fn new(
+        module_hash: String,
+        module_location: String,
+        entrypoint: String,
+        network_policy: NetworkPolicy,
+    ) -> Self {
+        Self {
+            module_hash,
+            module_location,
+            entrypoint,
+            network_policy,
+        }
+    }
+}
 
 /// Entry for a registered challenge
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,6 +56,9 @@ pub struct ChallengeEntry {
     pub docker_image: String,
     /// HTTP endpoint for evaluation
     pub endpoint: Option<String>,
+    /// WASM module metadata
+    #[serde(default)]
+    pub wasm_module: Option<WasmModuleMetadata>,
     /// Current lifecycle state
     pub lifecycle_state: LifecycleState,
     /// Health status
@@ -46,6 +80,7 @@ impl ChallengeEntry {
             version,
             docker_image,
             endpoint: None,
+            wasm_module: None,
             lifecycle_state: LifecycleState::Registered,
             health_status: HealthStatus::Unknown,
             registered_at: now,
@@ -61,6 +96,11 @@ impl ChallengeEntry {
 
     pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    pub fn with_wasm_module(mut self, wasm_module: WasmModuleMetadata) -> Self {
+        self.wasm_module = Some(wasm_module);
         self
     }
 }
