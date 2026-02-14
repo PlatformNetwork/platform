@@ -147,6 +147,11 @@ pub struct NetworkState {
 }
 
 impl NetworkState {
+    /// Create network state for a single WASM execution.
+    ///
+    /// The policy is validated and then enforced by every host call. All host
+    /// functions share the same counters and audit logger, providing a single
+    /// enforcement surface for HTTP and DNS access.
     pub fn new(
         policy: NetworkPolicy,
         audit_logger: Option<Arc<dyn NetworkAuditLogger>>,
@@ -218,6 +223,11 @@ impl NetworkState {
         &mut self,
         request: HttpRequest,
     ) -> Result<HttpResponse, NetworkError> {
+        if !self.policy.allow_internet {
+            self.audit_denial("http_request denied: network disabled");
+            return Err(NetworkError::NetworkDisabled);
+        }
+
         self.ensure_request_budget()?;
 
         if let Err(e) = self.validate_http_request(&request) {
@@ -277,6 +287,11 @@ impl NetworkState {
     }
 
     pub fn handle_dns_request(&mut self, request: DnsRequest) -> Result<DnsResponse, NetworkError> {
+        if !self.policy.allow_internet {
+            self.audit_denial("dns_lookup denied: network disabled");
+            return Err(NetworkError::NetworkDisabled);
+        }
+
         self.ensure_dns_budget()?;
 
         if let Err(e) = self
@@ -522,21 +537,24 @@ fn handle_http_request(
     resp_ptr: i32,
     resp_len: i32,
 ) -> i32 {
+    let enforcement = "http_request";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host memory read failed");
             return write_result::<HttpResponse>(
                 caller,
                 resp_ptr,
                 resp_len,
                 Err(NetworkError::HttpFailure(err)),
-            )
+            );
         }
     };
 
     let request = match bincode::deserialize::<HttpRequest>(&request_bytes) {
         Ok(req) => req,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request decode failed");
             return write_result::<HttpResponse>(
                 caller,
                 resp_ptr,
@@ -544,11 +562,14 @@ fn handle_http_request(
                 Err(NetworkError::HttpFailure(format!(
                     "invalid http request payload: {err}"
                 ))),
-            )
+            );
         }
     };
 
     let result = caller.data_mut().network_state.handle_http_request(request);
+    if let Err(ref err) = result {
+        warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request denied");
+    }
     write_result(caller, resp_ptr, resp_len, result)
 }
 
@@ -559,21 +580,24 @@ fn handle_http_get(
     resp_ptr: i32,
     resp_len: i32,
 ) -> i32 {
+    let enforcement = "http_get";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host memory read failed");
             return write_result::<HttpResponse>(
                 caller,
                 resp_ptr,
                 resp_len,
                 Err(NetworkError::HttpFailure(err)),
-            )
+            );
         }
     };
 
     let request = match bincode::deserialize::<HttpGetRequest>(&request_bytes) {
         Ok(req) => req,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request decode failed");
             return write_result::<HttpResponse>(
                 caller,
                 resp_ptr,
@@ -581,7 +605,7 @@ fn handle_http_get(
                 Err(NetworkError::HttpFailure(format!(
                     "invalid http get payload: {err}"
                 ))),
-            )
+            );
         }
     };
 
@@ -593,6 +617,9 @@ fn handle_http_get(
     };
 
     let result = caller.data_mut().network_state.handle_http_request(request);
+    if let Err(ref err) = result {
+        warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request denied");
+    }
     write_result(caller, resp_ptr, resp_len, result)
 }
 
@@ -603,21 +630,24 @@ fn handle_http_post(
     resp_ptr: i32,
     resp_len: i32,
 ) -> i32 {
+    let enforcement = "http_post";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host memory read failed");
             return write_result::<HttpResponse>(
                 caller,
                 resp_ptr,
                 resp_len,
                 Err(NetworkError::HttpFailure(err)),
-            )
+            );
         }
     };
 
     let request = match bincode::deserialize::<HttpPostRequest>(&request_bytes) {
         Ok(req) => req,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request decode failed");
             return write_result::<HttpResponse>(
                 caller,
                 resp_ptr,
@@ -625,7 +655,7 @@ fn handle_http_post(
                 Err(NetworkError::HttpFailure(format!(
                     "invalid http post payload: {err}"
                 ))),
-            )
+            );
         }
     };
 
@@ -637,6 +667,9 @@ fn handle_http_post(
     };
 
     let result = caller.data_mut().network_state.handle_http_request(request);
+    if let Err(ref err) = result {
+        warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request denied");
+    }
     write_result(caller, resp_ptr, resp_len, result)
 }
 
@@ -647,21 +680,24 @@ fn handle_dns_request(
     resp_ptr: i32,
     resp_len: i32,
 ) -> i32 {
+    let enforcement = "dns_resolve";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host memory read failed");
             return write_result::<DnsResponse>(
                 caller,
                 resp_ptr,
                 resp_len,
                 Err(NetworkError::DnsFailure(err)),
-            )
+            );
         }
     };
 
     let request = match bincode::deserialize::<DnsRequest>(&request_bytes) {
         Ok(req) => req,
         Err(err) => {
+            warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request decode failed");
             return write_result::<DnsResponse>(
                 caller,
                 resp_ptr,
@@ -669,11 +705,14 @@ fn handle_dns_request(
                 Err(NetworkError::DnsFailure(format!(
                     "invalid dns request payload: {err}"
                 ))),
-            )
+            );
         }
     };
 
     let result = caller.data_mut().network_state.handle_dns_request(request);
+    if let Err(ref err) = result {
+        warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request denied");
+    }
     write_result(caller, resp_ptr, resp_len, result)
 }
 

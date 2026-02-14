@@ -1,4 +1,4 @@
-use crate::{NetworkPolicy, NetworkState};
+use crate::{NetworkAuditLogger, NetworkPolicy, NetworkState};
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::info;
@@ -73,39 +73,64 @@ impl Default for RuntimeConfig {
 
 #[derive(Clone)]
 pub struct InstanceConfig {
+    /// Network policy enforced by host functions.
     pub network_policy: NetworkPolicy,
+    /// Optional audit logger for network calls.
+    pub audit_logger: Option<Arc<dyn NetworkAuditLogger>>,
+    /// Wasm memory export name.
     pub memory_export: String,
+    /// Identifier used in audit logs.
     pub challenge_id: String,
+    /// Validator identifier used in audit logs.
     pub validator_id: String,
+    /// Restartable configuration identifier.
+    pub restart_id: String,
+    /// Configuration version for hot-restarts.
+    pub config_version: u64,
 }
 
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
             network_policy: NetworkPolicy::default(),
+            audit_logger: None,
             memory_export: DEFAULT_WASM_MEMORY_NAME.to_string(),
             challenge_id: "unknown".to_string(),
             validator_id: "unknown".to_string(),
+            restart_id: String::new(),
+            config_version: 0,
         }
     }
 }
 
 pub struct RuntimeState {
+    /// Network policy available to host functions.
     pub network_policy: NetworkPolicy,
+    /// Mutable network state enforcing policy.
     pub network_state: NetworkState,
+    /// Wasm memory export name.
     pub memory_export: String,
+    /// Identifier used in audit logs.
     pub challenge_id: String,
+    /// Validator identifier used in audit logs.
     pub validator_id: String,
+    /// Restartable configuration identifier.
+    pub restart_id: String,
+    /// Configuration version for hot-restarts.
+    pub config_version: u64,
     limits: StoreLimits,
 }
 
 impl RuntimeState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         network_policy: NetworkPolicy,
         network_state: NetworkState,
         memory_export: String,
         challenge_id: String,
         validator_id: String,
+        restart_id: String,
+        config_version: u64,
         limits: StoreLimits,
     ) -> Self {
         Self {
@@ -114,6 +139,8 @@ impl RuntimeState {
             memory_export,
             challenge_id,
             validator_id,
+            restart_id,
+            config_version,
             limits,
         }
     }
@@ -180,7 +207,7 @@ impl WasmRuntime {
         limits = limits.instances(self.config.max_instances as usize);
         let network_state = NetworkState::new(
             instance_config.network_policy.clone(),
-            None,
+            instance_config.audit_logger.clone(),
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
         )
@@ -191,6 +218,8 @@ impl WasmRuntime {
             instance_config.memory_export.clone(),
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
+            instance_config.restart_id.clone(),
+            instance_config.config_version,
             limits.build(),
         );
         let mut store = Store::new(&self.engine, runtime_state);
