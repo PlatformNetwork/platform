@@ -15,6 +15,15 @@ env:
   RUSTUP_MAX_RETRIES: 10
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  PLATFORM_TEST_DOCKER_MODE: skip
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

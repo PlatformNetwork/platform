@@ -2,231 +2,175 @@
 # =============================================================================
 # Platform Comprehensive Test Suite
 # =============================================================================
-# Runs all tests including unit tests, integration tests, Docker tests,
-# and multi-validator P2P network tests.
-#
-# Usage:
-#   ./scripts/test-comprehensive.sh
-#
-# Requirements:
-#   - Docker daemon running
-#   - Rust toolchain installed
-#   - Network access for Bittensor integration tests
+# Runs unit, integration, docker, and multi-validator tests.
 # =============================================================================
 
-set -e
+set -euo pipefail
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./test-harness.sh
+source "${SCRIPT_DIR}/test-harness.sh"
 
-# Test result counters
 PASSED=0
 FAILED=0
 SKIPPED=0
 
-# Log functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+platform_test_init
+trap platform_cleanup_run_dir EXIT
 
-log_success() {
-    echo -e "${GREEN}[PASS]${NC} $1"
-    ((PASSED++))
-}
+log_info "============================================================================="
+log_info "                    Platform Comprehensive Test Suite"
+log_info "============================================================================="
+log_info "Artifacts: ${PLATFORM_TEST_ARTIFACTS_DIR}"
+log_info "Run dir: ${PLATFORM_TEST_RUN_DIR}"
+log_info ""
 
-log_failure() {
-    echo -e "${RED}[FAIL]${NC} $1"
-    ((FAILED++))
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_skip() {
-    echo -e "${YELLOW}[SKIP]${NC} $1"
-    ((SKIPPED++))
-}
-
-# Header
-echo "============================================================================="
-echo "                    Platform Comprehensive Test Suite"
-echo "============================================================================="
-echo ""
-date
-echo ""
-
-# =============================================================================
-# Phase 1: Build
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 1: Build (cargo build --release)"
-echo "============================================================================="
-
+log_info "============================================================================="
+log_info "Phase 1: Build (cargo build --release)"
+log_info "============================================================================="
 log_info "Building workspace..."
-if cargo build --release 2>&1; then
+if cargo build --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/build.log"; then
     log_success "Build completed successfully"
 else
     log_failure "Build failed"
     exit 1
 fi
 
-# =============================================================================
-# Phase 2: Unit Tests
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 2: Unit Tests (cargo test --workspace)"
-echo "============================================================================="
-
+log_info "============================================================================="
+log_info "Phase 2: Unit Tests (cargo test --workspace)"
+log_info "============================================================================="
 log_info "Running unit tests..."
-if cargo test --workspace --release 2>&1 | tee /tmp/unit_tests.log; then
-    UNIT_RESULTS=$(grep -E "^test result:" /tmp/unit_tests.log | tail -1)
-    log_success "Unit tests completed: $UNIT_RESULTS"
+if cargo test --workspace --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/unit-tests.log"; then
+    log_success "Unit tests completed"
 else
     log_failure "Unit tests failed"
 fi
 
-# =============================================================================
-# Phase 3: Docker Integration Tests
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 3: Docker Integration Tests"
-echo "============================================================================="
+log_info "============================================================================="
+log_info "Phase 3: Docker Integration Tests"
+log_info "============================================================================="
+if platform_should_run_docker; then
+    if platform_require_compose; then
+        platform_ensure_network
+        log_info "Running secure-container-runtime Docker tests..."
+        if cargo test -p secure-container-runtime --release -- --ignored 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/docker-secure-container.log"; then
+            log_success "Secure container runtime Docker tests passed"
+        else
+            log_failure "Secure container runtime Docker tests failed"
+        fi
 
-# Check Docker availability
-if docker info > /dev/null 2>&1; then
-    log_info "Docker daemon available"
-    
-    # Secure Container Runtime tests
-    log_info "Running secure-container-runtime Docker tests..."
-    if cargo test -p secure-container-runtime --release -- --ignored 2>&1 | tee /tmp/docker_tests.log; then
-        log_success "Secure container runtime Docker tests passed"
+        log_info "Running challenge-orchestrator Docker tests..."
+        if cargo test -p challenge-orchestrator --release -- --ignored 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/docker-orchestrator.log"; then
+            log_success "Challenge orchestrator Docker tests passed"
+        else
+            log_failure "Challenge orchestrator Docker tests failed"
+        fi
     else
-        log_failure "Secure container runtime Docker tests failed"
-    fi
-    
-    # Challenge Orchestrator Docker tests
-    log_info "Running challenge-orchestrator Docker tests..."
-    if cargo test -p challenge-orchestrator --release -- --ignored 2>&1; then
-        log_success "Challenge orchestrator Docker tests passed"
-    else
-        log_failure "Challenge orchestrator Docker tests failed"
+        log_skip "Docker Compose not available"
     fi
 else
     log_skip "Docker not available, skipping Docker tests"
 fi
 
-# =============================================================================
-# Phase 4: Bittensor Integration Tests
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 4: Bittensor Integration Tests"
-echo "============================================================================="
-
+log_info "============================================================================="
+log_info "Phase 4: Bittensor Integration Tests"
+log_info "============================================================================="
 log_info "Running Bittensor integration tests (requires network)..."
-if timeout 120 cargo test -p platform-bittensor --release -- --ignored 2>&1; then
+if timeout 120 cargo test -p platform-bittensor --release -- --ignored 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/bittensor.log"; then
     log_success "Bittensor integration tests passed"
 else
-    log_warning "Bittensor integration tests failed or timed out (may require network)"
+    log_warning "Bittensor integration tests failed or timed out"
 fi
 
-# =============================================================================
-# Phase 5: Security Policy Tests
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 5: Security Policy Tests"
-echo "============================================================================="
-
+log_info "============================================================================="
+log_info "Phase 5: Security Policy Tests"
+log_info "============================================================================="
 log_info "Verifying security policies..."
 
-# Test that Docker socket mounting is blocked
 log_info "Testing Docker socket mount blocking..."
-if cargo test -p secure-container-runtime test_default_policy_blocks_docker_socket --release 2>&1; then
+if cargo test -p secure-container-runtime test_default_policy_blocks_docker_socket --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/policy-docker-socket.log"; then
     log_success "Docker socket mount blocking verified"
 else
     log_failure "Docker socket mount blocking test failed"
 fi
 
-# Test image whitelist
 log_info "Testing image whitelist enforcement..."
-if cargo test -p secure-container-runtime test_strict_policy_blocks_non_whitelisted_images --release 2>&1; then
+if cargo test -p secure-container-runtime test_strict_policy_blocks_non_whitelisted_images --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/policy-image-whitelist.log"; then
     log_success "Image whitelist enforcement verified"
 else
     log_failure "Image whitelist enforcement test failed"
 fi
 
-# Test resource limits
 log_info "Testing resource limit enforcement..."
-if cargo test -p secure-container-runtime test_policy_enforces_resource_limits --release 2>&1; then
+if cargo test -p secure-container-runtime test_policy_enforces_resource_limits --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/policy-resource-limits.log"; then
     log_success "Resource limit enforcement verified"
 else
     log_failure "Resource limit enforcement test failed"
 fi
 
-# =============================================================================
-# Phase 6: P2P Consensus Tests
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 6: P2P Consensus Tests"
-echo "============================================================================="
-
+log_info "============================================================================="
+log_info "Phase 6: P2P Consensus Tests"
+log_info "============================================================================="
 log_info "Running P2P consensus unit tests..."
-if cargo test -p platform-p2p-consensus --release 2>&1 | tee /tmp/p2p_tests.log; then
-    P2P_RESULTS=$(grep -E "^test result:" /tmp/p2p_tests.log | tail -1)
-    log_success "P2P consensus tests: $P2P_RESULTS"
+if cargo test -p platform-p2p-consensus --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/p2p-tests.log"; then
+    log_success "P2P consensus tests completed"
 else
     log_failure "P2P consensus tests failed"
 fi
 
-# =============================================================================
-# Phase 7: Storage Tests
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "Phase 7: Storage Tests"
-echo "============================================================================="
-
+log_info "============================================================================="
+log_info "Phase 7: Storage Tests"
+log_info "============================================================================="
 log_info "Running storage tests..."
-if cargo test -p platform-storage --release 2>&1; then
+if cargo test -p platform-storage --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/storage-tests.log"; then
     log_success "Storage tests passed"
 else
     log_failure "Storage tests failed"
 fi
 
 log_info "Running distributed storage tests..."
-if cargo test -p platform-distributed-storage --release 2>&1; then
+if cargo test -p platform-distributed-storage --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/distributed-storage-tests.log"; then
     log_success "Distributed storage tests passed"
 else
     log_failure "Distributed storage tests failed"
 fi
 
-# =============================================================================
-# Summary
-# =============================================================================
-echo ""
-echo "============================================================================="
-echo "                           Test Summary"
-echo "============================================================================="
-echo ""
-echo -e "  ${GREEN}Passed:${NC}  $PASSED"
-echo -e "  ${RED}Failed:${NC}  $FAILED"
-echo -e "  ${YELLOW}Skipped:${NC} $SKIPPED"
-echo ""
+log_info "============================================================================="
+log_info "Phase 8: Multi-validator Docker Compose"
+log_info "============================================================================="
+if platform_should_run_docker; then
+    if platform_require_compose; then
+        platform_ensure_network
+        log_info "Starting compose stack..."
+        if platform_compose -f "${PLATFORM_TEST_COMPOSE_FILE}" up --build -d 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/compose-up.log"; then
+            log_success "Compose stack started"
+        else
+            log_failure "Compose stack failed to start"
+        fi
 
-if [ $FAILED -eq 0 ]; then
-    echo -e "${GREEN}All tests passed!${NC}"
-    exit 0
+        log_info "Collecting compose logs..."
+        platform_compose -f "${PLATFORM_TEST_COMPOSE_FILE}" logs --no-color 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/compose.log" || true
+
+        log_info "Tearing down compose stack..."
+        platform_compose -f "${PLATFORM_TEST_COMPOSE_FILE}" down -v 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/compose-down.log" || true
+    else
+        log_skip "Docker Compose not available"
+    fi
 else
-    echo -e "${RED}Some tests failed. Please review the output above.${NC}"
-    exit 1
+    log_skip "Docker not available, skipping compose tests"
 fi
+
+log_info "============================================================================="
+log_info "                           Test Summary"
+log_info "============================================================================="
+log_info "Passed: ${PASSED}"
+log_info "Failed: ${FAILED}"
+log_info "Skipped: ${SKIPPED}"
+
+if [ "${FAILED}" -eq 0 ]; then
+    log_success "All tests passed"
+    exit 0
+fi
+
+log_failure "Some tests failed"
+exit 1

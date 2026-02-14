@@ -5,31 +5,39 @@
 # Handles environment variables and starts the validator node
 # =============================================================================
 
-set -e
+set -euo pipefail
 
-# Build command arguments
+HARNESS_PATH="/scripts/test-harness.sh"
+if [ -f "${HARNESS_PATH}" ]; then
+    # shellcheck source=/scripts/test-harness.sh
+    source "${HARNESS_PATH}"
+else
+    log_info() {
+        echo "[INFO] $1"
+    }
+fi
+
 ARGS="--data-dir ${DATA_DIR:-/data}"
 ARGS="$ARGS --listen-addr ${P2P_LISTEN_ADDR:-/ip4/0.0.0.0/tcp/9000}"
 
-if [ -n "$VALIDATOR_SECRET_KEY" ]; then
-    ARGS="$ARGS --secret-key $VALIDATOR_SECRET_KEY"
+if [ -n "${VALIDATOR_SECRET_KEY:-}" ]; then
+    ARGS="$ARGS --secret-key ${VALIDATOR_SECRET_KEY}"
 fi
 
-if [ -n "$NETUID" ]; then
-    ARGS="$ARGS --netuid $NETUID"
+if [ -n "${NETUID:-}" ]; then
+    ARGS="$ARGS --netuid ${NETUID}"
 fi
 
-if [ -n "$BOOTSTRAP_PEERS" ]; then
-    # Split by comma and add each peer
-    IFS=',' read -ra PEERS <<< "$BOOTSTRAP_PEERS"
+if [ -n "${BOOTSTRAP_PEERS:-}" ]; then
+    IFS=',' read -ra PEERS <<< "${BOOTSTRAP_PEERS}"
     for peer in "${PEERS[@]}"; do
-        ARGS="$ARGS --bootstrap $peer"
+        ARGS="$ARGS --bootstrap ${peer}"
     done
 fi
 
-if [ "$NO_BITTENSOR" = "true" ]; then
+if [ "${NO_BITTENSOR:-false}" = "true" ]; then
     ARGS="$ARGS --no-bittensor"
 fi
 
-echo "Starting validator-node with args: $ARGS"
-exec validator-node $ARGS
+log_info "Starting validator-node with args: ${ARGS}"
+exec validator-node ${ARGS}

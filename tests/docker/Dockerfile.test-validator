@@ -24,6 +24,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY bins ./bins
 COPY tests ./tests
+COPY scripts/test-harness.sh /scripts/test-harness.sh
 
 # Build release binary
 RUN cargo build --release --bin validator-node
@@ -40,6 +41,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy binary from builder
 COPY --from=builder /app/target/release/validator-node /usr/local/bin/validator-node
+COPY --from=builder /scripts/test-harness.sh /scripts/test-harness.sh
 
 # Create data directory
 RUN mkdir -p /data && chmod 755 /data

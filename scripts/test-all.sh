@@ -1,37 +1,47 @@
 #!/bin/bash
-# Run all tests for mini-chain
+# =============================================================================
+# Platform Standard Test Suite
+# =============================================================================
+# Entry point for local/unit test runs.
+# =============================================================================
 
-set -e
+set -euo pipefail
 
-echo "=== Mini-Chain Test Suite ==="
-echo ""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./test-harness.sh
+source "${SCRIPT_DIR}/test-harness.sh"
 
-cd "$(dirname "$0")/.."
+PASSED=0
+FAILED=0
+SKIPPED=0
 
-# Build first
-echo "[1/3] Building..."
-cargo build --release 2>/dev/null
+platform_test_init
+trap platform_cleanup_run_dir EXIT
 
-# Run all tests
-echo "[2/3] Running unit tests..."
-cargo test 2>&1 | tee /tmp/test-results.txt
+log_info "=== Platform Test Suite ==="
+log_info "Artifacts: ${PLATFORM_TEST_ARTIFACTS_DIR}"
+log_info "Run dir: ${PLATFORM_TEST_RUN_DIR}"
 
-# Count results
-PASSED=$(grep -oP '\d+ passed' /tmp/test-results.txt | awk '{sum += $1} END {print sum}')
-FAILED=$(grep -oP '\d+ failed' /tmp/test-results.txt | awk '{sum += $1} END {print sum}')
-IGNORED=$(grep -oP '\d+ ignored' /tmp/test-results.txt | awk '{sum += $1} END {print sum}')
-
-echo ""
-echo "[3/3] Test Summary"
-echo "===================="
-echo "Passed:  $PASSED"
-echo "Failed:  $FAILED"
-echo "Ignored: $IGNORED"
-echo ""
-
-if [ "$FAILED" -gt 0 ]; then
-    echo "TESTS FAILED!"
-    exit 1
+log_info "[1/2] Building workspace"
+if cargo build --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/build.log"; then
+    log_success "Build completed"
 else
-    echo "ALL TESTS PASSED!"
+    log_failure "Build failed"
+    exit 1
+fi
+
+log_info "[2/2] Running unit tests"
+if cargo test --workspace --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/unit-tests.log"; then
+    log_success "Unit tests completed"
+else
+    log_failure "Unit tests failed"
+fi
+
+log_info "Test summary"
+log_info "Passed: ${PASSED}"
+log_info "Failed: ${FAILED}"
+log_info "Skipped: ${SKIPPED}"
+
+if [ "${FAILED}" -ne 0 ]; then
+    exit 1
 fi
