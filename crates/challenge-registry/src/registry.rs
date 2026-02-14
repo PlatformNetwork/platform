@@ -67,6 +67,10 @@ impl ChallengeEntry {
 
 /// A registered challenge with its full state
 #[derive(Clone, Debug)]
+pub struct RegisteredChallenge {
+    pub entry: ChallengeEntry,
+    pub state_store: Arc<StateStore>,
+}
 
 type LifecycleListeners = Vec<Box<dyn Fn(LifecycleEvent) + Send + Sync>>;
 
@@ -83,6 +87,10 @@ pub struct ChallengeRegistry {
     /// Event listeners
     event_listeners: RwLock<LifecycleListeners>,
 }
+
+impl ChallengeRegistry {
+    /// Create a new challenge registry
+    pub fn new() -> Self {
         Self {
             challenges: RwLock::new(HashMap::new()),
             name_index: RwLock::new(HashMap::new()),
