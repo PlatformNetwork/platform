@@ -109,6 +109,10 @@ impl CommitRevealState {
     }
 
     /// Finalize weights after reveal phase
+    ///
+    /// The commit-reveal step verifies that validators used the same challenge
+    /// evaluation output. The resulting weight vector is the consensus payload
+    /// that later drives stake-weighted PBFT and on-chain weight voting.
     pub fn finalize(
         &mut self,
         smoothing: f64,

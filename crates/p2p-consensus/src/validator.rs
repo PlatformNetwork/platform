@@ -228,6 +228,26 @@ impl ValidatorSet {
             .sum()
     }
 
+    /// Get stake for a validator (0 if unknown or inactive)
+    pub fn stake_for(&self, hotkey: &Hotkey) -> u64 {
+        self.validators
+            .read()
+            .get(hotkey)
+            .filter(|v| v.is_active && !v.is_stale(self.stale_threshold_ms))
+            .map(|v| v.stake)
+            .unwrap_or(0)
+    }
+
+    /// Calculate stake-weighted quorum threshold (2/3 of total stake + 1)
+    pub fn stake_quorum_threshold(&self) -> u64 {
+        let total = self.total_active_stake();
+        if total == 0 {
+            0
+        } else {
+            (total.saturating_mul(2) / 3).saturating_add(1)
+        }
+    }
+
     /// Update validator from heartbeat
     ///
     /// Self-reported stake is only accepted if it matches the verified stake

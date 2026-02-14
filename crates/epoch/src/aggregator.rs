@@ -9,6 +9,10 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 
 /// Aggregates weights across all challenges for emission distribution
+///
+/// Finalized weights already represent validator consensus output from the
+/// commit-reveal flow. Challenge evaluation scores incorporate validator stake
+/// and outlier filtering before reaching this aggregator.
 pub struct WeightAggregator {
     config: EpochConfig,
 }
