@@ -13,7 +13,7 @@ use std::io::Read;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::warn;
+use tracing::{info, warn};
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::proto::rr::RecordType;
 use trust_dns_resolver::Resolver;
@@ -141,6 +141,7 @@ pub struct NetworkState {
     dns_cache: HashMap<DnsCacheKey, DnsCacheEntry>,
     requests_made: u32,
     dns_lookups: u32,
+    request_timestamps: Vec<Instant>,
     challenge_id: String,
     validator_id: String,
 }
@@ -192,9 +193,25 @@ impl NetworkState {
             dns_cache: HashMap::new(),
             requests_made: 0,
             dns_lookups: 0,
+            request_timestamps: Vec::new(),
             challenge_id,
             validator_id,
         })
+    }
+
+    pub fn requests_made(&self) -> u32 {
+        self.requests_made
+    }
+
+    pub fn dns_lookups(&self) -> u32 {
+        self.dns_lookups
+    }
+
+    pub fn reset_counters(&mut self) {
+        self.requests_made = 0;
+        self.dns_lookups = 0;
+        self.request_timestamps.clear();
+        self.dns_cache.clear();
     }
 
     pub fn handle_http_request(
@@ -202,13 +219,24 @@ impl NetworkState {
         request: HttpRequest,
     ) -> Result<HttpResponse, NetworkError> {
         self.ensure_request_budget()?;
-        self.validate_http_request(&request)?;
+
+        if let Err(e) = self.validate_http_request(&request) {
+            self.audit_denial(&format!(
+                "http_request policy denied url={} reason={}",
+                request.url, e
+            ));
+            return Err(e);
+        }
+
         self.requests_made = self.requests_made.saturating_add(1);
+        self.request_timestamps.push(Instant::now());
 
         self.audit(NetworkAuditAction::HttpRequest {
             url: request.url.clone(),
             method: request.method,
         });
+
+        let _resolved_ip = self.resolve_and_validate_ip(&request.url)?;
 
         let method = to_reqwest_method(request.method);
         let mut builder = self.http_client.request(method, &request.url);
@@ -232,6 +260,15 @@ impl NetworkState {
             bytes: body.len() as u64,
         });
 
+        info!(
+            challenge_id = %self.challenge_id,
+            validator_id = %self.validator_id,
+            url = %request.url,
+            status = status,
+            response_bytes = body.len(),
+            "http request completed"
+        );
+
         Ok(HttpResponse {
             status,
             headers,
@@ -241,9 +278,17 @@ impl NetworkState {
 
     pub fn handle_dns_request(&mut self, request: DnsRequest) -> Result<DnsResponse, NetworkError> {
         self.ensure_dns_budget()?;
-        self.policy
+
+        if let Err(e) = self
+            .policy
             .is_dns_lookup_allowed(&request.hostname, request.record_type)
-            .map_err(map_policy_error)?;
+        {
+            self.audit_denial(&format!(
+                "dns_lookup policy denied hostname={} type={:?} reason={}",
+                request.hostname, request.record_type, e
+            ));
+            return Err(map_policy_error(e));
+        }
 
         self.dns_lookups = self.dns_lookups.saturating_add(1);
 
@@ -277,6 +322,14 @@ impl NetworkState {
             );
         }
 
+        info!(
+            challenge_id = %self.challenge_id,
+            validator_id = %self.validator_id,
+            hostname = %request.hostname,
+            record_count = records.len(),
+            "dns lookup completed"
+        );
+
         Ok(DnsResponse { records })
     }
 
@@ -288,6 +341,10 @@ impl NetworkState {
         }
 
         if self.requests_made >= self.policy.limits.max_requests {
+            self.audit_denial(&format!(
+                "http request limit exceeded: {}/{}",
+                self.requests_made, self.policy.limits.max_requests
+            ));
             return Err(NetworkError::LimitExceeded(
                 "http request limit exceeded".to_string(),
             ));
@@ -304,6 +361,10 @@ impl NetworkState {
         }
 
         if self.dns_lookups >= self.policy.dns_policy.max_lookups {
+            self.audit_denial(&format!(
+                "dns lookup limit exceeded: {}/{}",
+                self.dns_lookups, self.policy.dns_policy.max_lookups
+            ));
             return Err(NetworkError::LimitExceeded(
                 "dns lookup limit exceeded".to_string(),
             ));
@@ -314,9 +375,11 @@ impl NetworkState {
 
     fn validate_http_request(&self, request: &HttpRequest) -> Result<(), NetworkError> {
         if request.body.len() as u64 > self.policy.limits.max_request_bytes {
-            return Err(NetworkError::LimitExceeded(
-                "request body too large".to_string(),
-            ));
+            return Err(NetworkError::LimitExceeded(format!(
+                "request body too large: {} > {}",
+                request.body.len(),
+                self.policy.limits.max_request_bytes
+            )));
         }
 
         self.ensure_header_limits(&request.headers)?;
@@ -326,12 +389,62 @@ impl NetworkState {
             .map_err(map_policy_error)
     }
 
+    fn resolve_and_validate_ip(&self, url: &str) -> Result<Option<IpAddr>, NetworkError> {
+        let parsed = url::Url::parse(url)
+            .map_err(|err| NetworkError::PolicyViolation(format!("invalid url: {err}")))?;
+
+        let host_str = match parsed.host_str() {
+            Some(h) => h,
+            None => return Ok(None),
+        };
+
+        if let Ok(ip) = host_str.parse::<IpAddr>() {
+            self.validate_ip_against_policy(ip)?;
+            return Ok(Some(ip));
+        }
+
+        let lookup = self.dns_resolver.lookup_ip(host_str).map_err(|err| {
+            NetworkError::DnsFailure(format!("pre-connect resolve failed: {err}"))
+        })?;
+
+        for ip in lookup.iter() {
+            self.validate_ip_against_policy(ip)?;
+        }
+
+        Ok(lookup.iter().next())
+    }
+
+    fn validate_ip_against_policy(&self, ip: IpAddr) -> Result<(), NetworkError> {
+        if self.policy.dns_policy.block_private_ranges && is_private_ip(ip) {
+            self.audit_denial(&format!("blocked private/reserved IP: {ip}"));
+            return Err(NetworkError::PolicyViolation(format!(
+                "connection to private/reserved IP blocked: {ip}"
+            )));
+        }
+
+        if !self.policy.allowed_ip_ranges.is_empty()
+            && !self
+                .policy
+                .allowed_ip_ranges
+                .iter()
+                .any(|net| net.contains(&ip))
+        {
+            self.audit_denial(&format!("IP not in allowed ranges: {ip}"));
+            return Err(NetworkError::PolicyViolation(format!(
+                "IP not in allowed ranges: {ip}"
+            )));
+        }
+
+        Ok(())
+    }
+
     fn ensure_header_limits(&self, headers: &HashMap<String, String>) -> Result<(), NetworkError> {
         let header_bytes = header_size(headers);
         if header_bytes > self.policy.limits.max_header_bytes {
-            return Err(NetworkError::LimitExceeded(
-                "header size exceeds limit".to_string(),
-            ));
+            return Err(NetworkError::LimitExceeded(format!(
+                "header size exceeds limit: {} > {}",
+                header_bytes, self.policy.limits.max_header_bytes
+            )));
         }
 
         Ok(())
@@ -352,6 +465,19 @@ impl NetworkState {
             };
             logger.record(entry);
         }
+    }
+
+    fn audit_denial(&self, reason: &str) {
+        self.audit(NetworkAuditAction::PolicyDenied {
+            reason: reason.to_string(),
+        });
+
+        warn!(
+            challenge_id = %self.challenge_id,
+            validator_id = %self.validator_id,
+            reason = %reason,
+            "network policy denied"
+        );
     }
 }
 
@@ -575,6 +701,13 @@ fn resolve_dns(
                         true
                     }
                 })
+                .filter(|ip| {
+                    if policy.allowed_ip_ranges.is_empty() {
+                        true
+                    } else {
+                        policy.allowed_ip_ranges.iter().any(|net| net.contains(ip))
+                    }
+                })
                 .map(|ip| ip.to_string())
                 .collect::<Vec<_>>();
             Ok(records)
@@ -614,9 +747,9 @@ fn read_response_body(
         }
         total = total.saturating_add(bytes_read as u64);
         if total > max_allowed {
-            return Err(NetworkError::LimitExceeded(
-                "response body too large".to_string(),
-            ));
+            return Err(NetworkError::LimitExceeded(format!(
+                "response body too large: exceeded {max_allowed} bytes"
+            )));
         }
         body.extend_from_slice(&buffer[..bytes_read]);
     }
@@ -696,6 +829,8 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || addr.is_broadcast()
                 || addr.is_unspecified()
                 || addr.is_multicast()
+                || is_cgnat(addr)
+                || is_documentation_v4(addr)
         }
         IpAddr::V6(addr) => {
             addr.is_loopback()
@@ -705,6 +840,18 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || addr.is_multicast()
         }
     }
+}
+
+fn is_cgnat(addr: std::net::Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
+}
+
+fn is_documentation_v4(addr: std::net::Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
 }
 
 fn read_memory(caller: &mut Caller<RuntimeState>, ptr: i32, len: i32) -> Result<Vec<u8>, String> {
@@ -781,4 +928,357 @@ fn get_memory(caller: &mut Caller<RuntimeState>) -> Option<Memory> {
     caller
         .get_export(&memory_export)
         .and_then(|export| export.into_memory())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DnsPolicy;
+
+    fn test_policy_strict(hosts: Vec<String>) -> NetworkPolicy {
+        NetworkPolicy::strict(hosts)
+    }
+
+    fn test_policy_with_dns(hosts: Vec<String>, dns_hosts: Vec<String>) -> NetworkPolicy {
+        let mut policy = NetworkPolicy::strict(hosts);
+        policy.dns_policy = DnsPolicy {
+            enabled: true,
+            allowed_hosts: dns_hosts,
+            allowed_record_types: vec![DnsRecordType::A, DnsRecordType::Aaaa],
+            max_lookups: 8,
+            cache_ttl_secs: 60,
+            block_private_ranges: true,
+        };
+        policy
+    }
+
+    #[test]
+    fn test_network_state_creation() {
+        let policy = test_policy_strict(vec!["example.com".to_string()]);
+        let state = NetworkState::new(
+            policy,
+            None,
+            "test-challenge".into(),
+            "test-validator".into(),
+        );
+        assert!(state.is_ok());
+        let state = state.unwrap();
+        assert_eq!(state.requests_made(), 0);
+        assert_eq!(state.dns_lookups(), 0);
+    }
+
+    #[test]
+    fn test_request_budget_enforcement() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.limits.max_requests = 2;
+        let mut state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        assert!(state.ensure_request_budget().is_ok());
+        state.requests_made = 2;
+        let err = state.ensure_request_budget().unwrap_err();
+        assert!(matches!(err, NetworkError::LimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_dns_budget_enforcement() {
+        let mut policy = test_policy_with_dns(
+            vec!["example.com".to_string()],
+            vec!["example.com".to_string()],
+        );
+        policy.dns_policy.max_lookups = 3;
+        let mut state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        assert!(state.ensure_dns_budget().is_ok());
+        state.dns_lookups = 3;
+        let err = state.ensure_dns_budget().unwrap_err();
+        assert!(matches!(err, NetworkError::LimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_request_budget_zero_disabled() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.limits.max_requests = 0;
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let err = state.ensure_request_budget().unwrap_err();
+        assert!(matches!(err, NetworkError::LimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_dns_budget_zero_disabled() {
+        let mut policy = test_policy_with_dns(
+            vec!["example.com".to_string()],
+            vec!["example.com".to_string()],
+        );
+        policy.dns_policy.max_lookups = 0;
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let err = state.ensure_dns_budget().unwrap_err();
+        assert!(matches!(err, NetworkError::LimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_validate_http_request_body_too_large() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.limits.max_request_bytes = 10;
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: "https://example.com".to_string(),
+            headers: HashMap::new(),
+            body: vec![0u8; 100],
+        };
+
+        let err = state.validate_http_request(&request).unwrap_err();
+        assert!(matches!(err, NetworkError::LimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_validate_http_request_headers_too_large() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.limits.max_header_bytes = 10;
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let mut headers = HashMap::new();
+        headers.insert("x-large".to_string(), "a".repeat(100));
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: "https://example.com".to_string(),
+            headers,
+            body: Vec::new(),
+        };
+
+        let err = state.validate_http_request(&request).unwrap_err();
+        assert!(matches!(err, NetworkError::LimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_validate_http_request_url_policy() {
+        let policy = test_policy_strict(vec!["example.com".to_string()]);
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: "https://evil.com".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+
+        let err = state.validate_http_request(&request).unwrap_err();
+        assert!(matches!(err, NetworkError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn test_validate_http_request_allowed() {
+        let policy = test_policy_strict(vec!["example.com".to_string()]);
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: "https://example.com/api".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+
+        assert!(state.validate_http_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_is_private_ip_v4() {
+        assert!(is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            127, 0, 0, 1
+        ))));
+        assert!(is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            10, 0, 0, 1
+        ))));
+        assert!(is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            192, 168, 1, 1
+        ))));
+        assert!(is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            172, 16, 0, 1
+        ))));
+        assert!(is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            169, 254, 1, 1
+        ))));
+        assert!(is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            0, 0, 0, 0
+        ))));
+        assert!(!is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            8, 8, 8, 8
+        ))));
+        assert!(!is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            1, 1, 1, 1
+        ))));
+    }
+
+    #[test]
+    fn test_is_private_ip_v6() {
+        assert!(is_private_ip(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)));
+        assert!(is_private_ip(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED)));
+        assert!(!is_private_ip(IpAddr::V6(
+            "2001:4860:4860::8888".parse().unwrap()
+        )));
+    }
+
+    #[test]
+    fn test_is_cgnat() {
+        assert!(is_cgnat(std::net::Ipv4Addr::new(100, 64, 0, 1)));
+        assert!(is_cgnat(std::net::Ipv4Addr::new(100, 127, 255, 254)));
+        assert!(!is_cgnat(std::net::Ipv4Addr::new(100, 128, 0, 1)));
+        assert!(!is_cgnat(std::net::Ipv4Addr::new(100, 63, 255, 255)));
+    }
+
+    #[test]
+    fn test_is_documentation_v4() {
+        assert!(is_documentation_v4(std::net::Ipv4Addr::new(192, 0, 2, 1)));
+        assert!(is_documentation_v4(std::net::Ipv4Addr::new(
+            198, 51, 100, 1
+        )));
+        assert!(is_documentation_v4(std::net::Ipv4Addr::new(203, 0, 113, 1)));
+        assert!(!is_documentation_v4(std::net::Ipv4Addr::new(8, 8, 8, 8)));
+    }
+
+    #[test]
+    fn test_reset_counters() {
+        let policy = test_policy_strict(vec!["example.com".to_string()]);
+        let mut state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        state.requests_made = 5;
+        state.dns_lookups = 3;
+        state.request_timestamps.push(Instant::now());
+
+        state.reset_counters();
+
+        assert_eq!(state.requests_made(), 0);
+        assert_eq!(state.dns_lookups(), 0);
+        assert!(state.request_timestamps.is_empty());
+        assert!(state.dns_cache.is_empty());
+    }
+
+    #[test]
+    fn test_validate_ip_against_policy_private_blocked() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.dns_policy.block_private_ranges = true;
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let loopback = IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        let err = state.validate_ip_against_policy(loopback).unwrap_err();
+        assert!(matches!(err, NetworkError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn test_validate_ip_against_policy_public_allowed() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.dns_policy.block_private_ranges = true;
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let public = IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8));
+        assert!(state.validate_ip_against_policy(public).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ip_against_policy_ip_range_filter() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.dns_policy.block_private_ranges = false;
+        policy.allowed_ip_ranges = vec!["8.8.0.0/16".to_string()];
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let allowed = IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8));
+        assert!(state.validate_ip_against_policy(allowed).is_ok());
+
+        let denied = IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1));
+        let err = state.validate_ip_against_policy(denied).unwrap_err();
+        assert!(matches!(err, NetworkError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn test_validate_ip_against_policy_empty_ranges_no_block() {
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.dns_policy.block_private_ranges = false;
+        policy.allowed_ip_ranges = vec![];
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let any_ip = IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8));
+        assert!(state.validate_ip_against_policy(any_ip).is_ok());
+    }
+
+    #[test]
+    fn test_audit_denial_logged() {
+        use std::sync::Mutex;
+
+        struct TestLogger {
+            entries: Mutex<Vec<NetworkAuditEntry>>,
+        }
+
+        impl NetworkAuditLogger for TestLogger {
+            fn record(&self, entry: NetworkAuditEntry) {
+                self.entries.lock().unwrap().push(entry);
+            }
+        }
+
+        let logger = Arc::new(TestLogger {
+            entries: Mutex::new(Vec::new()),
+        });
+
+        let mut policy = test_policy_strict(vec!["example.com".to_string()]);
+        policy.audit.enabled = true;
+        let state = NetworkState::new(
+            policy,
+            Some(logger.clone()),
+            "chal-1".into(),
+            "val-1".into(),
+        )
+        .unwrap();
+
+        state.audit_denial("test denial reason");
+
+        let entries = logger.entries.lock().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].challenge_id, "chal-1");
+        assert_eq!(entries[0].validator_id, "val-1");
+        match &entries[0].action {
+            NetworkAuditAction::PolicyDenied { reason } => {
+                assert!(reason.contains("test denial reason"));
+            }
+            _ => panic!("expected PolicyDenied action"),
+        }
+    }
+
+    #[test]
+    fn test_header_size_calculation() {
+        let mut headers = HashMap::new();
+        headers.insert("key1".to_string(), "val1".to_string());
+        headers.insert("key2".to_string(), "val2".to_string());
+        assert_eq!(header_size(&headers), 16);
+    }
+
+    #[test]
+    fn test_network_disabled_policy() {
+        let policy = NetworkPolicy::default();
+        let state = NetworkState::new(policy, None, "test".into(), "test".into()).unwrap();
+
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: "https://example.com".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+
+        let err = state.validate_http_request(&request).unwrap_err();
+        assert!(matches!(err, NetworkError::NetworkDisabled));
+    }
+
+    #[test]
+    fn test_map_policy_error_network_disabled() {
+        let err = map_policy_error(NetworkPolicyError::NetworkDisabled);
+        assert!(matches!(err, NetworkError::NetworkDisabled));
+    }
+
+    #[test]
+    fn test_map_policy_error_other() {
+        let err = map_policy_error(NetworkPolicyError::HostNotAllowed("evil.com".into()));
+        assert!(matches!(err, NetworkError::PolicyViolation(_)));
+    }
 }

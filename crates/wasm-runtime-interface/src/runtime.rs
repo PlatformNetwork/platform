@@ -1,6 +1,7 @@
 use crate::{NetworkPolicy, NetworkState};
 use std::sync::Arc;
 use thiserror::Error;
+use tracing::info;
 use wasmtime::{
     Config, Engine, Error as WasmtimeError, Func, Instance, Linker, Memory, Module,
     ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, Val,
@@ -24,11 +25,20 @@ pub enum WasmRuntimeError {
     Execution(String),
     #[error("io error: {0}")]
     Io(String),
+    #[error("fuel exhausted")]
+    FuelExhausted,
+    #[error("policy violation: {0}")]
+    PolicyViolation(String),
 }
 
 impl From<WasmtimeError> for WasmRuntimeError {
     fn from(err: WasmtimeError) -> Self {
-        Self::Execution(err.to_string())
+        let msg = err.to_string();
+        if msg.contains("fuel") {
+            Self::FuelExhausted
+        } else {
+            Self::Execution(msg)
+        }
     }
 }
 
@@ -84,6 +94,8 @@ pub struct RuntimeState {
     pub network_policy: NetworkPolicy,
     pub network_state: NetworkState,
     pub memory_export: String,
+    pub challenge_id: String,
+    pub validator_id: String,
     limits: StoreLimits,
 }
 
@@ -92,14 +104,22 @@ impl RuntimeState {
         network_policy: NetworkPolicy,
         network_state: NetworkState,
         memory_export: String,
+        challenge_id: String,
+        validator_id: String,
         limits: StoreLimits,
     ) -> Self {
         Self {
             network_policy,
             network_state,
             memory_export,
+            challenge_id,
+            validator_id,
             limits,
         }
+    }
+
+    pub fn reset_network_counters(&mut self) {
+        self.network_state.reset_counters();
     }
 }
 
@@ -169,6 +189,8 @@ impl WasmRuntime {
             instance_config.network_policy.clone(),
             network_state,
             instance_config.memory_export.clone(),
+            instance_config.challenge_id.clone(),
+            instance_config.validator_id.clone(),
             limits.build(),
         );
         let mut store = Store::new(&self.engine, runtime_state);
@@ -197,6 +219,15 @@ impl WasmRuntime {
             .ok_or_else(|| {
                 WasmRuntimeError::MissingExport(instance_config.memory_export.clone())
             })?;
+
+        info!(
+            challenge_id = %instance_config.challenge_id,
+            validator_id = %instance_config.validator_id,
+            max_memory = self.config.max_memory_bytes,
+            fuel_enabled = self.config.allow_fuel,
+            fuel_limit = ?self.config.fuel_limit,
+            "wasm challenge instance created"
+        );
 
         Ok(ChallengeInstance {
             store,
@@ -316,6 +347,30 @@ impl ChallengeInstance {
             .map_err(|_| WasmRuntimeError::MissingExport(name.to_string()))?;
         func.call(&mut self.store, ())
             .map_err(|err: WasmtimeError| WasmRuntimeError::Execution(err.to_string()))
+    }
+
+    pub fn fuel_remaining(&self) -> Option<u64> {
+        self.store.get_fuel().ok()
+    }
+
+    pub fn network_requests_made(&self) -> u32 {
+        self.store.data().network_state.requests_made()
+    }
+
+    pub fn network_dns_lookups(&self) -> u32 {
+        self.store.data().network_state.dns_lookups()
+    }
+
+    pub fn reset_network_state(&mut self) {
+        self.store.data_mut().reset_network_counters();
+    }
+
+    pub fn challenge_id(&self) -> &str {
+        &self.store.data().challenge_id
+    }
+
+    pub fn validator_id(&self) -> &str {
+        &self.store.data().validator_id
     }
 
     pub fn with_state<F, T>(&mut self, func: F) -> Result<T, WasmRuntimeError>
