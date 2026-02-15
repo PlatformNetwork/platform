@@ -238,7 +238,7 @@ jobs:
       - run: |
           mkdir -p release
           cp target/release/validator-node release/
-          cp target/release/csudo release/
+          cp target/release/csudo release/ 2>/dev/null || true
           tar -czvf platform-${{ github.ref_name }}-linux-x86_64.tar.gz -C release .
       - uses: softprops/action-gh-release@v2
         with:
