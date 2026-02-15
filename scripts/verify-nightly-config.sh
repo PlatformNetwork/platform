@@ -79,6 +79,8 @@ run_check() {
     local fast_linker_test_flag="-C link-arg=-s"
     local use_fast_linker=0
     local disable_fast_linker=0
+    local label_safe="${label// /-}"
+    local cargo_target_dir="${PLATFORM_TEST_RUN_DIR}/target-${label_safe}"
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -142,6 +144,8 @@ run_check() {
 
     log_info "${label}: Expected toolchain=${RUSTUP_TOOLCHAIN:-default}"
     log_info "${label}: Expected nightly rustflags=${PLATFORM_NIGHTLY_RUSTFLAGS:-<empty>}"
+    log_info "${label}: Expected fast linker rustflags=${PLATFORM_FAST_LINKER_RUSTFLAGS:-<empty>}"
+    log_info "${label}: Expected fast linker rustflags darwin=${PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN:-<empty>}"
     log_info "${label}: Expected linker rustflags=${PLATFORM_LINKER_RUSTFLAGS:-<empty>}"
     log_info "${label}: Expected linker rustflags darwin=${PLATFORM_LINKER_RUSTFLAGS_DARWIN:-<empty>}"
 
@@ -156,7 +160,8 @@ run_check() {
     export PLATFORM_DISABLE_FAST_LINKER
 
     log_info "${label}: Running cargo check (dry-run build)"
-    if cargo check --workspace -v 2>&1 | tee "${log_file}"; then
+    export CARGO_TARGET_DIR="${cargo_target_dir}"
+    if RUSTFLAGS="${RUSTFLAGS:-} ${PLATFORM_NIGHTLY_RUSTFLAGS} ${PLATFORM_FAST_LINKER_RUSTFLAGS}" cargo check -p utils -v 2>&1 | tee "${log_file}"; then
         log_success "${label}: Config verification completed"
     else
         log_failure "${label}: Config verification failed"
