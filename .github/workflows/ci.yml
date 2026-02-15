@@ -247,6 +247,8 @@ jobs:
     runs-on: platform-runner
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_nightly == 'true'
     env:
+      RUSTUP_TOOLCHAIN: nightly
+      PLATFORM_RUST_NIGHTLY: "1"
       PLATFORM_NIGHTLY_RUSTFLAGS: "-Z threads=0"
       PLATFORM_FAST_LINKER_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
@@ -258,21 +260,26 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Verify nightly config (nightly dry-run)
-        run: PLATFORM_RUST_NIGHTLY=1 scripts/verify-nightly-config.sh
+        run: scripts/verify-nightly-config.sh
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "platform-ci-nightly"
           save-if: false
       - name: Nightly build
-        run: PLATFORM_RUST_NIGHTLY=1 cargo build --release
+        run: cargo build --release
       - name: Nightly tests
-        run: PLATFORM_RUST_NIGHTLY=1 cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
+        run: cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
 
   docker-nightly:
     name: Docker Nightly Build
     runs-on: platform-runner
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_nightly == 'true'
     needs: [nightly]
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      PLATFORM_RUST_NIGHTLY: "1"
+      PLATFORM_NIGHTLY_RUSTFLAGS: "-Z threads=0"
+      PLATFORM_FAST_LINKER_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - uses: actions/checkout@v4
       - name: Ensure Docker available
@@ -284,11 +291,10 @@ jobs:
           push: false
           build-args: |
             RUSTUP_TOOLCHAIN=nightly
-            INSTALL_FAST_LINKER=mold
             PLATFORM_NIGHTLY_RUSTFLAGS=-Z threads=0
             PLATFORM_FAST_LINKER_RUSTFLAGS=-C link-arg=-fuse-ld=mold
           cache-from: type=gha
       - name: Nightly build
-        run: PLATFORM_RUST_NIGHTLY=1 cargo build --release
+        run: cargo build --release
       - name: Nightly tests
-        run: PLATFORM_RUST_NIGHTLY=1 cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
+        run: cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
