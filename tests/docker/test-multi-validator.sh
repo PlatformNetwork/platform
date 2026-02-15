@@ -1,10 +1,11 @@
 #!/bin/bash
 # =============================================================================
-# Platform Multi-Validator Integration Test
+# Platform Multi-Validator Integration Test (Docker)
 # =============================================================================
-# Tests multiple validators in a P2P network without Docker build issues
-# Uses locally built binary
-# Note: This script does not require Docker; see scripts/test-comprehensive.sh for Docker-only test suites
+# Spins up a full multi-validator + mock Subtensor network via Docker Compose.
+# Verifies health, distributed DB creation, P2P connectivity, and mock chain
+# commit/reveal inspection endpoints. Logs and artifacts are written to
+# PLATFORM_TEST_ARTIFACTS_DIR.
 # =============================================================================
 
 set -euo pipefail
@@ -14,153 +15,135 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../scripts/test-harness.sh"
 
 platform_test_init
-trap platform_cleanup_run_dir EXIT
 
-if [ "${PLATFORM_TEST_DOCKER_MODE:-auto}" = "required" ]; then
-    platform_install_docker_if_needed
-fi
+ARTIFACT_DIR="${PLATFORM_TEST_ARTIFACTS_DIR}/multi-validator"
+LOG_DIR="${ARTIFACT_DIR}/logs"
+mkdir -p "${ARTIFACT_DIR}" "${LOG_DIR}"
 
-NUM_VALIDATORS="${NUM_VALIDATORS:-3}"
-BASE_PORT="${BASE_PORT:-9100}"
-VALIDATOR_BINARY="${VALIDATOR_BINARY:-${PLATFORM_TEST_ROOT}/target/release/validator-node}"
-PLATFORM_TEST_RUN_DIR="${PLATFORM_TEST_RUN_DIR:-${PLATFORM_TEST_TMP_BASE}/multi-validator}"
+COMPOSE_FILE="${PLATFORM_TEST_COMPOSE_FILE}"
+COMPOSE_PROJECT="${PLATFORM_TEST_COMPOSE_PROJECT}"
 
-log_info "Test directory: ${PLATFORM_TEST_RUN_DIR}"
-mkdir -p "${PLATFORM_TEST_RUN_DIR}"
-
-if [ ! -x "${VALIDATOR_BINARY}" ]; then
-    log_failure "Validator binary not found at ${VALIDATOR_BINARY}"
-    log_info "Building..."
-    cargo build --release --bin validator-node
-fi
-log_success "Validator binary found"
-
-declare -a VALIDATOR_PIDS
-
-VALIDATOR_1_DIR="${PLATFORM_TEST_RUN_DIR}/validator-1"
-mkdir -p "${VALIDATOR_1_DIR}"
-VALIDATOR_1_KEY="0x0000000000000000000000000000000000000000000000000000000000000001"
-VALIDATOR_1_PORT="${BASE_PORT}"
-
-log_info "Starting Validator 1 (bootstrap) on port ${VALIDATOR_1_PORT}..."
-RUST_LOG=info,validator_node=debug,platform_p2p_consensus=debug \
-    "${VALIDATOR_BINARY}" \
-    --secret-key "${VALIDATOR_1_KEY}" \
-    --data-dir "${VALIDATOR_1_DIR}" \
-    --listen-addr "/ip4/127.0.0.1/tcp/${VALIDATOR_1_PORT}" \
-    --netuid 100 \
-    --no-bittensor \
-    > "${VALIDATOR_1_DIR}/output.log" 2>&1 &
-VALIDATOR_PIDS+=($!)
-log_info "Validator 1 PID: ${VALIDATOR_PIDS[0]}"
-
-sleep 3
-
-if ! kill -0 "${VALIDATOR_PIDS[0]}" 2>/dev/null; then
-    log_failure "Validator 1 failed to start"
-    tail -50 "${VALIDATOR_1_DIR}/output.log" || true
-    exit 1
-fi
-log_success "Validator 1 started"
-
-for i in $(seq 2 "${NUM_VALIDATORS}"); do
-    VALIDATOR_DIR="${PLATFORM_TEST_RUN_DIR}/validator-${i}"
-    mkdir -p "${VALIDATOR_DIR}"
-    VALIDATOR_KEY="0x000000000000000000000000000000000000000000000000000000000000000${i}"
-    VALIDATOR_PORT=$((BASE_PORT + i - 1))
-
-    log_info "Starting Validator ${i} on port ${VALIDATOR_PORT}..."
-    RUST_LOG=info,validator_node=debug,platform_p2p_consensus=debug \
-        "${VALIDATOR_BINARY}" \
-        --secret-key "${VALIDATOR_KEY}" \
-        --data-dir "${VALIDATOR_DIR}" \
-        --listen-addr "/ip4/127.0.0.1/tcp/${VALIDATOR_PORT}" \
-        --bootstrap "/ip4/127.0.0.1/tcp/${VALIDATOR_1_PORT}" \
-        --netuid 100 \
-        --no-bittensor \
-        > "${VALIDATOR_DIR}/output.log" 2>&1 &
-    VALIDATOR_PIDS+=($!)
-    log_info "Validator ${i} PID: ${VALIDATOR_PIDS[$((i-1))]}"
-    sleep 1
-done
-
-log_info "Waiting for validators to initialize..."
-sleep 5
-
-RUNNING=0
-for i in $(seq 1 "${NUM_VALIDATORS}"); do
-    if kill -0 "${VALIDATOR_PIDS[$((i-1))]}" 2>/dev/null; then
-        log_success "Validator ${i} is running"
-        RUNNING=$((RUNNING + 1))
-    else
-        log_failure "Validator ${i} is not running"
-        tail -50 "${PLATFORM_TEST_RUN_DIR}/validator-${i}/output.log" || true
+cleanup_compose() {
+    if platform_has_compose; then
+        platform_compose -f "${COMPOSE_FILE}" logs --no-color > "${LOG_DIR}/compose.log" 2>&1 || true
+        platform_compose -f "${COMPOSE_FILE}" down -v > "${LOG_DIR}/compose-down.log" 2>&1 || true
     fi
-done
+    platform_cleanup_run_dir
+}
 
-if [ "${RUNNING}" -ne "${NUM_VALIDATORS}" ]; then
-    log_failure "Not all validators are running (${RUNNING}/${NUM_VALIDATORS})"
-    exit 1
-fi
+trap cleanup_compose EXIT
 
-log_info "Checking distributed storage initialization..."
-for i in $(seq 1 "${NUM_VALIDATORS}"); do
-    DB_FILE="${PLATFORM_TEST_RUN_DIR}/validator-${i}/distributed.db"
-    if [ -d "${DB_FILE}" ]; then
-        log_success "Validator ${i}: distributed.db exists"
-    else
-        log_warning "Validator ${i}: distributed.db not found yet"
-    fi
-done
-
-log_info "Checking P2P network initialization..."
-for i in $(seq 1 "${NUM_VALIDATORS}"); do
-    LOG_FILE="${PLATFORM_TEST_RUN_DIR}/validator-${i}/output.log"
-    if grep -q "P2P network initialized" "${LOG_FILE}" 2>/dev/null; then
-        log_success "Validator ${i}: P2P network initialized"
-    else
-        log_warning "Validator ${i}: P2P initialization message not found"
-    fi
-
-    if grep -q "Peer connected\|Peer identified" "${LOG_FILE}" 2>/dev/null; then
-        log_success "Validator ${i}: Has peer connections"
-    fi
-done
-
-log_info "Letting the network stabilize for 10 seconds..."
-sleep 10
-
-log_info ""
-log_info "==============================================="
-log_info "          MULTI-VALIDATOR TEST RESULTS"
-log_info "==============================================="
-
-HEALTHY=0
-for i in $(seq 1 "${NUM_VALIDATORS}"); do
-    if kill -0 "${VALIDATOR_PIDS[$((i-1))]}" 2>/dev/null; then
-        DB_FILE="${PLATFORM_TEST_RUN_DIR}/validator-${i}/distributed.db"
-        if [ -d "${DB_FILE}" ]; then
-            log_success "Validator ${i}: HEALTHY (running + DB initialized)"
-            HEALTHY=$((HEALTHY + 1))
-        else
-            log_warning "Validator ${i}: RUNNING (no DB yet)"
-        fi
-    else
-        log_failure "Validator ${i}: DEAD"
-    fi
-done
-
-log_info ""
-log_info "Summary: ${HEALTHY}/${NUM_VALIDATORS} validators healthy"
-
-log_info ""
-log_info "Sample logs from Validator 1:"
-tail -30 "${PLATFORM_TEST_RUN_DIR}/validator-1/output.log" || true
-
-if [ "${HEALTHY}" -eq "${NUM_VALIDATORS}" ]; then
-    log_success "All validators are healthy!"
+if ! platform_should_run_docker; then
+    log_skip "Docker not available; skipping multi-validator docker test"
     exit 0
 fi
 
-log_failure "Some validators are not healthy"
-exit 1
+platform_require_compose
+platform_ensure_network
+
+log_info "Artifacts directory: ${ARTIFACT_DIR}"
+log_info "Using compose file: ${COMPOSE_FILE}"
+log_info "Compose project: ${COMPOSE_PROJECT}"
+
+log_info "Building docker images..."
+platform_compose -f "${COMPOSE_FILE}" build > "${LOG_DIR}/compose-build.log" 2>&1
+
+log_info "Starting compose stack..."
+platform_compose -f "${COMPOSE_FILE}" up -d > "${LOG_DIR}/compose-up.log" 2>&1
+
+wait_for_health() {
+    local container="$1"
+    local timeout_seconds="$2"
+    local start
+    start=$(date +%s)
+
+    while true; do
+        local status
+        status=$(docker inspect --format '{{.State.Health.Status}}' "${container}" 2>/dev/null || echo "unknown")
+        if [ "${status}" = "healthy" ]; then
+            log_success "${container} is healthy"
+            return 0
+        fi
+
+        local now
+        now=$(date +%s)
+        if [ $((now - start)) -ge "${timeout_seconds}" ]; then
+            log_failure "Timeout waiting for ${container} health (status=${status})"
+            return 1
+        fi
+
+        sleep 5
+    done
+}
+
+log_info "Waiting for services to become healthy..."
+wait_for_health "platform-mock-subtensor" 180
+wait_for_health "platform-validator-1" 180
+wait_for_health "platform-validator-2" 180
+wait_for_health "platform-validator-3" 180
+wait_for_health "platform-validator-4" 180
+
+log_info "Verifying distributed storage initialization..."
+for i in 1 2 3 4; do
+    if docker exec "platform-validator-${i}" test -f /data/distributed.db; then
+        log_success "Validator ${i}: distributed.db created"
+    else
+        log_failure "Validator ${i}: distributed.db missing"
+        exit 1
+    fi
+done
+
+log_info "Collecting compose logs for connectivity checks..."
+platform_compose -f "${COMPOSE_FILE}" logs --no-color > "${LOG_DIR}/compose.log" 2>&1
+
+peer_connections=$(grep -c "Peer connected" "${LOG_DIR}/compose.log" || true)
+peer_identified=$(grep -c "Peer identified" "${LOG_DIR}/compose.log" || true)
+total_peers=$((peer_connections + peer_identified))
+
+if [ "${total_peers}" -gt 0 ]; then
+    log_success "Detected P2P peer activity (${total_peers} events)"
+else
+    log_failure "No P2P peer activity detected"
+    exit 1
+fi
+
+log_info "Querying mock-subtensor health endpoint..."
+curl -fsS "http://localhost:9944/health" > "${ARTIFACT_DIR}/mock-subtensor-health.json"
+
+log_info "Fetching mock-subtensor neurons for commit/reveal test..."
+hotkey_response=$(curl -fsS -X POST "http://localhost:9944/rpc" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"subtensor_getNeurons","params":[100],"id":1}')
+
+echo "${hotkey_response}" > "${ARTIFACT_DIR}/mock-subtensor-neurons.json"
+
+hotkey=$(echo "${hotkey_response}" | grep -m1 -o '"hotkey":"[^"]*"' | cut -d '"' -f4)
+if [ -z "${hotkey}" ]; then
+    log_failure "Failed to extract hotkey from mock-subtensor response"
+    exit 1
+fi
+
+log_info "Submitting mock weight commit..."
+commit_response=$(curl -fsS -X POST "http://localhost:9944/rpc" \
+    -H "Content-Type: application/json" \
+    -d "{\"jsonrpc\":\"2.0\",\"method\":\"subtensor_commitWeights\",\"params\":[100,[0,1,2],\"test_commit\",\"${hotkey}\"],\"id\":2}")
+echo "${commit_response}" > "${ARTIFACT_DIR}/mock-subtensor-commit.json"
+
+log_info "Submitting mock weight reveal..."
+reveal_response=$(curl -fsS -X POST "http://localhost:9944/rpc" \
+    -H "Content-Type: application/json" \
+    -d "{\"jsonrpc\":\"2.0\",\"method\":\"subtensor_revealWeights\",\"params\":[100,[0,1,2],[65535,65535,65535],\"test_commit\",\"${hotkey}\"],\"id\":3}")
+echo "${reveal_response}" > "${ARTIFACT_DIR}/mock-subtensor-reveal.json"
+
+log_info "Inspecting mock-subtensor weight commitments..."
+weights_response=$(curl -fsS "http://localhost:9944/test/weights")
+echo "${weights_response}" > "${ARTIFACT_DIR}/mock-subtensor-weights.json"
+
+total_revealed=$(echo "${weights_response}" | grep -o '"total_revealed":[0-9]*' | head -1 | cut -d ':' -f2)
+if [ -z "${total_revealed}" ] || [ "${total_revealed}" -lt 1 ]; then
+    log_failure "No revealed weight commits detected"
+    exit 1
+fi
+
+log_success "Mock-subtensor commit/reveal flow verified"
+log_success "Multi-validator docker test completed successfully"

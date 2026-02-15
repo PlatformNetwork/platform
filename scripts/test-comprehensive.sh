@@ -170,18 +170,12 @@ log_info "======================================================================
 if platform_should_run_docker; then
     if platform_require_compose; then
         platform_ensure_network
-        log_info "Starting compose stack..."
-        if platform_compose -f "${PLATFORM_TEST_COMPOSE_FILE}" up --build -d 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/compose-up.log"; then
-            log_success "Compose stack started"
+        log_info "Running multi-validator docker test harness..."
+        if "${SCRIPT_DIR}/../tests/docker/test-multi-validator.sh" 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/multi-validator-docker.log"; then
+            log_success "Multi-validator docker test completed"
         else
-            log_failure "Compose stack failed to start"
+            log_failure "Multi-validator docker test failed"
         fi
-
-        log_info "Collecting compose logs..."
-        platform_compose -f "${PLATFORM_TEST_COMPOSE_FILE}" logs --no-color 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/compose.log" || true
-
-        log_info "Tearing down compose stack..."
-        platform_compose -f "${PLATFORM_TEST_COMPOSE_FILE}" down -v 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/compose-down.log" || true
     else
         log_skip "Docker Compose not available"
     fi
