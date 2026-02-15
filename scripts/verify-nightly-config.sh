@@ -165,11 +165,11 @@ run_check() {
 
     if [ "${expect_nightly}" -eq 1 ]; then
         if rg -F --quiet "-Z threads=0" "${log_file}"; then
-            log_success "${label}: Nightly rustflags detected"
-        else
-            log_failure "${label}: Nightly rustflags missing"
-            return 1
-        fi
+    if [ "${expect_nightly}" -eq 1 ]; then
+        if rg -F --quiet -- "-Z threads=0" "${log_file}"; then
+        if rg -F --quiet -- "-Z threads=0" "${log_file}"; then
+        if rg -F --quiet -- "${fast_linker_test_flag}" "${log_file}"; then
+        if rg -F --quiet -- "${fast_linker_test_flag}" "${log_file}"; then
     fi
 
     if [ "${expect_no_nightly}" -eq 1 ]; then
