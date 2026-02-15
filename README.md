@@ -63,7 +63,8 @@ unsetting `PLATFORM_NIGHTLY_RUSTFLAGS` (or setting it to an empty string). The
 honor `PLATFORM_DISABLE_NIGHTLY=1` for an explicit opt-out, and accept `PLATFORM_RUST_NIGHTLY=1` to force
 nightly toolchains during scripted runs.
 
-Fast linker support is opt-in via environment variables. Supported linkers:
+Fast linker support is opt-in via environment variables; if you leave these unset,
+Rust falls back to the system linker. Supported linkers:
 
 - **Linux**: `mold`, `lld`
 - **macOS**: `lld`, `zld`
@@ -87,9 +88,10 @@ cargo build
 Opt out of fast linker flags by unsetting `PLATFORM_FAST_LINKER_RUSTFLAGS`/
 `PLATFORM_FAST_LINKER_RUSTFLAGS_DARWIN`, setting `PLATFORM_LINKER_RUSTFLAGS` (Linux) /
 `PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS) to an empty string, or exporting
-`PLATFORM_DISABLE_FAST_LINKER=1` for scripted runs. To override defaults explicitly, set
-`PLATFORM_LINKER_RUSTFLAGS` (Linux) or `PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS); these override the
-opt-in fast-linker values when present.
+`PLATFORM_DISABLE_FAST_LINKER=1` for scripted runs (the scripts clear fast-linker env vars
+when this is set). To override defaults explicitly, set `PLATFORM_LINKER_RUSTFLAGS` (Linux)
+or `PLATFORM_LINKER_RUSTFLAGS_DARWIN` (macOS); these override the opt-in fast-linker values
+when present.
 
 Fast linker prerequisites (Ubuntu/Debian):
 

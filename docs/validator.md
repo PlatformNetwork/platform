@@ -101,6 +101,8 @@ Supported fast linkers:
 - **Linux**: `mold`, `lld`
 - **macOS**: `lld`, `zld`
 
+Leave the fast-linker variables unset to fall back to the system linker.
+
 ```bash
 export RUSTUP_TOOLCHAIN=nightly
 export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
@@ -205,12 +207,8 @@ To opt into nightly-only parallel rustc and a faster linker, set:
 export RUSTUP_TOOLCHAIN=nightly
 export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
 export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
-export RUSTUP_TOOLCHAIN=nightly
-export PLATFORM_NIGHTLY_RUSTFLAGS="-Z threads=0"
-export PLATFORM_FAST_LINKER_RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 ```
 
-Install a fast linker (Ubuntu/Debian):
 Install a fast linker (Ubuntu/Debian):
 
 ```bash
@@ -218,14 +216,11 @@ sudo apt-get update
 sudo apt-get install -y mold
 # or
 sudo apt-get install -y lld
+```
 
 To opt out for tests, export `PLATFORM_DISABLE_NIGHTLY=1` (disable nightly flags) and/or
 `PLATFORM_DISABLE_FAST_LINKER=1` (disable fast linker flags). To override Linux/macOS linker flags
 explicitly, set `PLATFORM_LINKER_RUSTFLAGS` or `PLATFORM_LINKER_RUSTFLAGS_DARWIN`.
-sudo apt-get install -y mold
-# or
-sudo apt-get install -y lld
-```
 
 Validator test harnesses rely on Docker and Docker Compose. Docker is not required to run a production validator. The test harness automatically invokes `scripts/install-docker.sh` when Docker is missing (unless `PLATFORM_TEST_DOCKER_MODE=skip`).
 
