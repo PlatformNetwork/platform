@@ -7,8 +7,8 @@ Challenges define the evaluation logic for miners. Platform treats challenges as
 ```mermaid
 sequenceDiagram
     participant Owner as Sudo Owner
-    participant Validators as Validator Set
     participant Registry as Challenge Registry
+    participant Validators as Validator Set
     participant Runtime as WASM Runtime
 
     Owner->>Registry: Add/Update/Remove (signed)
@@ -18,7 +18,7 @@ sequenceDiagram
     Validators-->>Owner: Consensus-approved state
 ```
 
-## Submission Flow
+## Challenge Execution Flow
 
 ```mermaid
 flowchart TD
@@ -31,19 +31,30 @@ flowchart TD
 
 ## Runtime Constraints
 
-- CPU, memory, and I/O quotas enforced per evaluation
-- Network access allowed only via explicit policy
-- Deterministic execution required for consensus reproducibility
+- CPU, memory, and I/O quotas enforced per evaluation.
+- Network access allowed only via explicit policy.
+- Deterministic execution required for consensus reproducibility.
 
 ## Challenge Metadata
 
-Each challenge metadata bundle includes:
+Each metadata bundle includes:
 
-- Challenge identifier + version
-- WASM module hash and entrypoint
-- Resource policy (CPU/memory/time limits)
-- Network policy (allowed domains/IPs)
-- Scoring configuration and mechanism mapping
+- Challenge identifier + version.
+- WASM module hash and entrypoint.
+- Resource policy (CPU/memory/time limits).
+- Network policy (allowed domains/IPs).
+- Scoring configuration and mechanism mapping.
+
+## Challenge States
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Active: Signed registration
+    Active --> Deprecated: New version released
+    Deprecated --> Retired: Removed via consensus
+    Active --> Retired: Emergency removal
+```
 
 ## Docker Policy (Test-Only)
 

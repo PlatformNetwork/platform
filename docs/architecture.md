@@ -1,27 +1,27 @@
 # Architecture
 
-Platform is a **WASM-first, P2P validator network** designed for deterministic challenge evaluation on Bittensor. Validators exchange submissions, evaluation results, and consensus votes directly over libp2p, then submit finalized weights to the chain.
+Platform is a **WASM-first, P2P validator network** for deterministic challenge evaluation on Bittensor. Validators exchange submissions, evaluations, and consensus votes directly over libp2p, then submit finalized weight matrices to the chain.
 
 ## Core Components
 
-- **Validator Node (`validator-node`)**: runs P2P, consensus, and evaluation pipelines.
-- **Challenge Registry**: signed metadata for active challenges (WASM modules + policies).
-- **WASM Runtime Interface**: strict sandbox with resource caps and audited host functions.
+- **Validator Node (`validator-node`)**: P2P networking, consensus, evaluation, and weight submission.
+- **Challenge Registry**: signed metadata for active challenges (WASM modules + runtime policies).
+- **WASM Runtime Interface**: sandboxed execution with resource caps and audited host functions.
 - **P2P Consensus Engine**: PBFT-style voting with stake-weighted validator set.
-- **Distributed Storage (DHT)**: shared submission and consensus state.
+- **Distributed Storage (DHT)**: shared submissions, checkpoints, and consensus state.
 
-## Network Topology (P2P)
+## System Context
 
 ```mermaid
 flowchart LR
-    S[Sudo Owner] -->|Signed challenge updates| P2P[(libp2p Mesh)]
-    P2P --> DHT[(DHT)]
-    P2P --> V1[Validator 1]
-    P2P --> V2[Validator 2]
-    P2P --> VN[Validator N]
-    V1 -->|Evaluations + votes| P2P
-    V2 -->|Evaluations + votes| P2P
-    VN -->|Evaluations + votes| P2P
+    Owner[Sudo Owner] -->|Signed challenge updates| Mesh[(libp2p Mesh)]
+    Mesh --> DHT[(DHT: submissions + checkpoints)]
+    Mesh --> V1[Validator 1]
+    Mesh --> V2[Validator 2]
+    Mesh --> VN[Validator N]
+    V1 -->|Evaluations + votes| Mesh
+    V2 -->|Evaluations + votes| Mesh
+    VN -->|Evaluations + votes| Mesh
     V1 -->|Final weights| BT[Bittensor Chain]
     V2 -->|Final weights| BT
     VN -->|Final weights| BT
@@ -51,27 +51,41 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Miner[Miners] -->|Submit code + metadata| P2P[(libp2p gossipsub)]
-    P2P -->|Distribute submissions| Validators[Validator Nodes]
-    Validators -->|Execute WASM challenge runtime| Runtime[WASM Sandbox]
-    Runtime -->|Scores + artifacts| Validators
+    Miner[Miners] -->|Submit payload| P2P[(libp2p gossipsub)]
+    P2P --> Validators[Validator Nodes]
+    Validators --> Runtime[WASM Sandbox]
+    Runtime --> Validators
     Validators -->|Aggregate scores + consensus| DHT[(DHT + consensus state)]
     Validators -->|Stake-weighted weights| Bittensor[Bittensor Chain]
 ```
+
+## Runtime Policy Boundary
+
+```mermaid
+flowchart LR
+    Validator[Validator Node] --> Runtime[WASM Runtime]
+    Runtime --> Policy[Runtime Policy]
+    Runtime --> HostFns[Whitelisted Host Functions]
+    Runtime --> Audit[Audit Logs]
+    Policy --> Runtime
+    HostFns --> Runtime
+    Runtime -->|Deterministic outputs| Validator
+```
+
+## Operational Boundaries
+
+- **WASM-first**: challenge execution runs in WASM in production.
+- **Docker test-only**: Docker-backed harnesses are reserved for local/CI testing.
+- **Consensus-driven changes**: challenge lifecycle events require PBFT approvals.
 
 ## Storage Model
 
 - **DHT entries**: submissions, evaluation results, consensus checkpoints.
 - **Local persistence**: validator state and audit logs under `data/`.
 
-## Operational Boundaries
-
-- **WASM-first**: challenge execution uses WASM runtime in production.
-- **Docker test-only**: Docker-backed harnesses are reserved for local/CI testing.
-- **Consensus-driven changes**: challenge lifecycle events require PBFT approval.
-
 ## Related Documentation
 
-- [Validator Operations](operations/validator.md)
 - [Security Model](security.md)
-- [Challenge Lifecycle](challenges.md)
+- [Challenges](challenges.md)
+- [Challenge Integration Guide](challenge-integration.md)
+- [Validator Operations](operations/validator.md)

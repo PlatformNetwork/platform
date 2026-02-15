@@ -14,12 +14,23 @@ cargo build --release --bin validator-node
 ./target/release/validator-node --data-dir ./data --secret-key "${VALIDATOR_SECRET_KEY}"
 ```
 
+## Operational Topology
+
+```mermaid
+flowchart LR
+    Validator[Validator Node] --> Mesh[(libp2p Mesh)]
+    Mesh --> DHT[(DHT + consensus state)]
+    Validator --> Runtime[WASM Runtime]
+    Validator --> Logs[Audit Logs]
+    Validator --> BT[Bittensor Chain]
+```
+
 ## Requirements
 
 ### Hardware
 
 | Resource | Minimum | Recommended |
-|----------|---------|-------------|
+| --- | --- | --- |
 | CPU | 4 vCPU | 8 vCPU |
 | RAM | 16 GB | 32 GB |
 | Storage | 250 GB SSD | 500 GB NVMe |
@@ -28,22 +39,22 @@ cargo build --release --bin validator-node
 ### Network
 
 | Port | Protocol | Usage | Required |
-|------|----------|-------|----------|
+| --- | --- | --- | --- |
 | 9000/tcp | libp2p | Validator P2P mesh | Yes |
 | 8545/tcp | HTTP | JSON-RPC API | Optional |
 
 ### Bittensor
 
-- Minimum stake: 1000 TAO
-- Registered hotkey on subnet
-- BIP39 mnemonic or hex private key
+- Minimum stake: 1000 TAO.
+- Registered hotkey on subnet.
+- BIP39 mnemonic or hex private key.
 
 ## Configuration
 
 ### Environment Variables
 
 | Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
+| --- | --- | --- | --- |
 | `VALIDATOR_SECRET_KEY` | BIP39 mnemonic or hex private key | - | Yes |
 | `SUBTENSOR_ENDPOINT` | Bittensor RPC endpoint | `wss://entrypoint-finney.opentensor.ai:443` | No |
 | `NETUID` | Subnet UID | `100` | No |
@@ -151,11 +162,12 @@ SUBTENSOR_ENDPOINT=wss://subtensor.api.opentensor.ai:443
 
 ## Security Best Practices
 
-- Restrict `.env` permissions: `chmod 600 .env`
-- Use a firewall and limit ingress to required ports
-- Rotate keys and monitor logs for anomalies
+- Restrict `.env` permissions: `chmod 600 .env`.
+- Use a firewall and limit ingress to required ports.
+- Rotate keys and monitor logs for anomalies.
 
 ## References
 
 - [Architecture](../architecture.md)
 - [Security Model](../security.md)
+- [Validator Guide](../validator.md)

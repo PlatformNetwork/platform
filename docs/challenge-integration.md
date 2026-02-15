@@ -1,36 +1,19 @@
 # Challenge Integration Guide
 
-This guide explains how to integrate challenge crates with the Platform validator network.
+This guide explains how to integrate challenge crates with the Platform validator network. Production execution is **WASM-first**; Docker is reserved for test harnesses only.
 
 ## Overview
 
 Platform uses a modular challenge architecture where each challenge:
-- Runs in its own sandboxed runtime (WASM in production)
-- Communicates via HTTP/WebSocket with validators
-- Has its own state persistence
-- Supports hot-reload without losing evaluation progress
 
-Challenge outputs feed directly into validator consensus. The validator network is fully peer-to-peer: challenge scores and derived weights are exchanged only via libp2p, with no centralized relays.
+- Runs in a sandboxed WASM runtime (production).
+- Communicates with validators via HTTP or WebSocket.
+- Persists state through the shared checkpoint system.
+- Supports hot-reload without losing evaluation progress.
 
----
+Challenge outputs feed directly into validator consensus. Validators exchange scores and weight commitments exclusively over libp2p with no centralized relays.
 
-## P2P-Only Consensus Inputs
-
-Validators evaluate challenges locally and publish weight commitments over the P2P mesh. Each validator’s voting power is proportional to its Bittensor stake, so higher-stake validators have higher influence in the aggregated weights.
-
-1. **Stake-weighted validator set**: Active validators are derived from the metagraph, with voting power proportional to stake.
-2. **Commit phase**: Validators broadcast commitments to their challenge weight vectors over libp2p.
-3. **Reveal phase**: Validators reveal the weight vectors that match their commitments.
-4. **Epoch boundary aggregation**: At each epoch boundary, weights are aggregated with stake weighting to produce the canonical weight matrix.
-5. **Consensus finalization**: Validators finalize the epoch by agreeing on the aggregated weights and resulting state hash via P2P.
-
-These aggregated weights are submitted to Bittensor as the subnet’s consensus output.
-
-### Weight Aggregation at Epoch Boundaries
-
-At the epoch boundary, validators aggregate the revealed weights with a stake-weighted sum to produce the canonical weight matrix and a deterministic state hash. Validators reject late or mismatched reveals to keep the final aggregation deterministic. The finalized aggregation is the only weight matrix submitted back to Bittensor for the epoch.
-
-## Architecture
+## Integration Architecture
 
 ```mermaid
 flowchart TB
@@ -43,17 +26,43 @@ flowchart TB
     StateMgr --> Challenges
 ```
 
-## Testing With Docker
+## Challenge Lifecycle in Consensus
+
+```mermaid
+sequenceDiagram
+    participant Owner as Sudo Owner
+    participant Registry as Challenge Registry
+    participant Validators as Validator Set
+    participant Runtime as WASM Runtime
+
+    Owner->>Registry: Signed metadata update
+    Registry->>Validators: Broadcast metadata
+    Validators->>Runtime: Load WASM module
+    Runtime-->>Validators: Policy + sandbox ready
+    Validators-->>Owner: Consensus approval
+```
+
+## P2P Consensus Inputs
+
+Validators evaluate challenges locally and publish weight commitments over the P2P mesh. Each validator’s voting power is proportional to its Bittensor stake.
+
+1. **Stake-weighted validator set** derived from the metagraph.
+2. **Commit phase**: broadcast commitments for weight vectors.
+3. **Reveal phase**: reveal weight vectors matching commitments.
+4. **Epoch aggregation**: stake-weighted sum yields canonical weights.
+5. **Consensus finalization**: validators agree on the aggregated weights and state hash.
+
+## Weight Aggregation at Epoch Boundaries
+
+At each epoch boundary, validators aggregate revealed weights with stake weighting to produce the canonical weight matrix and deterministic state hash. Late or mismatched reveals are rejected to keep aggregation deterministic. The finalized aggregation is the only weight matrix submitted back to Bittensor for the epoch.
+
+## Testing With Docker (Test-Only)
 
 Docker is used only for validator test harnesses. Use `./scripts/test-comprehensive.sh` to run Docker-backed integration tests; it will call `scripts/install-docker.sh` if Docker or Compose are missing (unless `PLATFORM_TEST_DOCKER_MODE=skip`).
-
----
 
 ## Creating a Challenge Crate
 
 ### 1. Project Structure
-
-Your challenge crate should follow this structure:
 
 ```
 my-challenge/
@@ -62,7 +71,6 @@ my-challenge/
     lib.rs           # Challenge implementation
     evaluation.rs    # Evaluation logic
     scoring.rs       # Scoring algorithm
-  Dockerfile         # Test harness container build (optional)
   README.md          # Documentation
 ```
 
@@ -102,7 +110,6 @@ impl ServerChallenge for MyChallenge {
         &self,
         req: EvaluationRequest,
     ) -> Result<EvaluationResponse, ChallengeError> {
-        // Your evaluation logic
         let score = self.evaluate_submission(&req.data)?;
 
         Ok(EvaluationResponse::success(
@@ -114,20 +121,12 @@ impl ServerChallenge for MyChallenge {
 }
 ```
 
-### 4. Test Harness Docker Container (Optional)
+### 4. Build WASM Artifact
 
-If you want to exercise your challenge in the Docker-based test harness, create a `Dockerfile`:
+Build and optimize your challenge into a `.wasm` module:
 
-```dockerfile
-FROM rust:1.90 as builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-COPY --from=builder /app/target/release/my-challenge /usr/local/bin/
-EXPOSE 8080
-CMD ["my-challenge"]
+```bash
+cargo build --release --target wasm32-unknown-unknown
 ```
 
 ## State Persistence
@@ -136,13 +135,11 @@ CMD ["my-challenge"]
 
 Challenges automatically benefit from Platform's checkpoint system:
 
-1. **Periodic Checkpoints**: Every 5 minutes
-2. **Shutdown Checkpoints**: On graceful shutdown
-3. **Crash Recovery**: On restart, state is restored
+1. **Periodic checkpoints**: every 5 minutes.
+2. **Shutdown checkpoints**: on graceful shutdown.
+3. **Crash recovery**: on restart, state is restored.
 
 ### Custom State
-
-To persist challenge-specific state:
 
 ```rust
 use platform_challenge_sdk::database::Database;
@@ -164,15 +161,14 @@ impl MyChallenge {
 
 ## Hot-Reload Support
 
-Platform supports updating challenges without losing evaluation progress:
-
-### 1. Graceful Shutdown Signal
+### Graceful Shutdown Signal
 
 When receiving SIGTERM, your challenge should:
-1. Stop accepting new evaluations
-2. Complete in-progress evaluations
-3. Persist any local state
-4. Exit cleanly
+
+1. Stop accepting new evaluations.
+2. Complete in-progress evaluations.
+3. Persist any local state.
+4. Exit cleanly.
 
 ```rust
 tokio::select! {
@@ -183,22 +179,18 @@ tokio::select! {
 }
 ```
 
-### 2. Version Compatibility
-
-Ensure backward compatibility between versions:
+### Version Compatibility
 
 ```rust
 #[derive(Serialize, Deserialize)]
 struct MyState {
     #[serde(default)]
     version: u32,
-    // ... fields
 }
 
 impl MyState {
     fn migrate(&mut self) {
         if self.version < 2 {
-            // Migration logic
             self.version = 2;
         }
     }
@@ -209,11 +201,9 @@ impl MyState {
 
 Implement health check endpoints:
 
-```rust
-// GET /health - Returns 200 if healthy
-// GET /ready - Returns 200 if ready for traffic
-// GET /live - Returns 200 if process is alive
-```
+- `GET /health` - Returns 200 if healthy.
+- `GET /ready` - Returns 200 if ready for traffic.
+- `GET /live` - Returns 200 if process is alive.
 
 ## Registration
 
@@ -224,46 +214,25 @@ Add to workspace `Cargo.toml`:
 ```toml
 [workspace]
 members = [
-    # ... existing members
     "challenges/my-challenge",
 ]
 ```
 
 ### Production Deployment
 
-1. Build the WASM challenge artifact
-2. Register via sudo action (network operator only)
-3. Validators load the WASM runtime without Docker
+1. Build the WASM challenge artifact.
+2. Register via sudo action (network operator only).
+3. Validators load the WASM runtime without Docker.
 
 ## Best Practices
 
-1. **Deterministic Evaluation**: Same input should produce same output
-2. **Timeout Handling**: Set reasonable timeouts
-3. **Resource Limits**: Respect CPU/memory constraints
-4. **Logging**: Use structured logging with tracing
-5. **Error Handling**: Return meaningful error messages
-6. **Testing**: Include comprehensive unit tests
+1. **Deterministic evaluation**: same input produces same output.
+2. **Resource-aware design**: keep runtime usage within policy limits.
+3. **Versioned outputs**: include version in responses for auditability.
+4. **Clear scoring**: document scoring and mapping of outputs to weights.
 
-## Example Challenges
+## References
 
-- [term-challenge](https://github.com/PlatformNetwork/term-challenge) - Terminal benchmark
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Challenge not starting**: Check runtime logs (Docker logs only apply to test harness runs)
-2. **Evaluation timeout**: Increase timeout or optimize
-3. **State loss after update**: Verify checkpoint creation
-4. **Version mismatch**: Check compatibility constraints
-
-### Debugging
-
-Enable debug logging:
-```bash
-RUST_LOG=debug my-challenge
-```
-
-## API Reference
-
-See [platform-challenge-sdk documentation](../crates/challenge-sdk/README.md).
+- [Challenges](challenges.md)
+- [Security Model](security.md)
+- [Architecture](architecture.md)
