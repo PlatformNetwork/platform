@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, "worker/**"]
     tags: ["v*"]
   pull_request:
     branches: [main, master]
@@ -143,6 +143,8 @@ jobs:
         with:
           shared-key: "platform-ci"
           save-if: false
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y bash curl jq
       - name: Run tests with coverage
         run: |
           cargo llvm-cov nextest --workspace --json --output-path coverage.json -E 'not (test(/live/) | test(/integration/) | test(/e2e/))'
@@ -297,6 +299,12 @@ jobs:
             PLATFORM_NIGHTLY_RUSTFLAGS=-Z threads=0
             PLATFORM_FAST_LINKER_RUSTFLAGS=-C link-arg=-fuse-ld=mold
           cache-from: type=gha
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install nightly dependencies
+        run: sudo apt-get update && sudo apt-get install -y bash ripgrep mold
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Nightly build
         run: cargo build --release
       - name: Nightly tests

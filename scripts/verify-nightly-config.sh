@@ -161,7 +161,7 @@ run_check() {
 
     log_info "${label}: Running cargo check (dry-run build)"
     export CARGO_TARGET_DIR="${cargo_target_dir}"
-    if RUSTFLAGS="${RUSTFLAGS:-} ${PLATFORM_NIGHTLY_RUSTFLAGS} ${PLATFORM_FAST_LINKER_RUSTFLAGS}" cargo check -p utils -v 2>&1 | tee "${log_file}"; then
+    if RUSTFLAGS="${RUSTFLAGS:-} ${PLATFORM_NIGHTLY_RUSTFLAGS} ${PLATFORM_FAST_LINKER_RUSTFLAGS}" cargo check --workspace -v 2>&1 | tee "${log_file}"; then
         log_success "${label}: Config verification completed"
     else
         log_failure "${label}: Config verification failed"
