@@ -476,8 +476,15 @@ mod errors {
 // ============================================================================
 
 mod integration {
+    use platform_bittensor::{BittensorConfig, SubtensorClient, WeightSubmitter};
+    use platform_challenge_sdk::WeightAssignment;
+    use serde::Deserialize;
+    use std::collections::HashMap;
+    use std::env;
+    use std::time::{Duration, SystemTime};
+    use tokio::time::sleep;
 
-    struct WeightAssignment {
+    struct LocalWeightAssignment {
         uid: u16,
         hotkey: String,
         weight: f64,
@@ -486,19 +493,18 @@ mod integration {
     #[test]
     fn test_weight_submission_flow() {
         let weights = [
-            WeightAssignment {
+            LocalWeightAssignment {
                 uid: 0,
                 hotkey: "a".to_string(),
                 weight: 0.5,
             },
-            WeightAssignment {
+            LocalWeightAssignment {
                 uid: 1,
                 hotkey: "b".to_string(),
                 weight: 0.5,
             },
         ];
 
-        // Convert to UIDs and values
         let uids: Vec<u16> = weights.iter().map(|w| w.uid).collect();
         let values: Vec<u16> = weights
             .iter()
@@ -513,7 +519,6 @@ mod integration {
     fn test_epoch_phase_calculation() {
         let tempo = 360;
 
-        // Evaluation phase (0-75%)
         let eval_block = 100;
         let phase = if eval_block % tempo < (tempo * 3 / 4) {
             "evaluation"
@@ -524,7 +529,6 @@ mod integration {
         };
         assert_eq!(phase, "evaluation");
 
-        // Commit phase (75-87.5%)
         let commit_block = 280;
         let phase = if commit_block % tempo < (tempo * 3 / 4) {
             "evaluation"
@@ -535,7 +539,6 @@ mod integration {
         };
         assert_eq!(phase, "commit");
 
-        // Reveal phase (87.5-100%)
         let reveal_block = 330;
         let phase = if reveal_block % tempo < (tempo * 3 / 4) {
             "evaluation"
@@ -545,5 +548,183 @@ mod integration {
             "reveal"
         };
         assert_eq!(phase, "reveal");
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MockWeightsResponse {
+        pending: Vec<MockPendingCommit>,
+        revealed: Vec<MockRevealedCommit>,
+        total_pending: usize,
+        total_revealed: usize,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MockPendingCommit {
+        hotkey: String,
+        netuid: u16,
+        uids: Vec<u16>,
+        commitment_hash: String,
+        commit_block: u64,
+        revealed: bool,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MockRevealedCommit {
+        hotkey: String,
+        netuid: u16,
+        uids: Vec<u16>,
+        weights: Option<Vec<u16>>,
+        reveal_block: Option<u64>,
+        revealed: bool,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct JsonRpcResponse {
+        result: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+    }
+
+    fn test_endpoint() -> Option<String> {
+        env::var("SUBTENSOR_ENDPOINT").ok()
+    }
+
+    fn map_metagraph_hotkeys(metagraph: &platform_bittensor::Metagraph) -> HashMap<String, u16> {
+        use sp_core::crypto::Ss58Codec;
+        metagraph
+            .neurons
+            .iter()
+            .map(|(uid, neuron)| (neuron.hotkey.to_ss58check(), *uid as u16))
+            .collect()
+    }
+
+    async fn fetch_weights(endpoint: &str) -> MockWeightsResponse {
+        let base = endpoint
+            .replace("ws://", "http://")
+            .replace("wss://", "https://");
+        let url = format!("{}/test/weights", base.trim_end_matches('/'));
+        reqwest::get(url)
+            .await
+            .expect("fetch weights")
+            .json::<MockWeightsResponse>()
+            .await
+            .expect("parse weights")
+    }
+
+    async fn wait_for_weight_change(
+        endpoint: &str,
+        expect_pending: usize,
+        expect_revealed: usize,
+        timeout: Duration,
+    ) -> MockWeightsResponse {
+        let start = SystemTime::now();
+        loop {
+            let weights = fetch_weights(endpoint).await;
+            if weights.total_pending == expect_pending && weights.total_revealed == expect_revealed
+            {
+                return weights;
+            }
+            if start.elapsed().unwrap_or_default() > timeout {
+                return weights;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    async fn reveal_with_mock_rpc(
+        endpoint: &str,
+        netuid: u16,
+        hotkey: &str,
+        uids: &[u16],
+        weights: &[u16],
+        salt: &str,
+    ) {
+        let base = endpoint
+            .replace("ws://", "http://")
+            .replace("wss://", "https://");
+        let url = format!("{}/rpc", base.trim_end_matches('/'));
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "subtensor_revealWeights",
+            "params": [netuid, uids, weights, salt, hotkey],
+            "id": 1,
+        });
+        let response = reqwest::Client::new()
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .expect("send reveal")
+            .json::<JsonRpcResponse>()
+            .await
+            .expect("parse reveal");
+        assert!(response.error.is_none());
+        assert_eq!(response.result, Some(serde_json::Value::Bool(true)));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_mock_subtensor_commit_reveal_flow() {
+        let endpoint = match test_endpoint() {
+            Some(endpoint) => endpoint,
+            None => return,
+        };
+
+        let netuid = 100;
+        let mut client = SubtensorClient::new(BittensorConfig {
+            endpoint: endpoint.clone(),
+            netuid,
+            use_commit_reveal: true,
+            version_key: 1,
+        });
+        client.connect().await.expect("connect to mock subtensor");
+        client.set_signer("//Alice").expect("set signer");
+
+        let metagraph = client.sync_metagraph().await.expect("sync metagraph");
+        let uid_map = map_metagraph_hotkeys(metagraph);
+        let (hotkey, uid) = uid_map.iter().next().expect("hotkey mapping");
+        client.set_uid_overrides(vec![(hotkey.clone(), *uid)]);
+
+        let mut submitter = WeightSubmitter::new(client, None);
+        submitter.set_epoch(1);
+
+        let weights = vec![WeightAssignment::new(hotkey.clone(), 1.0)];
+        let commit_tx = submitter
+            .submit_weights(&weights)
+            .await
+            .expect("commit weights");
+        assert!(!commit_tx.is_empty());
+
+        let pending = wait_for_weight_change(&endpoint, 1, 0, Duration::from_secs(10)).await;
+        assert_eq!(pending.total_pending, 1);
+        assert_eq!(pending.total_revealed, 0);
+        let pending_commit = pending.pending.first().expect("pending commit");
+        assert_eq!(pending_commit.hotkey, *hotkey);
+        assert_eq!(pending_commit.netuid, netuid);
+        assert_eq!(pending_commit.uids, vec![*uid]);
+        assert!(!pending_commit.commitment_hash.is_empty());
+        assert!(!pending_commit.revealed);
+
+        let reveal_weights = vec![65535u16; pending_commit.uids.len()];
+        reveal_with_mock_rpc(
+            &endpoint,
+            netuid,
+            hotkey,
+            &pending_commit.uids,
+            &reveal_weights,
+            &pending_commit.commitment_hash,
+        )
+        .await;
+
+        let revealed = wait_for_weight_change(&endpoint, 0, 1, Duration::from_secs(10)).await;
+        assert_eq!(revealed.total_pending, 0);
+        assert_eq!(revealed.total_revealed, 1);
+        let reveal_commit = revealed.revealed.first().expect("revealed commit");
+        assert_eq!(reveal_commit.hotkey, *hotkey);
+        assert_eq!(reveal_commit.netuid, netuid);
+        assert_eq!(reveal_commit.uids, vec![*uid]);
+        assert!(reveal_commit.revealed);
+        assert!(reveal_commit.reveal_block.is_some());
+        let weights = reveal_commit.weights.as_ref().expect("weights present");
+        assert_eq!(weights, &reveal_weights);
     }
 }

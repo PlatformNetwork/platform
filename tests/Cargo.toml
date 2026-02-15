@@ -44,6 +44,7 @@ path = "checkpoint_tests.rs"
 platform-core = { path = "../crates/core" }
 platform-storage = { path = "../crates/storage" }
 platform-p2p-consensus = { path = "../crates/p2p-consensus" }
+platform-bittensor = { path = "../crates/bittensor-integration" }
 
 tokio = { version = "1.40", features = ["full", "test-util"] }
 tempfile = "3.12"
@@ -56,3 +57,4 @@ rand = "0.8"
 lz4_flex = "0.11"
 hex = "0.4"
 bincode = "1.3"
+reqwest = { workspace = true }
