@@ -11,16 +11,28 @@ use std::str::FromStr;
 
 pub mod network;
 pub mod runtime;
+pub mod storage;
 pub use network::{NetworkHostFunctions, NetworkState, NetworkStateError};
+pub use storage::{
+    InMemoryStorageBackend, NoopStorageBackend, StorageAuditEntry, StorageAuditLogger,
+    StorageBackend, StorageDeleteRequest, StorageGetRequest, StorageGetResponse, StorageHostConfig,
+    StorageHostError, StorageHostState, StorageHostStatus, StorageOperation,
+    StorageProposeWriteRequest, StorageProposeWriteResponse,
+};
 
 pub const HOST_FUNCTION_NAMESPACE: &str = "platform_network";
 pub const HOST_HTTP_REQUEST: &str = "http_request";
 pub const HOST_HTTP_GET: &str = "http_get";
 pub const HOST_HTTP_POST: &str = "http_post";
 pub const HOST_DNS_RESOLVE: &str = "dns_resolve";
+
 pub use runtime::{
     ChallengeInstance, HostFunctionRegistrar, InstanceConfig, RuntimeConfig, RuntimeState,
     WasmModule, WasmRuntime, WasmRuntimeError,
+};
+pub use storage::{
+    HOST_STORAGE_ALLOC, HOST_STORAGE_DELETE, HOST_STORAGE_GET, HOST_STORAGE_GET_RESULT,
+    HOST_STORAGE_NAMESPACE, HOST_STORAGE_PROPOSE_WRITE,
 };
 
 /// Host functions that may be exposed to WASM challenges.

@@ -14,3 +14,4 @@ wasmtime = "41.0.3"
 bincode = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 trust-dns-resolver = "0.23.2"
+sha2 = { workspace = true }

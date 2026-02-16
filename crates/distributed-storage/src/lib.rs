@@ -93,6 +93,7 @@ pub mod replication;
 pub mod state_consensus;
 pub mod store;
 pub mod submission;
+pub mod validated_storage;
 pub mod weights;
 
 // Re-export main types for convenience
@@ -127,6 +128,13 @@ pub use challenge_store::{
 pub use state_consensus::{
     ConsensusResult as StateConsensusResult, FraudProof, GlobalStateLinker, InclusionProof,
     StateRootConsensus, StateRootConsensusError, StateRootProposal, StateRootVote,
+};
+
+// Validated storage with WASM consensus
+pub use validated_storage::{
+    ConsensusResult as ValidatedConsensusResult, DefaultWasmValidator, StorageWriteProposal,
+    StorageWriteVote, ValidatedStorage, ValidatedStorageConfig, ValidatedStorageError,
+    WasmStorageValidator, WasmValidationResult,
 };
 
 #[cfg(test)]

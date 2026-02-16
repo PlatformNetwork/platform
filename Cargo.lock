@@ -8986,6 +8986,7 @@ dependencies = [
  "ipnet",
  "reqwest 0.12.25",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.17",
  "tracing",
  "trust-dns-resolver",
