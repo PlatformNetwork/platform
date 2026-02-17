@@ -1,7 +1,11 @@
 use crate::bridge::{self, BridgeError, EvalRequest, EvalResponse};
 use crate::exec::{ExecPolicy, ExecState};
+use crate::storage::{
+    InMemoryStorageBackend, StorageBackend, StorageHostConfig, StorageHostFunctions,
+    StorageHostState,
+};
 use crate::time::{TimePolicy, TimeState};
-use crate::{NetworkAuditLogger, NetworkPolicy, NetworkState};
+use crate::{NetworkAuditLogger, NetworkHostFunctions, NetworkPolicy, NetworkState};
 use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
@@ -103,6 +107,12 @@ pub struct InstanceConfig {
     pub restart_id: String,
     /// Configuration version for hot-restarts.
     pub config_version: u64,
+    /// Storage host function configuration.
+    pub storage_host_config: StorageHostConfig,
+    /// Storage backend implementation.
+    pub storage_backend: Arc<dyn StorageBackend>,
+    /// Fixed timestamp for deterministic consensus execution.
+    pub fixed_timestamp_ms: Option<i64>,
 }
 
 impl Default for InstanceConfig {
@@ -117,6 +127,9 @@ impl Default for InstanceConfig {
             validator_id: "unknown".to_string(),
             restart_id: String::new(),
             config_version: 0,
+            storage_host_config: StorageHostConfig::default(),
+            storage_backend: Arc::new(InMemoryStorageBackend::new()),
+            fixed_timestamp_ms: None,
         }
     }
 }
@@ -140,6 +153,10 @@ pub struct RuntimeState {
     pub restart_id: String,
     /// Configuration version for hot-restarts.
     pub config_version: u64,
+    /// Storage host state for key-value operations.
+    pub storage_state: StorageHostState,
+    /// Fixed timestamp in milliseconds for deterministic consensus execution.
+    pub fixed_timestamp_ms: Option<i64>,
     limits: StoreLimits,
 }
 
@@ -155,6 +172,8 @@ impl RuntimeState {
         validator_id: String,
         restart_id: String,
         config_version: u64,
+        storage_state: StorageHostState,
+        fixed_timestamp_ms: Option<i64>,
         limits: StoreLimits,
     ) -> Self {
         Self {
@@ -167,12 +186,18 @@ impl RuntimeState {
             validator_id,
             restart_id,
             config_version,
+            storage_state,
+            fixed_timestamp_ms,
             limits,
         }
     }
 
     pub fn reset_network_counters(&mut self) {
         self.network_state.reset_counters();
+    }
+
+    pub fn reset_storage_counters(&mut self) {
+        self.storage_state.reset_counters();
     }
 
     pub fn reset_exec_counters(&mut self) {
@@ -242,6 +267,11 @@ impl WasmRuntime {
             instance_config.validator_id.clone(),
         )
         .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+        let storage_state = StorageHostState::new(
+            instance_config.challenge_id.clone(),
+            instance_config.storage_host_config.clone(),
+            Arc::clone(&instance_config.storage_backend),
+        );
         let exec_state = ExecState::new(
             instance_config.exec_policy.clone(),
             instance_config.challenge_id.clone(),
@@ -262,6 +292,8 @@ impl WasmRuntime {
             instance_config.validator_id.clone(),
             instance_config.restart_id.clone(),
             instance_config.config_version,
+            storage_state,
+            instance_config.fixed_timestamp_ms,
             limits.build(),
         );
         let mut store = Store::new(&self.engine, runtime_state);
@@ -277,6 +309,13 @@ impl WasmRuntime {
         store.limiter(|state| &mut state.limits);
 
         let mut linker = Linker::new(&self.engine);
+
+        let network_host_fns = NetworkHostFunctions::all();
+        network_host_fns.register(&mut linker)?;
+
+        let storage_host_fns = StorageHostFunctions::new();
+        storage_host_fns.register(&mut linker)?;
+
         if let Some(registrar) = registrar {
             registrar.register(&mut linker)?;
         }
@@ -434,6 +473,22 @@ impl ChallengeInstance {
 
     pub fn reset_network_state(&mut self) {
         self.store.data_mut().reset_network_counters();
+    }
+
+    pub fn reset_storage_state(&mut self) {
+        self.store.data_mut().reset_storage_counters();
+    }
+
+    pub fn storage_bytes_read(&self) -> u64 {
+        self.store.data().storage_state.bytes_read
+    }
+
+    pub fn storage_bytes_written(&self) -> u64 {
+        self.store.data().storage_state.bytes_written
+    }
+
+    pub fn storage_operations_count(&self) -> u32 {
+        self.store.data().storage_state.operations_count
     }
 
     pub fn challenge_id(&self) -> &str {

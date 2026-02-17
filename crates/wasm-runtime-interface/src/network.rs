@@ -13,13 +13,19 @@ use std::io::Read;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::proto::rr::RecordType;
 use trust_dns_resolver::Resolver;
 use wasmtime::{Caller, Linker, Memory};
 
 use crate::runtime::{HostFunctionRegistrar, RuntimeState, WasmRuntimeError};
+
+pub const HOST_LOG_MESSAGE: &str = "log_message";
+pub const HOST_GET_TIMESTAMP: &str = "get_timestamp";
+
+const DEFAULT_RESPONSE_BUF_SIZE: i32 = 65536;
+const DEFAULT_DNS_BUF_SIZE: i32 = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkStateError {
@@ -86,10 +92,9 @@ impl HostFunctionRegistrar for NetworkHostFunctions {
                     |mut caller: Caller<RuntimeState>,
                      req_ptr: i32,
                      req_len: i32,
-                     resp_ptr: i32,
-                     resp_len: i32|
+                     resp_ptr: i32|
                      -> i32 {
-                        handle_http_get(&mut caller, req_ptr, req_len, resp_ptr, resp_len)
+                        handle_http_get(&mut caller, req_ptr, req_len, resp_ptr)
                     },
                 )
                 .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
@@ -104,7 +109,8 @@ impl HostFunctionRegistrar for NetworkHostFunctions {
                      req_ptr: i32,
                      req_len: i32,
                      resp_ptr: i32,
-                     resp_len: i32|
+                     resp_len: i32,
+                     _extra: i32|
                      -> i32 {
                         handle_http_post(&mut caller, req_ptr, req_len, resp_ptr, resp_len)
                     },
@@ -120,14 +126,31 @@ impl HostFunctionRegistrar for NetworkHostFunctions {
                     |mut caller: Caller<RuntimeState>,
                      req_ptr: i32,
                      req_len: i32,
-                     resp_ptr: i32,
-                     resp_len: i32|
+                     resp_ptr: i32|
                      -> i32 {
-                        handle_dns_request(&mut caller, req_ptr, req_len, resp_ptr, resp_len)
+                        handle_dns_request(&mut caller, req_ptr, req_len, resp_ptr)
                     },
                 )
                 .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
         }
+
+        linker
+            .func_wrap(
+                HOST_FUNCTION_NAMESPACE,
+                HOST_LOG_MESSAGE,
+                |mut caller: Caller<RuntimeState>, level: i32, msg_ptr: i32, msg_len: i32| {
+                    handle_log_message(&mut caller, level, msg_ptr, msg_len);
+                },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
+        linker
+            .func_wrap(
+                HOST_FUNCTION_NAMESPACE,
+                HOST_GET_TIMESTAMP,
+                |caller: Caller<RuntimeState>| -> i64 { handle_get_timestamp(&caller) },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
 
         Ok(())
     }
@@ -147,11 +170,6 @@ pub struct NetworkState {
 }
 
 impl NetworkState {
-    /// Create network state for a single WASM execution.
-    ///
-    /// The policy is validated and then enforced by every host call. All host
-    /// functions share the same counters and audit logger, providing a single
-    /// enforcement surface for HTTP and DNS access.
     pub fn new(
         policy: NetworkPolicy,
         audit_logger: Option<Arc<dyn NetworkAuditLogger>>,
@@ -578,8 +596,8 @@ fn handle_http_get(
     req_ptr: i32,
     req_len: i32,
     resp_ptr: i32,
-    resp_len: i32,
 ) -> i32 {
+    let resp_len = DEFAULT_RESPONSE_BUF_SIZE;
     let enforcement = "http_get";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,
@@ -678,8 +696,8 @@ fn handle_dns_request(
     req_ptr: i32,
     req_len: i32,
     resp_ptr: i32,
-    resp_len: i32,
 ) -> i32 {
+    let resp_len = DEFAULT_DNS_BUF_SIZE;
     let enforcement = "dns_resolve";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,
@@ -714,6 +732,34 @@ fn handle_dns_request(
         warn!(challenge_id = %caller.data().challenge_id, validator_id = %caller.data().validator_id, function = enforcement, error = %err, "host request denied");
     }
     write_result(caller, resp_ptr, resp_len, result)
+}
+
+fn handle_log_message(caller: &mut Caller<RuntimeState>, level: i32, msg_ptr: i32, msg_len: i32) {
+    let msg = match read_memory(caller, msg_ptr, msg_len) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(err) => {
+            warn!(
+                challenge_id = %caller.data().challenge_id,
+                error = %err,
+                "log_message: failed to read message from wasm memory"
+            );
+            return;
+        }
+    };
+
+    let challenge_id = caller.data().challenge_id.clone();
+    match level {
+        0 => info!(challenge_id = %challenge_id, "[wasm] {}", msg),
+        1 => warn!(challenge_id = %challenge_id, "[wasm] {}", msg),
+        _ => error!(challenge_id = %challenge_id, "[wasm] {}", msg),
+    }
+}
+
+fn handle_get_timestamp(caller: &Caller<RuntimeState>) -> i64 {
+    if let Some(ts) = caller.data().fixed_timestamp_ms {
+        return ts;
+    }
+    chrono::Utc::now().timestamp_millis()
 }
 
 fn resolve_dns(

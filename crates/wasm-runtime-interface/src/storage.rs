@@ -5,7 +5,8 @@
 //!
 //! # Host Functions
 //!
-//! - `storage_get(key_ptr, key_len) -> i64` - Read from storage
+//! - `storage_get(key_ptr, key_len, value_ptr) -> i32` - Read from storage
+//! - `storage_set(key_ptr, key_len, value_ptr, value_len) -> i32` - Write to storage
 //! - `storage_propose_write(key_ptr, key_len, value_ptr, value_len) -> i64` - Propose a write
 //! - `storage_delete(key_ptr, key_len) -> i32` - Delete from storage (requires consensus)
 //!
@@ -20,17 +21,19 @@
 //! - Not found: returns 0
 //! - Error: returns negative status code
 
-#![allow(dead_code, unused_variables, unused_imports)]
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::warn;
+use wasmtime::{Caller, Linker, Memory};
+
+use crate::runtime::{HostFunctionRegistrar, RuntimeState, WasmRuntimeError};
 
 pub const HOST_STORAGE_NAMESPACE: &str = "platform_storage";
 pub const HOST_STORAGE_GET: &str = "storage_get";
+pub const HOST_STORAGE_SET: &str = "storage_set";
 pub const HOST_STORAGE_PROPOSE_WRITE: &str = "storage_propose_write";
 pub const HOST_STORAGE_DELETE: &str = "storage_delete";
 pub const HOST_STORAGE_GET_RESULT: &str = "storage_get_result";
@@ -217,6 +220,7 @@ pub struct StorageDeleteRequest {
 pub struct StorageHostState {
     pub config: StorageHostConfig,
     pub challenge_id: String,
+    pub backend: Arc<dyn StorageBackend>,
     pub pending_results: HashMap<u32, Vec<u8>>,
     pub next_result_id: u32,
     pub bytes_read: u64,
@@ -225,10 +229,15 @@ pub struct StorageHostState {
 }
 
 impl StorageHostState {
-    pub fn new(challenge_id: String, config: StorageHostConfig) -> Self {
+    pub fn new(
+        challenge_id: String,
+        config: StorageHostConfig,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Self {
         Self {
             config,
             challenge_id,
+            backend,
             pending_results: HashMap::new(),
             next_result_id: 1,
             bytes_read: 0,
@@ -381,6 +390,7 @@ pub struct StorageAuditEntry {
 #[serde(rename_all = "snake_case")]
 pub enum StorageOperation {
     Get,
+    Set,
     ProposeWrite,
     Delete,
 }
@@ -393,6 +403,202 @@ pub struct NoopStorageAuditLogger;
 
 impl StorageAuditLogger for NoopStorageAuditLogger {
     fn record(&self, _entry: StorageAuditEntry) {}
+}
+
+#[derive(Clone, Debug)]
+pub struct StorageHostFunctions;
+
+impl StorageHostFunctions {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for StorageHostFunctions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HostFunctionRegistrar for StorageHostFunctions {
+    fn register(&self, linker: &mut Linker<RuntimeState>) -> Result<(), WasmRuntimeError> {
+        linker
+            .func_wrap(
+                HOST_STORAGE_NAMESPACE,
+                HOST_STORAGE_GET,
+                |mut caller: Caller<RuntimeState>,
+                 key_ptr: i32,
+                 key_len: i32,
+                 value_ptr: i32|
+                 -> i32 {
+                    handle_storage_get(&mut caller, key_ptr, key_len, value_ptr)
+                },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
+        linker
+            .func_wrap(
+                HOST_STORAGE_NAMESPACE,
+                HOST_STORAGE_SET,
+                |mut caller: Caller<RuntimeState>,
+                 key_ptr: i32,
+                 key_len: i32,
+                 value_ptr: i32,
+                 value_len: i32|
+                 -> i32 {
+                    handle_storage_set(&mut caller, key_ptr, key_len, value_ptr, value_len)
+                },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
+        Ok(())
+    }
+}
+
+fn handle_storage_get(
+    caller: &mut Caller<RuntimeState>,
+    key_ptr: i32,
+    key_len: i32,
+    value_ptr: i32,
+) -> i32 {
+    let key = match read_wasm_memory(caller, key_ptr, key_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_get: failed to read key from wasm memory");
+            return StorageHostStatus::InternalError.to_i32();
+        }
+    };
+
+    let storage = &caller.data().storage_state;
+    if let Err(err) = storage.config.validate_key(&key) {
+        warn!(error = %err, "storage_get: key validation failed");
+        return StorageHostStatus::from(err).to_i32();
+    }
+
+    let challenge_id = storage.challenge_id.clone();
+    let backend = Arc::clone(&storage.backend);
+
+    let value = match backend.get(&challenge_id, &key) {
+        Ok(Some(v)) => v,
+        Ok(None) => return 0,
+        Err(err) => {
+            warn!(error = %err, "storage_get: backend read failed");
+            return StorageHostStatus::from(err).to_i32();
+        }
+    };
+
+    caller.data_mut().storage_state.bytes_read += value.len() as u64;
+    caller.data_mut().storage_state.operations_count += 1;
+
+    if let Err(err) = write_wasm_memory(caller, value_ptr, &value) {
+        warn!(error = %err, "storage_get: failed to write value to wasm memory");
+        return StorageHostStatus::InternalError.to_i32();
+    }
+
+    value.len() as i32
+}
+
+fn handle_storage_set(
+    caller: &mut Caller<RuntimeState>,
+    key_ptr: i32,
+    key_len: i32,
+    value_ptr: i32,
+    value_len: i32,
+) -> i32 {
+    let key = match read_wasm_memory(caller, key_ptr, key_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_set: failed to read key from wasm memory");
+            return StorageHostStatus::InternalError.to_i32();
+        }
+    };
+
+    let value = match read_wasm_memory(caller, value_ptr, value_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_set: failed to read value from wasm memory");
+            return StorageHostStatus::InternalError.to_i32();
+        }
+    };
+
+    let storage = &caller.data().storage_state;
+    if let Err(err) = storage.config.validate_key(&key) {
+        warn!(error = %err, "storage_set: key validation failed");
+        return StorageHostStatus::from(err).to_i32();
+    }
+    if let Err(err) = storage.config.validate_value(&value) {
+        warn!(error = %err, "storage_set: value validation failed");
+        return StorageHostStatus::from(err).to_i32();
+    }
+
+    if storage.config.require_consensus && !storage.config.allow_direct_writes {
+        warn!("storage_set: direct writes require consensus or allow_direct_writes");
+        return StorageHostStatus::ConsensusRequired.to_i32();
+    }
+
+    let challenge_id = storage.challenge_id.clone();
+    let backend = Arc::clone(&storage.backend);
+
+    match backend.propose_write(&challenge_id, &key, &value) {
+        Ok(_proposal_id) => {
+            caller.data_mut().storage_state.bytes_written += value.len() as u64;
+            caller.data_mut().storage_state.operations_count += 1;
+            StorageHostStatus::Success.to_i32()
+        }
+        Err(err) => {
+            warn!(error = %err, "storage_set: backend write failed");
+            StorageHostStatus::from(err).to_i32()
+        }
+    }
+}
+
+fn read_wasm_memory(
+    caller: &mut Caller<RuntimeState>,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u8>, String> {
+    if ptr < 0 || len < 0 {
+        return Err("negative pointer/length".to_string());
+    }
+    let ptr = ptr as usize;
+    let len = len as usize;
+    let memory = get_memory(caller).ok_or_else(|| "memory export not found".to_string())?;
+    let data = memory.data(caller);
+    let end = ptr
+        .checked_add(len)
+        .ok_or_else(|| "pointer overflow".to_string())?;
+    if end > data.len() {
+        return Err("memory read out of bounds".to_string());
+    }
+    Ok(data[ptr..end].to_vec())
+}
+
+fn write_wasm_memory(
+    caller: &mut Caller<RuntimeState>,
+    ptr: i32,
+    bytes: &[u8],
+) -> Result<(), String> {
+    if ptr < 0 {
+        return Err("negative pointer".to_string());
+    }
+    let ptr = ptr as usize;
+    let memory = get_memory(caller).ok_or_else(|| "memory export not found".to_string())?;
+    let end = ptr
+        .checked_add(bytes.len())
+        .ok_or_else(|| "pointer overflow".to_string())?;
+    let data = memory.data_mut(caller);
+    if end > data.len() {
+        return Err("memory write out of bounds".to_string());
+    }
+    data[ptr..end].copy_from_slice(bytes);
+    Ok(())
+}
+
+fn get_memory(caller: &mut Caller<RuntimeState>) -> Option<Memory> {
+    let memory_export = caller.data().memory_export.clone();
+    caller
+        .get_export(&memory_export)
+        .and_then(|export| export.into_memory())
 }
 
 #[cfg(test)]
@@ -443,8 +649,12 @@ mod tests {
 
     #[test]
     fn test_storage_host_state() {
-        let mut state =
-            StorageHostState::new("challenge-1".to_string(), StorageHostConfig::default());
+        let backend = Arc::new(InMemoryStorageBackend::new());
+        let mut state = StorageHostState::new(
+            "challenge-1".to_string(),
+            StorageHostConfig::default(),
+            backend,
+        );
 
         let id1 = state.store_result(b"result1".to_vec());
         let id2 = state.store_result(b"result2".to_vec());
