@@ -4,6 +4,8 @@
 //! Uses libp2p for gossipsub consensus and Kademlia DHT for storage.
 //! Submits weights to Bittensor at epoch boundaries.
 
+mod wasm_executor;
+
 use anyhow::Result;
 use bittensor_rs::chain::{signer_from_seed, BittensorSigner, ExtrinsicWait};
 use clap::Parser;
@@ -17,7 +19,7 @@ use platform_core::{
         CheckpointData, CheckpointManager, CompletedEvaluationState, PendingEvaluationState,
         WeightVoteState,
     },
-    Hotkey, Keypair, SUDO_KEY_SS58,
+    ChallengeId, Hotkey, Keypair, SUDO_KEY_SS58,
 };
 use platform_distributed_storage::{
     DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
@@ -30,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
+use wasm_executor::{WasmChallengeExecutor, WasmExecutorConfig};
 
 /// Storage key for persisted chain state
 const STATE_STORAGE_KEY: &str = "chain_state";
@@ -155,6 +158,22 @@ struct Args {
     /// Disable Bittensor (for testing)
     #[arg(long)]
     no_bittensor: bool,
+
+    /// Directory where WASM challenge modules are stored
+    #[arg(long, env = "WASM_MODULE_DIR", default_value = "./wasm_modules")]
+    wasm_module_dir: PathBuf,
+
+    /// Maximum memory for WASM execution in bytes (default: 512MB)
+    #[arg(long, env = "WASM_MAX_MEMORY", default_value = "536870912")]
+    wasm_max_memory: u64,
+
+    /// Enable fuel metering for WASM execution
+    #[arg(long, env = "WASM_ENABLE_FUEL")]
+    wasm_enable_fuel: bool,
+
+    /// Fuel limit per WASM execution (requires --wasm-enable-fuel)
+    #[arg(long, env = "WASM_FUEL_LIMIT")]
+    wasm_fuel_limit: Option<u64>,
 }
 
 // ==================== Main ====================
@@ -338,6 +357,38 @@ async fn main() -> Result<()> {
         bittensor_client_for_metagraph = None;
     }
 
+    // Initialize WASM challenge executor
+    let wasm_module_dir = if args.wasm_module_dir.is_relative() {
+        data_dir.join(&args.wasm_module_dir)
+    } else {
+        args.wasm_module_dir.clone()
+    };
+    std::fs::create_dir_all(&wasm_module_dir)?;
+
+    let wasm_executor = match WasmChallengeExecutor::new(WasmExecutorConfig {
+        module_dir: wasm_module_dir.clone(),
+        max_memory_bytes: args.wasm_max_memory,
+        enable_fuel: args.wasm_enable_fuel,
+        fuel_limit: args.wasm_fuel_limit,
+    }) {
+        Ok(executor) => {
+            info!(
+                module_dir = %wasm_module_dir.display(),
+                max_memory = args.wasm_max_memory,
+                fuel_enabled = args.wasm_enable_fuel,
+                "WASM challenge executor ready"
+            );
+            Some(Arc::new(executor))
+        }
+        Err(e) => {
+            error!(
+                "Failed to initialize WASM executor: {}. WASM evaluations disabled.",
+                e
+            );
+            None
+        }
+    };
+
     // Initialize shutdown handler for graceful checkpoint persistence
     let mut shutdown_handler =
         match ShutdownHandler::new(&data_dir, state_manager.clone(), args.netuid) {
@@ -363,6 +414,7 @@ async fn main() -> Result<()> {
     let mut stale_check_interval = tokio::time::interval(Duration::from_secs(60));
     let mut state_persist_interval = tokio::time::interval(Duration::from_secs(60));
     let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
+    let mut wasm_eval_interval = tokio::time::interval(Duration::from_secs(5));
 
     loop {
         tokio::select! {
@@ -436,6 +488,17 @@ async fn main() -> Result<()> {
             _ = stale_check_interval.tick() => {
                 validator_set.mark_stale_validators();
                 debug!("Active validators: {}", validator_set.active_count());
+            }
+
+            // WASM evaluation check
+            _ = wasm_eval_interval.tick() => {
+                if let Some(ref executor) = wasm_executor {
+                    process_wasm_evaluations(
+                        executor,
+                        &state_manager,
+                        &keypair,
+                    ).await;
+                }
             }
 
             // Periodic checkpoint
@@ -791,5 +854,148 @@ async fn handle_block_event(
         BlockSyncEvent::Reconnected => {
             info!("Bittensor reconnected");
         }
+    }
+}
+
+async fn process_wasm_evaluations(
+    executor: &Arc<WasmChallengeExecutor>,
+    state_manager: &Arc<StateManager>,
+    keypair: &Keypair,
+) {
+    let pending: Vec<(String, ChallengeId, String)> = state_manager.read(|state| {
+        state
+            .pending_evaluations
+            .iter()
+            .filter(|(_, record)| {
+                !record.finalized && !record.evaluations.contains_key(&keypair.hotkey())
+            })
+            .map(|(id, record)| (id.clone(), record.challenge_id, record.agent_hash.clone()))
+            .collect()
+    });
+
+    if pending.is_empty() {
+        return;
+    }
+
+    for (submission_id, challenge_id, _agent_hash) in pending {
+        let module_filename = format!("{}.wasm", challenge_id);
+
+        if !executor.module_exists(&module_filename) {
+            debug!(
+                submission_id = %submission_id,
+                challenge_id = %challenge_id,
+                "No WASM module found for challenge, skipping WASM evaluation"
+            );
+            continue;
+        }
+
+        let network_policy = wasm_runtime_interface::NetworkPolicy::default();
+
+        let input_data = submission_id.as_bytes().to_vec();
+
+        let executor = Arc::clone(executor);
+        let module_filename_clone = module_filename.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            executor.execute_evaluation(&module_filename_clone, &network_policy, &input_data)
+        })
+        .await;
+
+        let score = match result {
+            Ok(Ok((score, metrics))) => {
+                info!(
+                    submission_id = %submission_id,
+                    challenge_id = %challenge_id,
+                    score,
+                    execution_time_ms = metrics.execution_time_ms,
+                    memory_bytes = metrics.memory_used_bytes,
+                    network_requests = metrics.network_requests_made,
+                    fuel_consumed = ?metrics.fuel_consumed,
+                    "WASM evaluation succeeded"
+                );
+                (score as f64) / i64::MAX as f64
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    submission_id = %submission_id,
+                    challenge_id = %challenge_id,
+                    error = %e,
+                    "WASM evaluation failed, reporting score 0"
+                );
+                0.0
+            }
+            Err(e) => {
+                error!(
+                    submission_id = %submission_id,
+                    challenge_id = %challenge_id,
+                    error = %e,
+                    "WASM evaluation task panicked, reporting score 0"
+                );
+                0.0
+            }
+        };
+
+        let score_clamped = score.clamp(0.0, 1.0);
+        let validator_hotkey = keypair.hotkey();
+
+        #[derive(serde::Serialize)]
+        struct EvaluationSigningData<'a> {
+            submission_id: &'a str,
+            score: f64,
+        }
+        let signing_data = EvaluationSigningData {
+            submission_id: &submission_id,
+            score: score_clamped,
+        };
+        let signing_bytes = match bincode::serialize(&signing_data) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!(
+                    submission_id = %submission_id,
+                    error = %e,
+                    "Failed to serialize evaluation signing data"
+                );
+                continue;
+            }
+        };
+        let signature = match keypair.sign_bytes(&signing_bytes) {
+            Ok(sig) => sig,
+            Err(e) => {
+                error!(
+                    submission_id = %submission_id,
+                    error = %e,
+                    "Failed to sign evaluation"
+                );
+                continue;
+            }
+        };
+
+        let eval = platform_p2p_consensus::ValidatorEvaluation {
+            score: score_clamped,
+            stake: 0,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            signature: signature.clone(),
+        };
+
+        state_manager.apply(|state| {
+            if let Err(e) = state.add_validator_evaluation(
+                &submission_id,
+                validator_hotkey.clone(),
+                eval,
+                &signature,
+            ) {
+                warn!(
+                    submission_id = %submission_id,
+                    error = %e,
+                    "Failed to add WASM evaluation to state"
+                );
+            } else {
+                debug!(
+                    submission_id = %submission_id,
+                    score = score_clamped,
+                    "WASM evaluation recorded in state"
+                );
+            }
+        });
     }
 }

@@ -17,6 +17,7 @@ platform-p2p-consensus = { path = "../../crates/p2p-consensus" }
 platform-distributed-storage = { path = "../../crates/distributed-storage" }
 platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
 secure-container-runtime = { path = "../../crates/secure-container-runtime" }
+wasm-runtime-interface = { path = "../../crates/wasm-runtime-interface" }
 
 # Bittensor
 bittensor-rs = { workspace = true }
@@ -44,3 +45,4 @@ parking_lot = { workspace = true }
 sp-core = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+bincode = { workspace = true }
