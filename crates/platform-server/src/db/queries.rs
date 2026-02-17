@@ -327,6 +327,91 @@ pub async fn get_evaluations_for_agent(pool: &Pool, agent_hash: &str) -> Result<
 // LEADERBOARD
 // ============================================================================
 
+/// Calculate stake-weighted consensus score with outlier detection
+///
+/// Implements the formula from README:
+/// $\bar{s}_i = \frac{\sum_{v \in \mathcal{V}'} S_v \cdot s_i^v}{\sum_{v \in \mathcal{V}'} S_v}$
+///
+/// Where $\mathcal{V}'$ is the set of validators after outlier removal (z-score > 2.0)
+async fn calculate_stake_weighted_consensus_score(
+    pool: &Pool,
+    evaluations: &[Evaluation],
+) -> Result<f64> {
+    if evaluations.is_empty() {
+        return Ok(0.0);
+    }
+
+    // Collect (score, stake) pairs for all evaluations
+    let mut score_stake_pairs: Vec<(f64, u64)> = Vec::new();
+    
+    for eval in evaluations {
+        // Look up validator stake (default to 0 if not found)
+        let stake = if let Some(validator) = get_validator(pool, &eval.validator_hotkey).await? {
+            validator.stake
+        } else {
+            // Validator not found in database - skip this evaluation
+            // (or use 0 stake, which effectively excludes it)
+            continue;
+        };
+        
+        score_stake_pairs.push((eval.score, stake));
+    }
+
+    if score_stake_pairs.is_empty() {
+        // Fallback to simple average if no validators found
+        return Ok(evaluations.iter().map(|e| e.score).sum::<f64>() / evaluations.len() as f64);
+    }
+
+    // Outlier detection: Calculate z-scores and filter outliers
+    let scores: Vec<f64> = score_stake_pairs.iter().map(|(s, _)| *s).collect();
+    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
+    
+    // Calculate standard deviation
+    let variance = scores
+        .iter()
+        .map(|s| (*s - mean).powi(2))
+        .sum::<f64>()
+        / scores.len() as f64;
+    let std_dev = variance.sqrt();
+    
+    // Filter outliers (z-score > 2.0 threshold)
+    const Z_SCORE_THRESHOLD: f64 = 2.0;
+    let filtered_pairs: Vec<(f64, u64)> = if std_dev > 0.0 {
+        score_stake_pairs
+            .into_iter()
+            .filter(|(score, _)| {
+                let z_score = (score - mean).abs() / std_dev;
+                z_score <= Z_SCORE_THRESHOLD
+            })
+            .collect()
+    } else {
+        // If std_dev is 0, all scores are the same, no outliers
+        score_stake_pairs
+    };
+
+    if filtered_pairs.is_empty() {
+        // If all were outliers, fallback to mean
+        return Ok(mean);
+    }
+
+    // Calculate stake-weighted average
+    let total_weighted_score: f64 = filtered_pairs
+        .iter()
+        .map(|(score, stake)| *score * (*stake as f64))
+        .sum();
+    
+    let total_stake: u64 = filtered_pairs.iter().map(|(_, stake)| *stake).sum();
+    
+    if total_stake == 0 {
+        // Fallback to simple average if total stake is 0
+        let avg_score: f64 = filtered_pairs.iter().map(|(s, _)| *s).sum::<f64>()
+            / filtered_pairs.len() as f64;
+        return Ok(avg_score);
+    }
+
+    Ok(total_weighted_score / (total_stake as f64))
+}
+
 pub async fn update_leaderboard(pool: &Pool, agent_hash: &str) -> Result<Option<LeaderboardEntry>> {
     let evaluations = get_evaluations_for_agent(pool, agent_hash).await?;
     if evaluations.is_empty() {
@@ -337,8 +422,8 @@ pub async fn update_leaderboard(pool: &Pool, agent_hash: &str) -> Result<Option<
         .await?
         .ok_or_else(|| anyhow!("Submission not found for agent_hash: {}", agent_hash))?;
 
-    let scores: Vec<f64> = evaluations.iter().map(|e| e.score).collect();
-    let consensus_score = scores.iter().sum::<f64>() / scores.len() as f64;
+    // Calculate stake-weighted consensus score with outlier detection
+    let consensus_score = calculate_stake_weighted_consensus_score(pool, &evaluations).await?;
     let evaluation_count = evaluations.len() as i32;
     let first_epoch = submission.epoch as i64;
 
