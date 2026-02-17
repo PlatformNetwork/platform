@@ -25,8 +25,8 @@ use platform_distributed_storage::{
     DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
 };
 use platform_p2p_consensus::{
-    ChainState, ConsensusEngine, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager,
-    ValidatorRecord, ValidatorSet,
+    ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord,
+    NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager, ValidatorRecord, ValidatorSet,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -416,6 +416,8 @@ async fn main() -> Result<()> {
     let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
     let mut wasm_eval_interval = tokio::time::interval(Duration::from_secs(5));
 
+    let (eval_broadcast_tx, mut eval_broadcast_rx) = tokio::sync::mpsc::channel::<P2PMessage>(256);
+
     loop {
         tokio::select! {
             // P2P network events
@@ -426,6 +428,16 @@ async fn main() -> Result<()> {
                     &validator_set,
                     &state_manager,
                 ).await;
+            }
+
+            // Outbound evaluation broadcasts
+            Some(msg) = eval_broadcast_rx.recv() => {
+                if let Err(e) = event_tx.send(NetworkEvent::Message {
+                    source: network.local_peer_id(),
+                    message: msg,
+                }).await {
+                    warn!("Failed to forward evaluation broadcast: {}", e);
+                }
             }
 
             // Bittensor block events
@@ -497,6 +509,7 @@ async fn main() -> Result<()> {
                         executor,
                         &state_manager,
                         &keypair,
+                        &eval_broadcast_tx,
                     ).await;
                 }
             }
@@ -615,7 +628,7 @@ async fn handle_network_event(
     event: NetworkEvent,
     consensus: &Arc<RwLock<ConsensusEngine>>,
     validator_set: &Arc<ValidatorSet>,
-    _state_manager: &Arc<StateManager>,
+    state_manager: &Arc<StateManager>,
 ) {
     match event {
         NetworkEvent::Message { source, message } => match message {
@@ -690,6 +703,82 @@ async fn handle_network_event(
                 ) {
                     debug!("Heartbeat update skipped: {}", e);
                 }
+            }
+            P2PMessage::Submission(sub) => {
+                info!(
+                    submission_id = %sub.submission_id,
+                    challenge_id = %sub.challenge_id,
+                    miner = %sub.miner.to_hex(),
+                    "Received submission from P2P network"
+                );
+                let already_exists = state_manager
+                    .read(|state| state.pending_evaluations.contains_key(&sub.submission_id));
+                if already_exists {
+                    debug!(
+                        submission_id = %sub.submission_id,
+                        "Submission already exists in pending evaluations, skipping"
+                    );
+                } else {
+                    let record = EvaluationRecord {
+                        submission_id: sub.submission_id.clone(),
+                        challenge_id: sub.challenge_id,
+                        miner: sub.miner,
+                        agent_hash: sub.agent_hash,
+                        evaluations: std::collections::HashMap::new(),
+                        aggregated_score: None,
+                        finalized: false,
+                        created_at: sub.timestamp,
+                        finalized_at: None,
+                    };
+                    state_manager.apply(|state| {
+                        state.add_evaluation(record);
+                    });
+                    info!(
+                        submission_id = %sub.submission_id,
+                        "Submission added to pending evaluations"
+                    );
+                }
+            }
+            P2PMessage::Evaluation(eval) => {
+                info!(
+                    submission_id = %eval.submission_id,
+                    validator = %eval.validator.to_hex(),
+                    score = eval.score,
+                    "Received evaluation from peer validator"
+                );
+                let validator_hotkey = eval.validator.clone();
+                let stake = validator_set
+                    .get_validator(&validator_hotkey)
+                    .map(|v| v.stake)
+                    .unwrap_or(0);
+                let validator_eval = platform_p2p_consensus::ValidatorEvaluation {
+                    score: eval.score,
+                    stake,
+                    timestamp: eval.timestamp,
+                    signature: eval.signature.clone(),
+                };
+                state_manager.apply(|state| {
+                    if let Err(e) = state.add_validator_evaluation(
+                        &eval.submission_id,
+                        validator_hotkey.clone(),
+                        validator_eval,
+                        &eval.signature,
+                    ) {
+                        warn!(
+                            submission_id = %eval.submission_id,
+                            validator = %validator_hotkey.to_hex(),
+                            error = %e,
+                            "Failed to add peer evaluation to state"
+                        );
+                    } else {
+                        debug!(
+                            submission_id = %eval.submission_id,
+                            validator = %validator_hotkey.to_hex(),
+                            score = eval.score,
+                            "Peer evaluation recorded in state"
+                        );
+                    }
+                });
             }
             _ => {
                 debug!("Unhandled P2P message type");
@@ -861,6 +950,7 @@ async fn process_wasm_evaluations(
     executor: &Arc<WasmChallengeExecutor>,
     state_manager: &Arc<StateManager>,
     keypair: &Keypair,
+    eval_broadcast_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
 ) {
     let pending: Vec<(String, ChallengeId, String)> = state_manager.read(|state| {
         state
@@ -901,7 +991,7 @@ async fn process_wasm_evaluations(
         })
         .await;
 
-        let score = match result {
+        let (score, eval_metrics) = match result {
             Ok(Ok((score, metrics))) => {
                 info!(
                     submission_id = %submission_id,
@@ -913,7 +1003,16 @@ async fn process_wasm_evaluations(
                     fuel_consumed = ?metrics.fuel_consumed,
                     "WASM evaluation succeeded"
                 );
-                (score as f64) / i64::MAX as f64
+                let normalized = (score as f64) / i64::MAX as f64;
+                let em = EvaluationMetrics {
+                    primary_score: normalized,
+                    secondary_metrics: vec![],
+                    execution_time_ms: metrics.execution_time_ms as u64,
+                    memory_usage_bytes: Some(metrics.memory_used_bytes),
+                    timed_out: false,
+                    error: None,
+                };
+                (normalized, em)
             }
             Ok(Err(e)) => {
                 warn!(
@@ -922,7 +1021,15 @@ async fn process_wasm_evaluations(
                     error = %e,
                     "WASM evaluation failed, reporting score 0"
                 );
-                0.0
+                let em = EvaluationMetrics {
+                    primary_score: 0.0,
+                    secondary_metrics: vec![],
+                    execution_time_ms: 0,
+                    memory_usage_bytes: None,
+                    timed_out: false,
+                    error: Some(e.to_string()),
+                };
+                (0.0, em)
             }
             Err(e) => {
                 error!(
@@ -931,12 +1038,21 @@ async fn process_wasm_evaluations(
                     error = %e,
                     "WASM evaluation task panicked, reporting score 0"
                 );
-                0.0
+                let em = EvaluationMetrics {
+                    primary_score: 0.0,
+                    secondary_metrics: vec![],
+                    execution_time_ms: 0,
+                    memory_usage_bytes: None,
+                    timed_out: false,
+                    error: Some(e.to_string()),
+                };
+                (0.0, em)
             }
         };
 
         let score_clamped = score.clamp(0.0, 1.0);
         let validator_hotkey = keypair.hotkey();
+        let timestamp = chrono::Utc::now().timestamp_millis();
 
         #[derive(serde::Serialize)]
         struct EvaluationSigningData<'a> {
@@ -973,7 +1089,7 @@ async fn process_wasm_evaluations(
         let eval = platform_p2p_consensus::ValidatorEvaluation {
             score: score_clamped,
             stake: 0,
-            timestamp: chrono::Utc::now().timestamp_millis(),
+            timestamp,
             signature: signature.clone(),
         };
 
@@ -997,5 +1113,22 @@ async fn process_wasm_evaluations(
                 );
             }
         });
+
+        let eval_msg = P2PMessage::Evaluation(EvaluationMessage {
+            submission_id: submission_id.clone(),
+            challenge_id,
+            validator: validator_hotkey,
+            score: score_clamped,
+            metrics: eval_metrics,
+            signature,
+            timestamp,
+        });
+        if let Err(e) = eval_broadcast_tx.send(eval_msg).await {
+            warn!(
+                submission_id = %submission_id,
+                error = %e,
+                "Failed to queue evaluation broadcast"
+            );
+        }
     }
 }
