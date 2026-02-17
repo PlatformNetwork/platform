@@ -601,6 +601,7 @@ impl DockerClient {
 
     /// Pull a Docker image (only from whitelisted registries)
     pub async fn pull_image(&self, image: &str) -> anyhow::Result<()> {
+        tracing::warn!("Docker-based image pull is deprecated; prefer WASM-based challenge execution");
         // SECURITY: Verify image is from allowed registry before pulling
         if !Self::is_image_allowed(image) {
             error!(
@@ -645,6 +646,7 @@ impl DockerClient {
         &self,
         config: &ChallengeContainerConfig,
     ) -> anyhow::Result<ChallengeInstance> {
+        tracing::warn!("Docker-based challenge start is deprecated; prefer WASM-based challenge execution");
         // SECURITY: Verify image is from allowed registry before starting
         if !Self::is_image_allowed(&config.docker_image) {
             error!(

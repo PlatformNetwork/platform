@@ -55,6 +55,8 @@ pub enum DiscoverySource {
     DockerRegistry(String),
     /// Discovered from local filesystem
     LocalFilesystem(PathBuf),
+    /// Discovered from WASM module directory
+    WasmDirectory(PathBuf),
     /// Announced via P2P network
     P2PNetwork(String),
     /// Manually configured
@@ -68,6 +70,8 @@ pub struct DiscoveryConfig {
     pub docker_registries: Vec<String>,
     /// Local paths to scan
     pub local_paths: Vec<PathBuf>,
+    /// WASM module directories to scan
+    pub wasm_paths: Vec<PathBuf>,
     /// Enable P2P discovery
     pub enable_p2p: bool,
     /// Auto-register discovered challenges
@@ -81,6 +85,7 @@ impl Default for DiscoveryConfig {
         Self {
             docker_registries: vec![],
             local_paths: vec![],
+            wasm_paths: vec![],
             enable_p2p: true,
             auto_register: false,
             scan_interval_secs: 300, // 5 minutes
@@ -130,6 +135,23 @@ impl ChallengeDiscovery {
                     tracing::warn!(path = ?path, error = %e, "Failed to discover from local path");
                 }
             }
+        }
+
+        // Discover from WASM directories
+        for path in &self.config.wasm_paths {
+            match self.discover_from_wasm_dir(path) {
+                Ok(challenges) => all_discovered.extend(challenges),
+                Err(e) => {
+                    tracing::warn!(path = ?path, error = %e, "Failed to discover from WASM directory");
+                }
+            }
+        }
+
+        // Deprecation warning for Docker registries
+        if !self.config.docker_registries.is_empty() {
+            tracing::warn!(
+                "Docker registry discovery is deprecated; prefer WASM module directories via wasm_paths"
+            );
         }
 
         // Update internal state
@@ -191,6 +213,49 @@ impl ChallengeDiscovery {
                     metadata: ChallengeMetadata::default(),
                     source: DiscoverySource::LocalFilesystem(path.clone()),
                 });
+            }
+        }
+
+        Ok(challenges)
+    }
+
+    /// Discover challenges from a WASM module directory
+    pub fn discover_from_wasm_dir(
+        &self,
+        path: &PathBuf,
+    ) -> RegistryResult<Vec<DiscoveredChallenge>> {
+        if !path.exists() {
+            return Err(RegistryError::InvalidConfig(format!(
+                "WASM directory does not exist: {:?}",
+                path
+            )));
+        }
+
+        let mut challenges = Vec::new();
+
+        if path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+                        let name = entry_path
+                            .file_stem()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        challenges.push(DiscoveredChallenge {
+                            name,
+                            version: ChallengeVersion::default(),
+                            docker_image: None,
+                            local_path: Some(entry_path.clone()),
+                            health_endpoint: None,
+                            evaluation_endpoint: None,
+                            metadata: ChallengeMetadata::default(),
+                            source: DiscoverySource::WasmDirectory(entry_path),
+                        });
+                    }
+                }
             }
         }
 
@@ -287,6 +352,7 @@ mod tests {
         let config = DiscoveryConfig {
             docker_registries: vec!["registry.example.com".to_string()],
             local_paths: vec![PathBuf::from("/challenges")],
+            wasm_paths: vec![],
             enable_p2p: false,
             auto_register: true,
             scan_interval_secs: 60,

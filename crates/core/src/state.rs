@@ -262,6 +262,23 @@ impl ChainState {
         self.update_hash();
     }
 
+    /// Get a WASM challenge configuration by ID
+    pub fn get_wasm_challenge(&self, id: &ChallengeId) -> Option<&WasmChallengeConfig> {
+        self.wasm_challenge_configs.get(id)
+    }
+
+    /// Register a WASM challenge configuration
+    pub fn register_wasm_challenge(&mut self, config: WasmChallengeConfig) {
+        self.wasm_challenge_configs
+            .insert(config.challenge_id, config);
+        self.update_hash();
+    }
+
+    /// List all WASM challenge configurations
+    pub fn list_wasm_challenges(&self) -> &HashMap<ChallengeId, WasmChallengeConfig> {
+        &self.wasm_challenge_configs
+    }
+
     /// Create a snapshot of the state
     pub fn snapshot(&self) -> StateSnapshot {
         StateSnapshot {

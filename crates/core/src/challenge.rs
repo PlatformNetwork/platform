@@ -154,6 +154,12 @@ pub struct WasmModuleMetadata {
     /// Entrypoint function name
     #[serde(default = "default_entrypoint")]
     pub entrypoint: String,
+    /// Network policy for the module
+    #[serde(default)]
+    pub network_policy: NetworkPolicy,
+    /// Resource limits for execution
+    #[serde(default)]
+    pub resource_limits: ResourceLimits,
 }
 
 impl WasmModuleMetadata {
@@ -163,6 +169,29 @@ impl WasmModuleMetadata {
             code_hash,
             version: String::new(),
             entrypoint: default_entrypoint(),
+            network_policy: NetworkPolicy::default(),
+            resource_limits: ResourceLimits::default(),
+        }
+    }
+}
+
+/// Resource limits for WASM module execution
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResourceLimits {
+    /// Maximum memory in bytes
+    pub max_memory_bytes: u64,
+    /// Optional fuel limit for execution
+    pub max_fuel: Option<u64>,
+    /// Maximum execution time in seconds
+    pub max_execution_time_secs: u64,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: 268_435_456,
+            max_fuel: None,
+            max_execution_time_secs: 300,
         }
     }
 }

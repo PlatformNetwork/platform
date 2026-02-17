@@ -42,3 +42,7 @@ hostname = "0.4"
 tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.2"
+
+[features]
+default = ["docker-legacy"]
+docker-legacy = []

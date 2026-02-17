@@ -313,7 +313,9 @@ impl ChallengeOrchestrator {
     /// - Platform validator/watchtower containers
     ///
     /// Called periodically to prevent Docker from accumulating orphaned containers.
+    #[deprecated(note = "Docker-based container cleanup is deprecated; prefer WASM-based challenge execution")]
     pub async fn cleanup_stale_task_containers(&self) -> anyhow::Result<CleanupResult> {
+        tracing::warn!("Docker-based container cleanup is deprecated; prefer WASM-based challenge execution");
         // Clean up term-challenge task containers older than 2 hours
         // Exclude:
         // - challenge-* (main challenge containers managed by orchestrator)
