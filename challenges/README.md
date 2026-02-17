@@ -7,6 +7,7 @@ This directory contains challenge crates that integrate with the Platform valida
 ```
 challenges/
 ├── README.md           # This file
+├── term-challenge/     # Terminal benchmark challenge (WASM)
 └── [your-challenge]/   # Your custom challenge crate
 ```
 

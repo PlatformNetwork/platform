@@ -18,6 +18,7 @@ members = [
     "bins/utils",
     "bins/mock-subtensor",
     "tests",
+    "challenges/term-challenge",
 ]
 # Note: Challenges are in separate repositories and import platform-challenge-sdk as a git dependency
 # Note: WASM runtime removed - updates via git, version checked at handshake

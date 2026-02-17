@@ -54,10 +54,20 @@ pub fn pack_ptr_len(ptr: i32, len: i32) -> i64 {
 ///
 /// platform_challenge_sdk_wasm::register_challenge!(MyChallenge);
 /// ```
+///
+/// A custom const initializer can be supplied when `Default::default()` is not
+/// const-evaluable:
+///
+/// ```ignore
+/// platform_challenge_sdk_wasm::register_challenge!(MyChallenge, MyChallenge::new());
+/// ```
 #[macro_export]
 macro_rules! register_challenge {
     ($ty:ty) => {
-        static _CHALLENGE: $ty = <$ty as Default>::default();
+        $crate::register_challenge!($ty, <$ty as Default>::default());
+    };
+    ($ty:ty, $init:expr) => {
+        static _CHALLENGE: $ty = $init;
 
         #[no_mangle]
         pub extern "C" fn evaluate(agent_ptr: i32, agent_len: i32) -> i64 {

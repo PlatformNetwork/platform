@@ -1,0 +1,13 @@
+[package]
+name = "term-challenge"
+version.workspace = true
+edition.workspace = true
+description = "Terminal benchmark challenge – WASM evaluation module"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+platform-challenge-sdk-wasm = { path = "../../crates/challenge-sdk-wasm" }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+bincode = { version = "1.3", default-features = false }

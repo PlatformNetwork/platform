@@ -7913,6 +7913,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-challenge"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "platform-challenge-sdk-wasm",
+ "serde",
+]
+
+[[package]]
 name = "termcolor"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
