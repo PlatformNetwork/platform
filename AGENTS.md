@@ -4,22 +4,21 @@ This document explains how agents (miners) interact with the Platform network.
 
 ---
 
-## Important: Challenge-Specific Repositories
+## Important: Challenge-Specific Logic
 
-**Platform is a fully decentralized P2P network for distributed evaluation.** It does not contain challenge-specific logic.
+**Platform is a fully decentralized P2P network for distributed evaluation.** It does not contain challenge-specific agent logic.
 
-Each challenge has its own repository with:
+Each challenge defines:
 - Task definitions and evaluation criteria
-- SDK and tools for agent development
 - Submission formats and requirements
 - Scoring algorithms
 
-**If you have questions about mining, agent development, or task-specific logic, refer to the challenge repository you're targeting.**
+The `term-challenge` crate lives in-tree at `challenges/term-challenge/` and is compiled to WASM for production evaluation. External challenges import `platform-challenge-sdk` as a git dependency.
 
-| Challenge | Repository | Description |
-|-----------|------------|-------------|
-| Terminal Bench | [term-challenge](https://github.com/PlatformNetwork/term-challenge) | AI agent benchmark for terminal tasks |
-| *(others)* | *(see challenge docs)* | *(challenge-specific)* |
+| Challenge | Location | Description |
+|-----------|----------|-------------|
+| Terminal Bench | [`challenges/term-challenge/`](challenges/term-challenge/) | Terminal task benchmark (WASM evaluation module) |
+| *(others)* | *(external repos or `challenges/` subdirectories)* | *(challenge-specific)* |
 
 ---
 
@@ -46,32 +45,38 @@ flowchart LR
 
 ### 1. Development
 
-Develop your agent following the **challenge-specific** SDK and requirements:
+Develop your agent following the challenge-specific requirements. Challenge crates implement the `Challenge` trait from `platform-challenge-sdk-wasm`:
 
-```python
-# Example: Terminal Bench uses term_sdk
-from term_sdk import Agent, LLM
+```rust
+// Example: challenges/term-challenge/src/lib.rs
+use platform_challenge_sdk_wasm::{Challenge, EvaluationInput, EvaluationOutput};
 
-class MyAgent(Agent):
-    def solve(self, task):
-        # Your solution logic
-        pass
+pub struct TermChallenge;
+
+impl Challenge for TermChallenge {
+    fn name(&self) -> &'static str { "term-challenge" }
+    fn version(&self) -> &'static str { "0.1.0" }
+    fn evaluate(&self, input: EvaluationInput) -> EvaluationOutput { /* ... */ }
+    fn validate(&self, input: EvaluationInput) -> bool { /* ... */ }
+}
+
+platform_challenge_sdk_wasm::register_challenge!(TermChallenge, TermChallenge::new());
 ```
 
-**Check the challenge repository** for the correct SDK, imports, and patterns.
+**Check the challenge documentation** for the correct submission format and evaluation criteria.
 
 ### 2. Submission
 
-Submit your agent code to the P2P network. The submission is:
+Submit your agent's output to the P2P network. The submission is:
 - Broadcast to validators via libp2p gossipsub
-- Compiled/validated by the challenge system
+- Validated by the challenge WASM module
 - Distributed across the validator network for evaluation
 
 ### 3. Evaluation
 
 Validators independently evaluate your submission:
-- Each validator runs the **challenge-specific** sandbox (WASM in production; Docker only in test harnesses)
-- Your agent executes in a sandboxed environment
+- Each validator runs the challenge-specific WASM module in a sandboxed runtime
+- Your submission executes deterministically
 - Scores are computed based on challenge criteria
 
 ### 4. Scoring
@@ -83,7 +88,7 @@ Validators aggregate scores across the P2P network:
 
 ### 5. Rewards
 
-At epoch end (~72 minutes), weights are submitted to Bittensor:
+At each epoch boundary (tempo synced from Bittensor), weights are submitted to the chain:
 - Higher scores = higher weights = more TAO rewards
 - Weights are normalized by sum (each weight divided by total)
 
@@ -101,51 +106,49 @@ Platform uses libp2p for fully decentralized communication:
 
 ### Authentication
 
-All P2P messages are signed with your Bittensor hotkey:
-- Use `sr25519` signature scheme
-- Include timestamp to prevent replay attacks
+All P2P messages are signed with the validator's Bittensor hotkey:
+- Uses `sr25519` signature scheme (Substrate/Bittensor compatible, via `sp_core`)
+- Includes timestamp to prevent replay attacks
 - Validators verify signatures before processing
 
 ### Submitting via P2P
 
-Connect to any validator node to submit your agent:
-
-```bash
-# Using the challenge CLI (recommended)
-term submit --agent my_agent.py --peer /ip4/VALIDATOR_IP/tcp/9000/p2p/PEER_ID
-```
+Miners connect to the validator mesh to submit agent outputs. Submissions are propagated via gossipsub to all validators for evaluation.
 
 ---
 
 ## Common Questions
 
-### Where do I find the SDK?
+### Where do I find the challenge SDK?
 
-**In the challenge repository.** Platform itself does not provide agent SDKs.
+The WASM challenge SDK is at `crates/challenge-sdk-wasm/`. The server-side SDK is at `crates/challenge-sdk/`. Challenge crates in `challenges/` use these to implement evaluation logic.
 
 ### Why did my submission fail?
 
-Check the challenge repository for:
-- Allowed imports/packages
+Check the challenge module for:
+- Required submission format and fields
 - Resource limits (memory, CPU, time)
-- Required entry points and formats
+- Validation rules in the `validate()` method
 
 ### How are scores calculated?
 
-Each challenge defines its own scoring algorithm. Validators coordinate score aggregation via P2P consensus.
+Each challenge defines its own scoring algorithm in its `evaluate()` method. Validators coordinate score aggregation via P2P consensus.
 
 ### Can I test locally?
 
-Yes, using tools from the **challenge repository**:
+Build and test challenge WASM modules locally:
 
 ```bash
-# Example for Terminal Bench
-term test --agent my_agent.py --task task_name
+# Build the WASM artifact
+cargo build --release --target wasm32-unknown-unknown -p term-challenge
+
+# Run workspace tests
+cargo test
 ```
 
 ### What's the evaluation timeout?
 
-Defined by each challenge. Check the challenge docs for specific limits.
+Defined by each challenge and the WASM runtime policy. Check the challenge and runtime configuration for specific limits.
 
 ---
 
@@ -154,11 +157,32 @@ Defined by each challenge. Check the challenge docs for specific limits.
 ```mermaid
 flowchart TB
     Platform[Platform Repository] --> SDK[challenge-sdk]
+    Platform --> SDKW[challenge-sdk-wasm]
     Platform --> Validator[validator-node]
     Platform --> Runtime[wasm-runtime-interface]
-    Challenges[Challenge Repositories] --> AgentSDK[Agent SDK]
-    Challenges --> Tasks[Tasks + scoring]
+    Platform --> P2P[p2p-consensus]
+    Platform --> Challenges[challenges/term-challenge]
 ```
+
+**Workspace crates** (from `Cargo.toml`):
+- `crates/core` — shared types, crypto (`sr25519`), constants
+- `crates/storage` — local storage layer
+- `crates/distributed-storage` — DHT-backed distributed storage
+- `crates/challenge-sdk` — server-side challenge trait
+- `crates/challenge-sdk-wasm` — WASM challenge trait (`no_std`)
+- `crates/challenge-registry` — challenge metadata registry
+- `crates/epoch` — epoch management synced with Bittensor tempo
+- `crates/bittensor-integration` — Bittensor chain interaction
+- `crates/subnet-manager` — subnet management
+- `crates/rpc-server` — RPC server for validator API
+- `crates/secure-container-runtime` — sandboxed runtime (legacy Docker support)
+- `crates/p2p-consensus` — libp2p gossipsub + DHT consensus
+- `crates/wasm-runtime-interface` — WASM runtime host interface
+- `bins/validator-node` — main validator binary
+- `bins/utils` — CLI utilities
+- `bins/mock-subtensor` — mock Bittensor node for testing
+- `challenges/term-challenge` — Terminal Bench WASM challenge
+- `tests` — integration tests
 
 **Note:** Platform is fully decentralized—there is no central server. All validators communicate directly via libp2p (gossipsub + DHT).
 
@@ -167,11 +191,10 @@ flowchart TB
 ## Getting Started
 
 1. **Choose a challenge** you want to participate in
-2. **Go to that challenge's repository** (not this one)
-3. **Read the challenge-specific documentation**
-4. **Develop your agent** using the challenge SDK
-5. **Submit** through the P2P network or challenge CLI
-6. **Monitor** your submission status and leaderboard position
+2. **Read the challenge documentation** (e.g., `challenges/term-challenge/`)
+3. **Understand the submission format** from the challenge's types and evaluation logic
+4. **Submit** through the P2P network
+5. **Monitor** your submission status and scores
 
 ---
 
@@ -179,8 +202,10 @@ flowchart TB
 
 - [Bittensor Docs](https://docs.bittensor.com) - Network documentation
 - [Validator Guide](docs/operations/validator.md) - Running a validator
+- [Challenge Integration Guide](docs/challenge-integration.md) - Adding new challenges
+- [Architecture](docs/architecture.md) - System architecture
 
 Platform is fully decentralized—validators communicate directly via P2P without any central server.
 See the main README for deployment instructions.
 
-For challenge-specific questions, please refer to the appropriate challenge repository.
+For challenge-specific questions, refer to the appropriate challenge crate or repository.
