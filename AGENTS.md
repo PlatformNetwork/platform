@@ -18,6 +18,7 @@ The `term-challenge` crate lives in-tree at `challenges/term-challenge/` and is 
 | Challenge | Location | Description |
 |-----------|----------|-------------|
 | Terminal Bench | [`challenges/term-challenge/`](challenges/term-challenge/) | Terminal task benchmark (WASM evaluation module) |
+| Terminal Bench v2 | [`challenges/term-challenge-wasm/`](challenges/term-challenge-wasm/) | Terminal benchmark with LLM judge support (WASM `cdylib`) |
 | *(others)* | *(external repos or `challenges/` subdirectories)* | *(challenge-specific)* |
 
 ---
@@ -139,8 +140,9 @@ Each challenge defines its own scoring algorithm in its `evaluate()` method. Val
 Build and test challenge WASM modules locally:
 
 ```bash
-# Build the WASM artifact
+# Build the WASM artifacts
 cargo build --release --target wasm32-unknown-unknown -p term-challenge
+cargo build --release --target wasm32-unknown-unknown -p term-challenge-wasm
 
 # Run workspace tests
 cargo test
@@ -161,7 +163,8 @@ flowchart TB
     Platform --> Validator[validator-node]
     Platform --> Runtime[wasm-runtime-interface]
     Platform --> P2P[p2p-consensus]
-    Platform --> Challenges[challenges/term-challenge]
+    Platform --> TC[challenges/term-challenge]
+    Platform --> TCW[challenges/term-challenge-wasm]
 ```
 
 **Workspace crates** (from `Cargo.toml`):
@@ -182,7 +185,11 @@ flowchart TB
 - `bins/utils` — CLI utilities
 - `bins/mock-subtensor` — mock Bittensor node for testing
 - `challenges/term-challenge` — Terminal Bench WASM challenge
+- `challenges/term-challenge-wasm` — Terminal Bench v2 WASM challenge (LLM judge)
 - `tests` — integration tests
+
+**Non-workspace crate** (exists on disk but not in workspace members):
+- `crates/challenge-orchestrator` — Docker-based challenge container orchestration (legacy)
 
 **Note:** Platform is fully decentralized—there is no central server. All validators communicate directly via libp2p (gossipsub + DHT).
 
