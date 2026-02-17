@@ -373,6 +373,7 @@ async fn main() -> Result<()> {
         max_memory_bytes: args.wasm_max_memory,
         enable_fuel: args.wasm_enable_fuel,
         fuel_limit: args.wasm_fuel_limit,
+        storage_host_config: wasm_runtime_interface::StorageHostConfig::default(),
     }) {
         Ok(executor) => {
             info!(
@@ -985,28 +986,37 @@ async fn process_wasm_evaluations(
         let network_policy = wasm_runtime_interface::NetworkPolicy::default();
 
         let input_data = submission_id.as_bytes().to_vec();
+        let challenge_id_str = challenge_id.to_string();
 
         let executor = Arc::clone(executor);
         let module_filename_clone = module_filename.clone();
 
         let result = tokio::task::spawn_blocking(move || {
-            executor.execute_evaluation(&module_filename_clone, &network_policy, &input_data)
+            executor.execute_evaluation(
+                &module_filename_clone,
+                &network_policy,
+                &input_data,
+                &challenge_id_str,
+                &[],
+            )
         })
         .await;
 
         let (score, eval_metrics) = match result {
-            Ok(Ok((score, metrics))) => {
+            Ok(Ok((output, metrics))) => {
                 info!(
                     submission_id = %submission_id,
                     challenge_id = %challenge_id,
-                    score,
+                    score = output.score,
+                    valid = output.valid,
+                    message = %output.message,
                     execution_time_ms = metrics.execution_time_ms,
                     memory_bytes = metrics.memory_used_bytes,
                     network_requests = metrics.network_requests_made,
                     fuel_consumed = ?metrics.fuel_consumed,
                     "WASM evaluation succeeded"
                 );
-                let normalized = (score as f64) / i64::MAX as f64;
+                let normalized = (output.score as f64) / i64::MAX as f64;
                 let em = EvaluationMetrics {
                     primary_score: normalized,
                     secondary_metrics: vec![],

@@ -310,8 +310,10 @@ impl StorageBackend for NoopStorageBackend {
     }
 }
 
+type StorageMap = HashMap<String, HashMap<Vec<u8>, Vec<u8>>>;
+
 pub struct InMemoryStorageBackend {
-    data: RwLock<HashMap<String, HashMap<Vec<u8>, Vec<u8>>>>,
+    data: RwLock<StorageMap>,
 }
 
 impl InMemoryStorageBackend {

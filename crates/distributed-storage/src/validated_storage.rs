@@ -194,11 +194,11 @@ impl StorageWriteProposal {
 
     pub fn compute_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.proposal_id);
+        hasher.update(self.proposal_id);
         hasher.update(self.challenge_id.as_bytes());
         hasher.update(self.proposer.as_bytes());
         hasher.update(&self.key);
-        hasher.update(&self.value_hash);
+        hasher.update(self.value_hash);
         hasher.update(self.timestamp.to_le_bytes());
         hasher.finalize().into()
     }
@@ -246,7 +246,7 @@ impl StorageWriteVote {
 
     pub fn compute_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.proposal_id);
+        hasher.update(self.proposal_id);
         hasher.update(self.voter.as_bytes());
         hasher.update([self.approved as u8]);
         hasher.update(self.timestamp.to_le_bytes());
