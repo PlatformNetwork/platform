@@ -5,7 +5,7 @@ use crate::storage::{
     StorageHostState,
 };
 use crate::time::{TimePolicy, TimeState};
-use crate::{NetworkAuditLogger, NetworkHostFunctions, NetworkPolicy, NetworkState};
+use crate::{NetworkAuditLogger, NetworkHostFunctions, NetworkPolicy, NetworkState, SandboxPolicy};
 use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
@@ -91,6 +91,8 @@ impl Default for RuntimeConfig {
 pub struct InstanceConfig {
     /// Network policy enforced by host functions.
     pub network_policy: NetworkPolicy,
+    /// Sandbox policy for term-challenge execution.
+    pub sandbox_policy: SandboxPolicy,
     /// Exec policy enforced by host functions.
     pub exec_policy: ExecPolicy,
     /// Time policy enforced by host functions.
@@ -119,6 +121,7 @@ impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
             network_policy: NetworkPolicy::default(),
+            sandbox_policy: SandboxPolicy::default(),
             exec_policy: ExecPolicy::default(),
             time_policy: TimePolicy::default(),
             audit_logger: None,
@@ -137,6 +140,8 @@ impl Default for InstanceConfig {
 pub struct RuntimeState {
     /// Network policy available to host functions.
     pub network_policy: NetworkPolicy,
+    /// Sandbox policy for term-challenge execution.
+    pub sandbox_policy: SandboxPolicy,
     /// Mutable network state enforcing policy.
     pub network_state: NetworkState,
     /// Mutable exec state enforcing policy.
@@ -164,6 +169,7 @@ impl RuntimeState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         network_policy: NetworkPolicy,
+        sandbox_policy: SandboxPolicy,
         network_state: NetworkState,
         exec_state: ExecState,
         time_state: TimeState,
@@ -178,6 +184,7 @@ impl RuntimeState {
     ) -> Self {
         Self {
             network_policy,
+            sandbox_policy,
             network_state,
             exec_state,
             time_state,
@@ -284,6 +291,7 @@ impl WasmRuntime {
         );
         let runtime_state = RuntimeState::new(
             instance_config.network_policy.clone(),
+            instance_config.sandbox_policy.clone(),
             network_state,
             exec_state,
             time_state,
@@ -438,6 +446,15 @@ impl ChallengeInstance {
             .get_typed_func::<(i32, i32), i32>(&mut self.store, name)
             .map_err(|_| WasmRuntimeError::MissingExport(name.to_string()))?;
         func.call(&mut self.store, (arg0, arg1))
+            .map_err(|err: WasmtimeError| WasmRuntimeError::Execution(err.to_string()))
+    }
+
+    pub fn call_i32_return_i32(&mut self, name: &str, arg0: i32) -> Result<i32, WasmRuntimeError> {
+        let func = self
+            .instance
+            .get_typed_func::<i32, i32>(&mut self.store, name)
+            .map_err(|_| WasmRuntimeError::MissingExport(name.to_string()))?;
+        func.call(&mut self.store, arg0)
             .map_err(|err: WasmtimeError| WasmRuntimeError::Execution(err.to_string()))
     }
 

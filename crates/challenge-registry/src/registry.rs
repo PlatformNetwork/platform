@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-use wasm_runtime_interface::NetworkPolicy;
+use wasm_runtime_interface::{NetworkPolicy, SandboxPolicy};
 
 /// WASM module metadata for a challenge
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub struct WasmModuleMetadata {
     /// Network policy for WASM execution
     #[serde(default)]
     pub network_policy: NetworkPolicy,
+    /// Sandbox policy for term-challenge execution
+    #[serde(default)]
+    pub sandbox_policy: Option<SandboxPolicy>,
     /// Restartable configuration identifier
     #[serde(default)]
     pub restart_id: Option<String>,
@@ -45,9 +48,15 @@ impl WasmModuleMetadata {
             module_location,
             entrypoint,
             network_policy,
+            sandbox_policy: None,
             restart_id: None,
             config_version: 0,
         }
+    }
+
+    pub fn with_sandbox_policy(mut self, policy: SandboxPolicy) -> Self {
+        self.sandbox_policy = Some(policy);
+        self
     }
 
     /// Verify that the given module bytes match the stored hash

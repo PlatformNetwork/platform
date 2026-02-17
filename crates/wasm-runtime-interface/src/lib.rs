@@ -13,6 +13,7 @@ pub mod bridge;
 pub mod exec;
 pub mod network;
 pub mod runtime;
+pub mod sandbox;
 pub mod storage;
 pub mod time;
 pub use bridge::{
@@ -25,6 +26,10 @@ pub use exec::{
 };
 pub use network::{
     NetworkHostFunctions, NetworkState, NetworkStateError, HOST_GET_TIMESTAMP, HOST_LOG_MESSAGE,
+};
+pub use sandbox::{
+    SandboxHostFunctions, HOST_SANDBOX_CONFIGURE, HOST_SANDBOX_EXEC, HOST_SANDBOX_GET_TASKS,
+    HOST_SANDBOX_NAMESPACE, HOST_SANDBOX_STATUS,
 };
 pub use storage::{
     InMemoryStorageBackend, NoopStorageBackend, StorageAuditEntry, StorageAuditLogger,
@@ -74,6 +79,55 @@ pub struct NetworkPolicy {
     pub limits: RequestLimits,
     /// Audit logging policy for network calls.
     pub audit: AuditPolicy,
+}
+
+/// Sandbox policy for term-challenge WASM modules.
+///
+/// Controls whether sandbox command execution is permitted and enforces
+/// resource limits on spawned processes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxPolicy {
+    /// Whether sandbox execution is enabled.
+    pub enable_sandbox: bool,
+    /// Commands the WASM module is allowed to invoke.
+    pub allowed_commands: Vec<String>,
+    /// Maximum wall-clock execution time in seconds per command.
+    pub max_execution_time_secs: u64,
+}
+
+impl Default for SandboxPolicy {
+    fn default() -> Self {
+        Self {
+            enable_sandbox: false,
+            allowed_commands: Vec::new(),
+            max_execution_time_secs: 30,
+        }
+    }
+}
+
+impl SandboxPolicy {
+    /// Permissive sandbox policy for development.
+    pub fn development() -> Self {
+        Self {
+            enable_sandbox: true,
+            allowed_commands: vec!["*".to_string()],
+            max_execution_time_secs: 120,
+        }
+    }
+
+    /// Term-challenge default sandbox policy.
+    pub fn term_challenge() -> Self {
+        Self {
+            enable_sandbox: true,
+            allowed_commands: vec![
+                "bash".to_string(),
+                "sh".to_string(),
+                "python3".to_string(),
+                "node".to_string(),
+            ],
+            max_execution_time_secs: 60,
+        }
+    }
 }
 
 impl NetworkPolicy {

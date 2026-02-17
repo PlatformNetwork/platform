@@ -365,6 +365,9 @@ async fn main() -> Result<()> {
     };
     std::fs::create_dir_all(&wasm_module_dir)?;
 
+    let challenges_subdir = wasm_module_dir.join("challenges");
+    std::fs::create_dir_all(&challenges_subdir)?;
+
     let wasm_executor = match WasmChallengeExecutor::new(WasmExecutorConfig {
         module_dir: wasm_module_dir.clone(),
         max_memory_bytes: args.wasm_max_memory,

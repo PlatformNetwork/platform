@@ -9,6 +9,7 @@ use crate::error::{RegistryError, RegistryResult};
 use crate::version::ChallengeVersion;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use wasm_runtime_interface::SandboxPolicy;
 
 /// A discovered challenge that can be registered
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -27,6 +28,8 @@ pub struct DiscoveredChallenge {
     pub evaluation_endpoint: Option<String>,
     /// Challenge metadata
     pub metadata: ChallengeMetadata,
+    /// Sandbox policy loaded from companion .policy.json
+    pub sandbox_policy: Option<SandboxPolicy>,
     /// Source of discovery
     pub source: DiscoverySource,
 }
@@ -193,6 +196,7 @@ impl ChallengeDiscovery {
                     health_endpoint: None,
                     evaluation_endpoint: None,
                     metadata: ChallengeMetadata::default(),
+                    sandbox_policy: None,
                     source: DiscoverySource::LocalFilesystem(path.clone()),
                 });
             } else if cargo_toml.exists() {
@@ -211,6 +215,7 @@ impl ChallengeDiscovery {
                     health_endpoint: None,
                     evaluation_endpoint: None,
                     metadata: ChallengeMetadata::default(),
+                    sandbox_policy: None,
                     source: DiscoverySource::LocalFilesystem(path.clone()),
                 });
             }
@@ -234,32 +239,68 @@ impl ChallengeDiscovery {
         let mut challenges = Vec::new();
 
         if path.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    let entry_path = entry.path();
-                    if entry_path.extension().and_then(|e| e.to_str()) == Some("wasm") {
-                        let name = entry_path
-                            .file_stem()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("unknown")
-                            .to_string();
+            Self::scan_wasm_dir(path, &mut challenges);
 
-                        challenges.push(DiscoveredChallenge {
-                            name,
-                            version: ChallengeVersion::default(),
-                            docker_image: None,
-                            local_path: Some(entry_path.clone()),
-                            health_endpoint: None,
-                            evaluation_endpoint: None,
-                            metadata: ChallengeMetadata::default(),
-                            source: DiscoverySource::WasmDirectory(entry_path),
-                        });
-                    }
-                }
+            let challenges_subdir = path.join("challenges");
+            if challenges_subdir.is_dir() {
+                Self::scan_wasm_dir(&challenges_subdir, &mut challenges);
             }
         }
 
         Ok(challenges)
+    }
+
+    fn load_sandbox_policy(wasm_path: &std::path::Path) -> Option<SandboxPolicy> {
+        let policy_path = wasm_path.with_extension("policy.json");
+        if policy_path.exists() {
+            match std::fs::read_to_string(&policy_path) {
+                Ok(contents) => match serde_json::from_str::<SandboxPolicy>(&contents) {
+                    Ok(policy) => {
+                        tracing::info!(path = ?policy_path, "Loaded sandbox policy");
+                        Some(policy)
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = ?policy_path, error = %e, "Failed to parse sandbox policy");
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(path = ?policy_path, error = %e, "Failed to read sandbox policy file");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    fn scan_wasm_dir(dir: &std::path::Path, challenges: &mut Vec<DiscoveredChallenge>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+                    let name = entry_path
+                        .file_stem()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    let sandbox_policy = Self::load_sandbox_policy(&entry_path);
+
+                    challenges.push(DiscoveredChallenge {
+                        name,
+                        version: ChallengeVersion::default(),
+                        docker_image: None,
+                        local_path: Some(entry_path.clone()),
+                        health_endpoint: None,
+                        evaluation_endpoint: None,
+                        metadata: ChallengeMetadata::default(),
+                        sandbox_policy,
+                        source: DiscoverySource::WasmDirectory(entry_path),
+                    });
+                }
+            }
+        }
     }
 
     /// Manually add a discovered challenge
@@ -317,6 +358,7 @@ mod tests {
                 author: Some("Platform".to_string()),
                 ..Default::default()
             },
+            sandbox_policy: None,
             source: DiscoverySource::Manual,
         };
 
@@ -338,6 +380,7 @@ mod tests {
             health_endpoint: None,
             evaluation_endpoint: None,
             metadata: ChallengeMetadata::default(),
+            sandbox_policy: None,
             source: DiscoverySource::Manual,
         });
 
