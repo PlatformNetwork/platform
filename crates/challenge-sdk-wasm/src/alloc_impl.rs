@@ -1,9 +1,12 @@
 use core::cell::UnsafeCell;
 
-#[cfg(feature = "large-arena")]
+#[cfg(feature = "huge-arena")]
+const ARENA_SIZE: usize = 16 * 1024 * 1024;
+
+#[cfg(all(feature = "large-arena", not(feature = "huge-arena")))]
 const ARENA_SIZE: usize = 4 * 1024 * 1024;
 
-#[cfg(not(feature = "large-arena"))]
+#[cfg(not(any(feature = "large-arena", feature = "huge-arena")))]
 const ARENA_SIZE: usize = 1024 * 1024;
 
 struct BumpAllocator {

@@ -453,6 +453,37 @@ impl HostFunctionRegistrar for StorageHostFunctions {
             )
             .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
 
+        linker
+            .func_wrap(
+                HOST_STORAGE_NAMESPACE,
+                HOST_STORAGE_DELETE,
+                |mut caller: Caller<RuntimeState>, key_ptr: i32, key_len: i32| -> i32 {
+                    handle_storage_delete(&mut caller, key_ptr, key_len)
+                },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
+        linker
+            .func_wrap(
+                HOST_STORAGE_NAMESPACE,
+                HOST_STORAGE_PROPOSE_WRITE,
+                |mut caller: Caller<RuntimeState>,
+                 key_ptr: i32,
+                 key_len: i32,
+                 value_ptr: i32,
+                 value_len: i32|
+                 -> i64 {
+                    handle_storage_propose_write(
+                        &mut caller,
+                        key_ptr,
+                        key_len,
+                        value_ptr,
+                        value_len,
+                    )
+                },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
         Ok(())
     }
 }
@@ -550,6 +581,94 @@ fn handle_storage_set(
         Err(err) => {
             warn!(error = %err, "storage_set: backend write failed");
             StorageHostStatus::from(err).to_i32()
+        }
+    }
+}
+
+fn handle_storage_delete(caller: &mut Caller<RuntimeState>, key_ptr: i32, key_len: i32) -> i32 {
+    let key = match read_wasm_memory(caller, key_ptr, key_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_delete: failed to read key from wasm memory");
+            return StorageHostStatus::InternalError.to_i32();
+        }
+    };
+
+    let storage = &caller.data().storage_state;
+    if let Err(err) = storage.config.validate_key(&key) {
+        warn!(error = %err, "storage_delete: key validation failed");
+        return StorageHostStatus::from(err).to_i32();
+    }
+
+    if storage.config.require_consensus && !storage.config.allow_direct_writes {
+        warn!("storage_delete: direct deletes require consensus or allow_direct_writes");
+        return StorageHostStatus::ConsensusRequired.to_i32();
+    }
+
+    let challenge_id = storage.challenge_id.clone();
+    let backend = Arc::clone(&storage.backend);
+
+    match backend.delete(&challenge_id, &key) {
+        Ok(_deleted) => {
+            caller.data_mut().storage_state.operations_count += 1;
+            StorageHostStatus::Success.to_i32()
+        }
+        Err(err) => {
+            warn!(error = %err, "storage_delete: backend delete failed");
+            StorageHostStatus::from(err).to_i32()
+        }
+    }
+}
+
+fn handle_storage_propose_write(
+    caller: &mut Caller<RuntimeState>,
+    key_ptr: i32,
+    key_len: i32,
+    value_ptr: i32,
+    value_len: i32,
+) -> i64 {
+    let key = match read_wasm_memory(caller, key_ptr, key_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_propose_write: failed to read key from wasm memory");
+            return pack_result(StorageHostStatus::InternalError, 0);
+        }
+    };
+
+    let value = match read_wasm_memory(caller, value_ptr, value_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_propose_write: failed to read value from wasm memory");
+            return pack_result(StorageHostStatus::InternalError, 0);
+        }
+    };
+
+    let storage = &caller.data().storage_state;
+    if let Err(err) = storage.config.validate_key(&key) {
+        warn!(error = %err, "storage_propose_write: key validation failed");
+        return pack_result(StorageHostStatus::from(err), 0);
+    }
+    if let Err(err) = storage.config.validate_value(&value) {
+        warn!(error = %err, "storage_propose_write: value validation failed");
+        return pack_result(StorageHostStatus::from(err), 0);
+    }
+
+    let challenge_id = storage.challenge_id.clone();
+    let backend = Arc::clone(&storage.backend);
+
+    match backend.propose_write(&challenge_id, &key, &value) {
+        Ok(proposal_id) => {
+            caller.data_mut().storage_state.bytes_written += value.len() as u64;
+            caller.data_mut().storage_state.operations_count += 1;
+            let result_id = caller
+                .data_mut()
+                .storage_state
+                .store_result(proposal_id.to_vec());
+            pack_result(StorageHostStatus::Success, result_id)
+        }
+        Err(err) => {
+            warn!(error = %err, "storage_propose_write: backend write failed");
+            pack_result(StorageHostStatus::from(err), 0)
         }
     }
 }

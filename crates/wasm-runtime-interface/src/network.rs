@@ -24,7 +24,6 @@ use crate::runtime::{HostFunctionRegistrar, RuntimeState, WasmRuntimeError};
 pub const HOST_LOG_MESSAGE: &str = "log_message";
 pub const HOST_GET_TIMESTAMP: &str = "get_timestamp";
 
-const DEFAULT_RESPONSE_BUF_SIZE: i32 = 65536;
 const DEFAULT_DNS_BUF_SIZE: i32 = 4096;
 
 #[derive(Debug, thiserror::Error)]
@@ -92,9 +91,10 @@ impl HostFunctionRegistrar for NetworkHostFunctions {
                     |mut caller: Caller<RuntimeState>,
                      req_ptr: i32,
                      req_len: i32,
-                     resp_ptr: i32|
+                     resp_ptr: i32,
+                     resp_len: i32|
                      -> i32 {
-                        handle_http_get(&mut caller, req_ptr, req_len, resp_ptr)
+                        handle_http_get(&mut caller, req_ptr, req_len, resp_ptr, resp_len)
                     },
                 )
                 .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
@@ -596,8 +596,8 @@ fn handle_http_get(
     req_ptr: i32,
     req_len: i32,
     resp_ptr: i32,
+    resp_len: i32,
 ) -> i32 {
-    let resp_len = DEFAULT_RESPONSE_BUF_SIZE;
     let enforcement = "http_get";
     let request_bytes = match read_memory(caller, req_ptr, req_len) {
         Ok(bytes) => bytes,

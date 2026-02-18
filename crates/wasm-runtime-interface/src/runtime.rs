@@ -1,5 +1,7 @@
 use crate::bridge::{self, BridgeError, EvalRequest, EvalResponse};
 use crate::consensus::{ConsensusHostFunctions, ConsensusPolicy, ConsensusState};
+use crate::container::{ContainerHostFunctions, ContainerPolicy, ContainerState};
+use crate::data::{DataBackend, DataHostFunctions, DataPolicy, DataState, NoopDataBackend};
 use crate::exec::{ExecHostFunctions, ExecPolicy, ExecState};
 use crate::sandbox::SandboxHostFunctions;
 use crate::storage::{
@@ -122,6 +124,12 @@ pub struct InstanceConfig {
     pub consensus_policy: ConsensusPolicy,
     /// Terminal policy for WASM access to terminal operations.
     pub terminal_policy: TerminalPolicy,
+    /// Data policy for WASM access to challenge data.
+    pub data_policy: DataPolicy,
+    /// Data backend implementation.
+    pub data_backend: Arc<dyn DataBackend>,
+    /// Container policy for WASM access to container execution.
+    pub container_policy: ContainerPolicy,
 }
 
 impl Default for InstanceConfig {
@@ -142,6 +150,9 @@ impl Default for InstanceConfig {
             fixed_timestamp_ms: None,
             consensus_policy: ConsensusPolicy::default(),
             terminal_policy: TerminalPolicy::default(),
+            data_policy: DataPolicy::default(),
+            data_backend: Arc::new(NoopDataBackend),
+            container_policy: ContainerPolicy::default(),
         }
     }
 }
@@ -175,6 +186,10 @@ pub struct RuntimeState {
     pub consensus_state: ConsensusState,
     /// Terminal state for terminal host operations.
     pub terminal_state: TerminalState,
+    /// Data state for challenge data host operations.
+    pub data_state: DataState,
+    /// Container state for container execution host operations.
+    pub container_state: ContainerState,
     limits: StoreLimits,
 }
 
@@ -188,6 +203,8 @@ impl RuntimeState {
         time_state: TimeState,
         consensus_state: ConsensusState,
         terminal_state: TerminalState,
+        data_state: DataState,
+        container_state: ContainerState,
         memory_export: String,
         challenge_id: String,
         validator_id: String,
@@ -205,6 +222,8 @@ impl RuntimeState {
             time_state,
             consensus_state,
             terminal_state,
+            data_state,
+            container_state,
             memory_export,
             challenge_id,
             validator_id,
@@ -226,6 +245,14 @@ impl RuntimeState {
 
     pub fn reset_exec_counters(&mut self) {
         self.exec_state.reset_counters();
+    }
+
+    pub fn reset_container_counters(&mut self) {
+        self.container_state.reset_counters();
+    }
+
+    pub fn reset_data_counters(&mut self) {
+        self.data_state.reset_counters();
     }
 }
 
@@ -316,6 +343,16 @@ impl WasmRuntime {
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
         );
+        let data_state = DataState::new(
+            instance_config.data_policy.clone(),
+            Arc::clone(&instance_config.data_backend),
+            instance_config.challenge_id.clone(),
+        );
+        let container_state = ContainerState::new(
+            instance_config.container_policy.clone(),
+            instance_config.challenge_id.clone(),
+            instance_config.validator_id.clone(),
+        );
         let runtime_state = RuntimeState::new(
             instance_config.network_policy.clone(),
             instance_config.sandbox_policy.clone(),
@@ -324,6 +361,8 @@ impl WasmRuntime {
             time_state,
             consensus_state,
             terminal_state,
+            data_state,
+            container_state,
             instance_config.memory_export.clone(),
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
@@ -364,6 +403,12 @@ impl WasmRuntime {
 
         let terminal_host_fns = TerminalHostFunctions::new();
         terminal_host_fns.register(&mut linker)?;
+
+        let data_host_fns = DataHostFunctions::new();
+        data_host_fns.register(&mut linker)?;
+
+        let container_host_fns = ContainerHostFunctions::new();
+        container_host_fns.register(&mut linker)?;
 
         let sandbox_host_fns = SandboxHostFunctions::all();
         sandbox_host_fns.register(&mut linker)?;

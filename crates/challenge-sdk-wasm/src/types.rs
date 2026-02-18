@@ -128,3 +128,24 @@ pub struct TermEvaluationParams {
     pub timeout_ms: u64,
     pub environment_config: Option<Vec<u8>>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContainerRunRequest {
+    pub image: String,
+    pub command: Vec<String>,
+    pub env_vars: Vec<(String, String)>,
+    pub working_dir: Option<String>,
+    pub stdin: Option<Vec<u8>>,
+    pub memory_limit_mb: Option<u64>,
+    pub cpu_limit: Option<u32>,
+    pub network_mode: Option<String>,
+    pub timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContainerRunResponse {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub duration_ms: u64,
+}

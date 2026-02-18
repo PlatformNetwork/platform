@@ -12,6 +12,7 @@ pub use types::{
     score_f64_scaled, SandboxExecRequest, SandboxExecResponse, TaskDefinition, TaskResult,
     TermEvaluationParams,
 };
+pub use types::{ContainerRunRequest, ContainerRunResponse};
 pub use types::{EvaluationInput, EvaluationOutput};
 
 pub trait Challenge {

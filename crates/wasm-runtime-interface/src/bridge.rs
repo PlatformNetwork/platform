@@ -95,7 +95,7 @@ pub fn output_to_response(
     execution_time_ms: i64,
 ) -> EvalResponse {
     if output.valid {
-        let score = output.score as f64 / 100.0;
+        let score = output.score as f64 / 10_000.0;
         let results = serde_json::json!({ "message": output.message });
         EvalResponse::success(request_id, score, results).with_time(execution_time_ms)
     } else {
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_output_to_response_success() {
-        let output = EvaluationOutput::success(100, "perfect");
+        let output = EvaluationOutput::success(10000, "perfect");
         let resp = output_to_response(&output, "req-1", 42);
         assert!(resp.success);
         assert_eq!(resp.request_id, "req-1");

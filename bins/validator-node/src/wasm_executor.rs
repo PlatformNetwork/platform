@@ -8,9 +8,8 @@ use std::time::Instant;
 use tracing::{debug, info};
 use wasm_runtime_interface::{
     ConsensusPolicy, ExecPolicy, InMemoryStorageBackend, InstanceConfig, NetworkHostFunctions,
-    NetworkPolicy, NoopStorageBackend, RuntimeConfig, SandboxHostFunctions, SandboxPolicy,
-    StorageHostConfig, StorageHostState, TerminalPolicy, TimePolicy, WasmModule, WasmRuntime,
-    WasmRuntimeError,
+    NetworkPolicy, RuntimeConfig, SandboxHostFunctions, SandboxPolicy, StorageBackend,
+    StorageHostConfig, TerminalPolicy, TimePolicy, WasmModule, WasmRuntime, WasmRuntimeError,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +17,10 @@ pub struct EvaluationInput {
     pub agent_data: Vec<u8>,
     pub challenge_id: String,
     pub params: Vec<u8>,
+    #[serde(default)]
+    pub task_definition: Option<Vec<u8>>,
+    #[serde(default)]
+    pub environment_config: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,6 +28,10 @@ pub struct EvaluationOutput {
     pub score: i64,
     pub valid: bool,
     pub message: String,
+    #[serde(default)]
+    pub metrics: Option<Vec<u8>>,
+    #[serde(default)]
+    pub details: Option<Vec<u8>>,
 }
 
 impl EvaluationOutput {
@@ -34,6 +41,8 @@ impl EvaluationOutput {
             score,
             valid: true,
             message: String::from(message),
+            metrics: None,
+            details: None,
         }
     }
 
@@ -43,6 +52,8 @@ impl EvaluationOutput {
             score: 0,
             valid: false,
             message: String::from(message),
+            metrics: None,
+            details: None,
         }
     }
 }
@@ -53,6 +64,7 @@ pub struct WasmExecutorConfig {
     pub enable_fuel: bool,
     pub fuel_limit: Option<u64>,
     pub storage_host_config: StorageHostConfig,
+    pub storage_backend: Arc<dyn StorageBackend>,
 }
 
 impl Default for WasmExecutorConfig {
@@ -63,6 +75,7 @@ impl Default for WasmExecutorConfig {
             enable_fuel: false,
             fuel_limit: None,
             storage_host_config: StorageHostConfig::default(),
+            storage_backend: Arc::new(InMemoryStorageBackend::new()),
         }
     }
 }
@@ -143,6 +156,8 @@ impl WasmChallengeExecutor {
             agent_data: agent_data.to_vec(),
             challenge_id: challenge_id.to_string(),
             params: params.to_vec(),
+            task_definition: None,
+            environment_config: None,
         };
 
         let serialized =
@@ -162,6 +177,15 @@ impl WasmChallengeExecutor {
             validator_id: "validator".to_string(),
             restart_id: String::new(),
             config_version: 0,
+            storage_host_config: StorageHostConfig {
+                allow_direct_writes: true,
+                require_consensus: false,
+                ..self.config.storage_host_config.clone()
+            },
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
             ..Default::default()
         };
 
@@ -169,12 +193,6 @@ impl WasmChallengeExecutor {
             .runtime
             .instantiate(&module, instance_config, Some(network_host_fns))
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
-
-        let _storage_state = StorageHostState::new(
-            challenge_id.to_string(),
-            self.config.storage_host_config.clone(),
-            Arc::new(NoopStorageBackend),
-        );
 
         let initial_fuel = instance.fuel_remaining();
 
@@ -261,6 +279,8 @@ impl WasmChallengeExecutor {
             agent_data: agent_data.to_vec(),
             challenge_id: challenge_id.to_string(),
             params: params.to_vec(),
+            task_definition: None,
+            environment_config: None,
         };
 
         let serialized =
@@ -280,6 +300,15 @@ impl WasmChallengeExecutor {
             validator_id: "validator".to_string(),
             restart_id: String::new(),
             config_version: 0,
+            storage_host_config: StorageHostConfig {
+                allow_direct_writes: true,
+                require_consensus: false,
+                ..self.config.storage_host_config.clone()
+            },
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
             ..Default::default()
         };
 
@@ -287,12 +316,6 @@ impl WasmChallengeExecutor {
             .runtime
             .instantiate(&module, instance_config, Some(network_host_fns))
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
-
-        let _storage_state = StorageHostState::new(
-            challenge_id.to_string(),
-            self.config.storage_host_config.clone(),
-            Arc::new(NoopStorageBackend),
-        );
 
         let initial_fuel = instance.fuel_remaining();
 
@@ -396,6 +419,7 @@ impl WasmChallengeExecutor {
             fixed_timestamp_ms: None,
             consensus_policy: ConsensusPolicy::default(),
             terminal_policy: TerminalPolicy::default(),
+            ..Default::default()
         };
 
         let mut instance = self
@@ -405,21 +429,17 @@ impl WasmChallengeExecutor {
 
         let initial_fuel = instance.fuel_remaining();
 
-        let result_ptr = instance
-            .call_return_i32("get_tasks")
+        let result = instance
+            .call_return_i64("get_tasks")
             .map_err(|e| anyhow::anyhow!("WASM get_tasks call failed: {}", e))?;
 
-        let result_data = if result_ptr > 0 {
-            let len = instance
-                .call_return_i32("get_tasks_result_len")
-                .unwrap_or(0);
-            if len > 0 {
-                instance
-                    .read_memory(result_ptr as usize, len as usize)
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            }
+        let out_len = (result >> 32) as i32;
+        let out_ptr = (result & 0xFFFF_FFFF) as i32;
+
+        let result_data = if out_ptr > 0 && out_len > 0 {
+            instance
+                .read_memory(out_ptr as usize, out_len as usize)
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -478,6 +498,7 @@ impl WasmChallengeExecutor {
             fixed_timestamp_ms: None,
             consensus_policy: ConsensusPolicy::default(),
             terminal_policy: TerminalPolicy::default(),
+            ..Default::default()
         };
 
         let mut instance = self

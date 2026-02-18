@@ -11,6 +11,8 @@ use std::str::FromStr;
 
 pub mod bridge;
 pub mod consensus;
+pub mod container;
+pub mod data;
 pub mod exec;
 pub mod network;
 pub mod runtime;
@@ -50,6 +52,15 @@ pub const HOST_DNS_RESOLVE: &str = "dns_resolve";
 pub use consensus::{
     ConsensusHostFunctions, ConsensusHostStatus, ConsensusPolicy, ConsensusState,
     HOST_CONSENSUS_NAMESPACE,
+};
+pub use container::{
+    ContainerExecError, ContainerHostFunctions, ContainerHostStatus, ContainerPolicy,
+    ContainerRunRequest, ContainerRunResponse, ContainerState, HOST_CONTAINER_NAMESPACE,
+    HOST_CONTAINER_RUN,
+};
+pub use data::{
+    DataBackend, DataError, DataHostFunctions, DataHostStatus, DataPolicy, DataState,
+    FilesystemDataBackend, NoopDataBackend, HOST_DATA_GET, HOST_DATA_LIST, HOST_DATA_NAMESPACE,
 };
 pub use runtime::{
     ChallengeInstance, HostFunctionRegistrar, InstanceConfig, RuntimeConfig, RuntimeState,

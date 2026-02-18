@@ -376,6 +376,7 @@ async fn main() -> Result<()> {
         enable_fuel: args.wasm_enable_fuel,
         fuel_limit: args.wasm_fuel_limit,
         storage_host_config: wasm_runtime_interface::StorageHostConfig::default(),
+        storage_backend: std::sync::Arc::new(wasm_runtime_interface::InMemoryStorageBackend::new()),
     }) {
         Ok(executor) => {
             info!(

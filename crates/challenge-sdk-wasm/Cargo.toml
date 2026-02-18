@@ -14,3 +14,4 @@ bincode = { version = "1.3", default-features = false }
 [features]
 default = []
 large-arena = []  # 4 MiB arena instead of the default 1 MiB
+huge-arena = []  # 16 MiB arena for complex challenges with large payloads
