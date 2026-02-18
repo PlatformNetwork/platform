@@ -38,6 +38,19 @@ pub enum P2PMessage {
     // Network maintenance
     Heartbeat(HeartbeatMessage),
     PeerAnnounce(PeerAnnounceMessage),
+
+    // Challenge lifecycle
+    JobClaim(JobClaimMessage),
+    JobAssignment(JobAssignmentMessage),
+    DataRequest(DataRequestMessage),
+    DataResponse(DataResponseMessage),
+    TaskProgress(TaskProgressMessage),
+    TaskResult(TaskResultMessage),
+    LeaderboardRequest(LeaderboardRequestMessage),
+    LeaderboardResponse(LeaderboardResponseMessage),
+    ChallengeUpdate(ChallengeUpdateMessage),
+    StorageProposal(StorageProposalMessage),
+    StorageVote(StorageVoteMessage),
 }
 
 impl P2PMessage {
@@ -67,6 +80,17 @@ impl P2PMessage {
             P2PMessage::WeightVote(_) => "WeightVote",
             P2PMessage::Heartbeat(_) => "Heartbeat",
             P2PMessage::PeerAnnounce(_) => "PeerAnnounce",
+            P2PMessage::JobClaim(_) => "JobClaim",
+            P2PMessage::JobAssignment(_) => "JobAssignment",
+            P2PMessage::DataRequest(_) => "DataRequest",
+            P2PMessage::DataResponse(_) => "DataResponse",
+            P2PMessage::TaskProgress(_) => "TaskProgress",
+            P2PMessage::TaskResult(_) => "TaskResult",
+            P2PMessage::LeaderboardRequest(_) => "LeaderboardRequest",
+            P2PMessage::LeaderboardResponse(_) => "LeaderboardResponse",
+            P2PMessage::ChallengeUpdate(_) => "ChallengeUpdate",
+            P2PMessage::StorageProposal(_) => "StorageProposal",
+            P2PMessage::StorageVote(_) => "StorageVote",
         }
     }
 }
@@ -365,6 +389,215 @@ pub struct PeerAnnounceMessage {
     /// Timestamp
     pub timestamp: i64,
     /// Signature
+    pub signature: Vec<u8>,
+}
+
+// ============================================================================
+// Challenge Lifecycle Messages
+// ============================================================================
+
+/// Job claim from a validator for challenge evaluation work
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobClaimMessage {
+    /// Validator claiming the job
+    pub validator: Hotkey,
+    /// Challenge to claim work for
+    pub challenge_id: ChallengeId,
+    /// Maximum number of jobs the validator can handle
+    pub max_jobs: u32,
+    /// Claim timestamp
+    pub timestamp: i64,
+    /// Validator's signature
+    pub signature: Vec<u8>,
+}
+
+/// Assignment of a submission evaluation job to a validator
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobAssignmentMessage {
+    /// Submission being assigned
+    pub submission_id: String,
+    /// Challenge the submission belongs to
+    pub challenge_id: ChallengeId,
+    /// Validator assigned to evaluate
+    pub assigned_validator: Hotkey,
+    /// Validator that made the assignment
+    pub assigner: Hotkey,
+    /// Hash of the agent code to evaluate
+    pub agent_hash: String,
+    /// Assignment timestamp
+    pub timestamp: i64,
+    /// Assigner's signature
+    pub signature: Vec<u8>,
+}
+
+/// Request for challenge-related data from peers
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DataRequestMessage {
+    /// Unique request identifier
+    pub request_id: String,
+    /// Validator making the request
+    pub requester: Hotkey,
+    /// Challenge the data belongs to
+    pub challenge_id: ChallengeId,
+    /// Type of data being requested
+    pub data_type: String,
+    /// Key identifying the specific data
+    pub data_key: String,
+    /// Request timestamp
+    pub timestamp: i64,
+    /// Requester's signature
+    pub signature: Vec<u8>,
+}
+
+/// Response containing requested challenge data
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DataResponseMessage {
+    /// Request identifier this responds to
+    pub request_id: String,
+    /// Validator providing the data
+    pub responder: Hotkey,
+    /// Challenge the data belongs to
+    pub challenge_id: ChallengeId,
+    /// Type of data being returned
+    pub data_type: String,
+    /// Serialized data payload
+    pub data: Vec<u8>,
+    /// Response timestamp
+    pub timestamp: i64,
+    /// Responder's signature
+    pub signature: Vec<u8>,
+}
+
+/// Progress update for a task within a submission evaluation
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskProgressMessage {
+    /// Submission being evaluated
+    pub submission_id: String,
+    /// Challenge the submission belongs to
+    pub challenge_id: ChallengeId,
+    /// Validator performing the evaluation
+    pub validator: Hotkey,
+    /// Index of the current task
+    pub task_index: u32,
+    /// Total number of tasks
+    pub total_tasks: u32,
+    /// Current status description
+    pub status: String,
+    /// Progress percentage (0.0 to 100.0)
+    pub progress_pct: f64,
+    /// Progress timestamp
+    pub timestamp: i64,
+    /// Validator's signature
+    pub signature: Vec<u8>,
+}
+
+/// Result of a single task within a submission evaluation
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskResultMessage {
+    /// Submission being evaluated
+    pub submission_id: String,
+    /// Challenge the submission belongs to
+    pub challenge_id: ChallengeId,
+    /// Validator that performed the evaluation
+    pub validator: Hotkey,
+    /// Unique task identifier
+    pub task_id: String,
+    /// Whether the task passed
+    pub passed: bool,
+    /// Task score
+    pub score: f64,
+    /// Serialized task output
+    pub output: Vec<u8>,
+    /// Execution time in milliseconds
+    pub execution_time_ms: u64,
+    /// Result timestamp
+    pub timestamp: i64,
+    /// Validator's signature
+    pub signature: Vec<u8>,
+}
+
+/// Request for challenge leaderboard data
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaderboardRequestMessage {
+    /// Validator making the request
+    pub requester: Hotkey,
+    /// Challenge to get leaderboard for
+    pub challenge_id: ChallengeId,
+    /// Maximum number of entries to return
+    pub limit: u32,
+    /// Offset for pagination
+    pub offset: u32,
+    /// Request timestamp
+    pub timestamp: i64,
+    /// Requester's signature
+    pub signature: Vec<u8>,
+}
+
+/// Response containing leaderboard data
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaderboardResponseMessage {
+    /// Validator providing the data
+    pub responder: Hotkey,
+    /// Challenge the leaderboard belongs to
+    pub challenge_id: ChallengeId,
+    /// Serialized leaderboard entries
+    pub entries: Vec<u8>,
+    /// Total number of entries in the leaderboard
+    pub total_count: u32,
+    /// Response timestamp
+    pub timestamp: i64,
+    /// Responder's signature
+    pub signature: Vec<u8>,
+}
+
+/// Update notification for a challenge
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeUpdateMessage {
+    /// Challenge being updated
+    pub challenge_id: ChallengeId,
+    /// Validator publishing the update
+    pub updater: Hotkey,
+    /// Type of update
+    pub update_type: String,
+    /// Serialized update data
+    pub data: Vec<u8>,
+    /// Update timestamp
+    pub timestamp: i64,
+    /// Updater's signature
+    pub signature: Vec<u8>,
+}
+
+/// Proposal to store a key-value pair in consensus storage
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageProposalMessage {
+    /// Unique proposal identifier
+    pub proposal_id: [u8; 32],
+    /// Challenge the storage belongs to
+    pub challenge_id: ChallengeId,
+    /// Validator proposing the storage
+    pub proposer: Hotkey,
+    /// Storage key
+    pub key: Vec<u8>,
+    /// Storage value
+    pub value: Vec<u8>,
+    /// Proposal timestamp
+    pub timestamp: i64,
+    /// Proposer's signature
+    pub signature: Vec<u8>,
+}
+
+/// Vote on a storage proposal
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageVoteMessage {
+    /// Proposal being voted on
+    pub proposal_id: [u8; 32],
+    /// Validator casting the vote
+    pub voter: Hotkey,
+    /// Whether the voter approves
+    pub approve: bool,
+    /// Vote timestamp
+    pub timestamp: i64,
+    /// Voter's signature
     pub signature: Vec<u8>,
 }
 

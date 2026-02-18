@@ -10,11 +10,13 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 pub mod bridge;
+pub mod consensus;
 pub mod exec;
 pub mod network;
 pub mod runtime;
 pub mod sandbox;
 pub mod storage;
+pub mod terminal;
 pub mod time;
 pub use bridge::{
     bytes_to_output, input_to_bytes, output_to_response, request_to_input, BridgeError,
@@ -28,8 +30,9 @@ pub use network::{
     NetworkHostFunctions, NetworkState, NetworkStateError, HOST_GET_TIMESTAMP, HOST_LOG_MESSAGE,
 };
 pub use sandbox::{
-    SandboxHostFunctions, HOST_SANDBOX_CONFIGURE, HOST_SANDBOX_EXEC, HOST_SANDBOX_GET_TASKS,
-    HOST_SANDBOX_NAMESPACE, HOST_SANDBOX_STATUS,
+    SandboxExecError, SandboxExecRequest, SandboxExecResponse, SandboxHostFunctions,
+    HOST_SANDBOX_CONFIGURE, HOST_SANDBOX_EXEC, HOST_SANDBOX_GET_TASKS, HOST_SANDBOX_GET_TIMESTAMP,
+    HOST_SANDBOX_LOG_MESSAGE, HOST_SANDBOX_NAMESPACE, HOST_SANDBOX_STATUS,
 };
 pub use storage::{
     InMemoryStorageBackend, NoopStorageBackend, StorageAuditEntry, StorageAuditLogger,
@@ -44,6 +47,10 @@ pub const HOST_HTTP_GET: &str = "http_get";
 pub const HOST_HTTP_POST: &str = "http_post";
 pub const HOST_DNS_RESOLVE: &str = "dns_resolve";
 
+pub use consensus::{
+    ConsensusHostFunctions, ConsensusHostStatus, ConsensusPolicy, ConsensusState,
+    HOST_CONSENSUS_NAMESPACE,
+};
 pub use runtime::{
     ChallengeInstance, HostFunctionRegistrar, InstanceConfig, RuntimeConfig, RuntimeState,
     WasmModule, WasmRuntime, WasmRuntimeError,
@@ -51,6 +58,10 @@ pub use runtime::{
 pub use storage::{
     HOST_STORAGE_ALLOC, HOST_STORAGE_DELETE, HOST_STORAGE_GET, HOST_STORAGE_GET_RESULT,
     HOST_STORAGE_NAMESPACE, HOST_STORAGE_PROPOSE_WRITE, HOST_STORAGE_SET,
+};
+pub use terminal::{
+    TerminalHostFunctions, TerminalHostStatus, TerminalPolicy, TerminalState,
+    HOST_TERMINAL_NAMESPACE,
 };
 pub use time::{TimeError, TimeHostFunction, TimeHostFunctions, TimeMode, TimePolicy, TimeState};
 

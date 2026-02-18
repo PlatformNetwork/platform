@@ -1,10 +1,13 @@
 use crate::bridge::{self, BridgeError, EvalRequest, EvalResponse};
-use crate::exec::{ExecPolicy, ExecState};
+use crate::consensus::{ConsensusHostFunctions, ConsensusPolicy, ConsensusState};
+use crate::exec::{ExecHostFunctions, ExecPolicy, ExecState};
+use crate::sandbox::SandboxHostFunctions;
 use crate::storage::{
     InMemoryStorageBackend, StorageBackend, StorageHostConfig, StorageHostFunctions,
     StorageHostState,
 };
-use crate::time::{TimePolicy, TimeState};
+use crate::terminal::{TerminalHostFunctions, TerminalPolicy, TerminalState};
+use crate::time::{TimeHostFunctions, TimePolicy, TimeState};
 use crate::{NetworkAuditLogger, NetworkHostFunctions, NetworkPolicy, NetworkState, SandboxPolicy};
 use std::sync::Arc;
 use std::time::Instant;
@@ -115,6 +118,10 @@ pub struct InstanceConfig {
     pub storage_backend: Arc<dyn StorageBackend>,
     /// Fixed timestamp for deterministic consensus execution.
     pub fixed_timestamp_ms: Option<i64>,
+    /// Consensus policy for WASM access to chain state.
+    pub consensus_policy: ConsensusPolicy,
+    /// Terminal policy for WASM access to terminal operations.
+    pub terminal_policy: TerminalPolicy,
 }
 
 impl Default for InstanceConfig {
@@ -133,6 +140,8 @@ impl Default for InstanceConfig {
             storage_host_config: StorageHostConfig::default(),
             storage_backend: Arc::new(InMemoryStorageBackend::new()),
             fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
         }
     }
 }
@@ -162,6 +171,10 @@ pub struct RuntimeState {
     pub storage_state: StorageHostState,
     /// Fixed timestamp in milliseconds for deterministic consensus execution.
     pub fixed_timestamp_ms: Option<i64>,
+    /// Consensus state for chain-level queries.
+    pub consensus_state: ConsensusState,
+    /// Terminal state for terminal host operations.
+    pub terminal_state: TerminalState,
     limits: StoreLimits,
 }
 
@@ -173,6 +186,8 @@ impl RuntimeState {
         network_state: NetworkState,
         exec_state: ExecState,
         time_state: TimeState,
+        consensus_state: ConsensusState,
+        terminal_state: TerminalState,
         memory_export: String,
         challenge_id: String,
         validator_id: String,
@@ -188,6 +203,8 @@ impl RuntimeState {
             network_state,
             exec_state,
             time_state,
+            consensus_state,
+            terminal_state,
             memory_export,
             challenge_id,
             validator_id,
@@ -289,12 +306,24 @@ impl WasmRuntime {
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
         );
+        let consensus_state = ConsensusState::new(
+            instance_config.consensus_policy.clone(),
+            instance_config.challenge_id.clone(),
+            instance_config.validator_id.clone(),
+        );
+        let terminal_state = TerminalState::new(
+            instance_config.terminal_policy.clone(),
+            instance_config.challenge_id.clone(),
+            instance_config.validator_id.clone(),
+        );
         let runtime_state = RuntimeState::new(
             instance_config.network_policy.clone(),
             instance_config.sandbox_policy.clone(),
             network_state,
             exec_state,
             time_state,
+            consensus_state,
+            terminal_state,
             instance_config.memory_export.clone(),
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
@@ -323,6 +352,21 @@ impl WasmRuntime {
 
         let storage_host_fns = StorageHostFunctions::new();
         storage_host_fns.register(&mut linker)?;
+
+        let exec_host_fns = ExecHostFunctions::all();
+        exec_host_fns.register(&mut linker)?;
+
+        let time_host_fns = TimeHostFunctions::all();
+        time_host_fns.register(&mut linker)?;
+
+        let consensus_host_fns = ConsensusHostFunctions::new();
+        consensus_host_fns.register(&mut linker)?;
+
+        let terminal_host_fns = TerminalHostFunctions::new();
+        terminal_host_fns.register(&mut linker)?;
+
+        let sandbox_host_fns = SandboxHostFunctions::all();
+        sandbox_host_fns.register(&mut linker)?;
 
         if let Some(registrar) = registrar {
             registrar.register(&mut linker)?;

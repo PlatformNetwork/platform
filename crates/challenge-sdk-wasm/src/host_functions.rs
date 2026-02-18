@@ -215,3 +215,63 @@ pub fn host_get_timestamp() -> i64 {
 pub fn host_log(level: u8, msg: &str) {
     unsafe { log_message(level as i32, msg.as_ptr() as i32, msg.len() as i32) }
 }
+
+#[link(wasm_import_module = "platform_consensus")]
+extern "C" {
+    fn consensus_get_epoch() -> i64;
+    fn consensus_get_validators(buf_ptr: i32, buf_len: i32) -> i32;
+    fn consensus_propose_weight(uid: i32, weight: i32) -> i32;
+    fn consensus_get_votes(buf_ptr: i32, buf_len: i32) -> i32;
+    fn consensus_get_state_hash(buf_ptr: i32) -> i32;
+    fn consensus_get_submission_count() -> i32;
+    fn consensus_get_block_height() -> i64;
+}
+
+pub fn host_consensus_get_epoch() -> i64 {
+    unsafe { consensus_get_epoch() }
+}
+
+pub fn host_consensus_get_validators() -> Result<Vec<u8>, i32> {
+    let mut buf = vec![0u8; 65536];
+    let status = unsafe { consensus_get_validators(buf.as_mut_ptr() as i32, buf.len() as i32) };
+    if status < 0 {
+        return Err(status);
+    }
+    buf.truncate(status as usize);
+    Ok(buf)
+}
+
+pub fn host_consensus_propose_weight(uid: i32, weight: i32) -> Result<(), i32> {
+    let status = unsafe { consensus_propose_weight(uid, weight) };
+    if status < 0 {
+        return Err(status);
+    }
+    Ok(())
+}
+
+pub fn host_consensus_get_votes() -> Result<Vec<u8>, i32> {
+    let mut buf = vec![0u8; 65536];
+    let status = unsafe { consensus_get_votes(buf.as_mut_ptr() as i32, buf.len() as i32) };
+    if status < 0 {
+        return Err(status);
+    }
+    buf.truncate(status as usize);
+    Ok(buf)
+}
+
+pub fn host_consensus_get_state_hash() -> Result<[u8; 32], i32> {
+    let mut buf = [0u8; 32];
+    let status = unsafe { consensus_get_state_hash(buf.as_mut_ptr() as i32) };
+    if status < 0 {
+        return Err(status);
+    }
+    Ok(buf)
+}
+
+pub fn host_consensus_get_submission_count() -> i32 {
+    unsafe { consensus_get_submission_count() }
+}
+
+pub fn host_consensus_get_block_height() -> i64 {
+    unsafe { consensus_get_block_height() }
+}

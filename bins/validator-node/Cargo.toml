@@ -46,3 +46,4 @@ sp-core = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 bincode = { workspace = true }
+sha2 = { workspace = true }

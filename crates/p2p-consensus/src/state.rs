@@ -97,6 +97,49 @@ pub struct WeightVotes {
     pub final_weights: Option<Vec<(u16, u16)>>,
 }
 
+/// Leaderboard entry for a challenge
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaderboardEntry {
+    pub miner: Hotkey,
+    pub score: f64,
+    pub submission_count: u32,
+    pub last_submission_at: i64,
+    pub rank: u32,
+}
+
+/// Record of an active evaluation job
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobRecord {
+    pub submission_id: String,
+    pub challenge_id: ChallengeId,
+    pub assigned_validator: Hotkey,
+    pub assigned_at: i64,
+    pub timeout_at: i64,
+    pub status: JobStatus,
+}
+
+/// Status of an evaluation job
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum JobStatus {
+    Pending,
+    InProgress,
+    Completed,
+    TimedOut,
+}
+
+/// Record of real-time task progress
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskProgressRecord {
+    pub submission_id: String,
+    pub challenge_id: ChallengeId,
+    pub validator: Hotkey,
+    pub task_index: u32,
+    pub total_tasks: u32,
+    pub status: String,
+    pub progress_pct: f64,
+    pub updated_at: i64,
+}
+
 /// The shared chain state for P2P consensus
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChainState {
@@ -128,6 +171,18 @@ pub struct ChainState {
     pub bittensor_block: u64,
     /// Hash of the linked Bittensor/Subtensor block
     pub bittensor_block_hash: [u8; 32],
+    /// Leaderboards per challenge
+    #[serde(default)]
+    pub leaderboard: HashMap<ChallengeId, Vec<LeaderboardEntry>>,
+    /// Active evaluation jobs
+    #[serde(default)]
+    pub active_jobs: HashMap<String, JobRecord>,
+    /// Real-time task progress records
+    #[serde(default)]
+    pub task_progress: HashMap<String, TaskProgressRecord>,
+    /// Storage roots per challenge
+    #[serde(default)]
+    pub challenge_storage_roots: HashMap<ChallengeId, [u8; 32]>,
 }
 
 impl Default for ChainState {
@@ -147,6 +202,10 @@ impl Default for ChainState {
             last_updated: chrono::Utc::now().timestamp_millis(),
             bittensor_block: 0,
             bittensor_block_hash: [0u8; 32],
+            leaderboard: HashMap::new(),
+            active_jobs: HashMap::new(),
+            task_progress: HashMap::new(),
+            challenge_storage_roots: HashMap::new(),
         }
     }
 }
@@ -563,6 +622,66 @@ impl ChainState {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub fn assign_job(&mut self, job: JobRecord) {
+        info!(submission_id = %job.submission_id, validator = %job.assigned_validator.to_hex(), "Job assigned");
+        self.active_jobs.insert(job.submission_id.clone(), job);
+        self.increment_sequence();
+    }
+
+    pub fn complete_job(&mut self, submission_id: &str) -> Option<JobRecord> {
+        let mut job = self.active_jobs.remove(submission_id)?;
+        job.status = JobStatus::Completed;
+        self.increment_sequence();
+        Some(job)
+    }
+
+    pub fn update_leaderboard(
+        &mut self,
+        challenge_id: ChallengeId,
+        entries: Vec<LeaderboardEntry>,
+    ) {
+        self.leaderboard.insert(challenge_id, entries);
+        self.increment_sequence();
+    }
+
+    pub fn get_leaderboard(&self, challenge_id: &ChallengeId) -> Vec<LeaderboardEntry> {
+        self.leaderboard
+            .get(challenge_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn update_task_progress(&mut self, record: TaskProgressRecord) {
+        let key = format!("{}:{}", record.submission_id, record.validator.to_hex());
+        self.task_progress.insert(key, record);
+        self.update_hash();
+    }
+
+    pub fn update_challenge_storage_root(&mut self, challenge_id: ChallengeId, root: [u8; 32]) {
+        self.challenge_storage_roots.insert(challenge_id, root);
+        self.increment_sequence();
+    }
+
+    pub fn cleanup_stale_jobs(&mut self, now: i64) -> Vec<JobRecord> {
+        let stale: Vec<String> = self
+            .active_jobs
+            .iter()
+            .filter(|(_, job)| job.timeout_at < now && job.status != JobStatus::Completed)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut removed = Vec::new();
+        for id in stale {
+            if let Some(mut job) = self.active_jobs.remove(&id) {
+                job.status = JobStatus::TimedOut;
+                removed.push(job);
+            }
+        }
+        if !removed.is_empty() {
+            self.increment_sequence();
+        }
+        removed
     }
 }
 

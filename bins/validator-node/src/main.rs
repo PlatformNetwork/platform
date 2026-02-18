@@ -4,6 +4,7 @@
 //! Uses libp2p for gossipsub consensus and Kademlia DHT for storage.
 //! Submits weights to Bittensor at epoch boundaries.
 
+mod challenge_storage;
 mod wasm_executor;
 
 use anyhow::Result;
@@ -25,8 +26,9 @@ use platform_distributed_storage::{
     DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
 };
 use platform_p2p_consensus::{
-    ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord,
-    NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager, ValidatorRecord, ValidatorSet,
+    ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord, JobRecord,
+    JobStatus, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager, TaskProgressRecord,
+    ValidatorRecord, ValidatorSet,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -419,6 +421,7 @@ async fn main() -> Result<()> {
     let mut state_persist_interval = tokio::time::interval(Duration::from_secs(60));
     let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
     let mut wasm_eval_interval = tokio::time::interval(Duration::from_secs(5));
+    let mut stale_job_interval = tokio::time::interval(Duration::from_secs(120));
 
     let (eval_broadcast_tx, mut eval_broadcast_rx) = tokio::sync::mpsc::channel::<P2PMessage>(256);
 
@@ -515,6 +518,15 @@ async fn main() -> Result<()> {
                         &keypair,
                         &eval_broadcast_tx,
                     ).await;
+                }
+            }
+
+            // Stale job cleanup
+            _ = stale_job_interval.tick() => {
+                let now = chrono::Utc::now().timestamp_millis();
+                let stale = state_manager.apply(|state| state.cleanup_stale_jobs(now));
+                if !stale.is_empty() {
+                    info!(count = stale.len(), "Cleaned up stale jobs");
                 }
             }
 
@@ -784,8 +796,160 @@ async fn handle_network_event(
                     }
                 });
             }
-            _ => {
-                debug!("Unhandled P2P message type");
+            P2PMessage::StateRequest(req) => {
+                debug!(
+                    requester = %req.requester.to_hex(),
+                    sequence = req.current_sequence,
+                    "Received state request"
+                );
+            }
+            P2PMessage::StateResponse(resp) => {
+                debug!(
+                    responder = %resp.responder.to_hex(),
+                    sequence = resp.sequence,
+                    "Received state response"
+                );
+            }
+            P2PMessage::WeightVote(wv) => {
+                debug!(
+                    validator = %wv.validator.to_hex(),
+                    epoch = wv.epoch,
+                    "Received weight vote"
+                );
+            }
+            P2PMessage::PeerAnnounce(pa) => {
+                debug!(
+                    validator = %pa.validator.to_hex(),
+                    peer_id = %pa.peer_id,
+                    addresses = pa.addresses.len(),
+                    "Received peer announce"
+                );
+            }
+            P2PMessage::JobClaim(claim) => {
+                info!(
+                    validator = %claim.validator.to_hex(),
+                    challenge_id = %claim.challenge_id,
+                    max_jobs = claim.max_jobs,
+                    "Received job claim"
+                );
+            }
+            P2PMessage::JobAssignment(assignment) => {
+                info!(
+                    submission_id = %assignment.submission_id,
+                    challenge_id = %assignment.challenge_id,
+                    assigned_validator = %assignment.assigned_validator.to_hex(),
+                    assigner = %assignment.assigner.to_hex(),
+                    "Received job assignment"
+                );
+                let job = JobRecord {
+                    submission_id: assignment.submission_id.clone(),
+                    challenge_id: assignment.challenge_id,
+                    assigned_validator: assignment.assigned_validator,
+                    assigned_at: assignment.timestamp,
+                    timeout_at: assignment.timestamp + 300_000,
+                    status: JobStatus::Pending,
+                };
+                state_manager.apply(|state| {
+                    state.assign_job(job);
+                });
+            }
+            P2PMessage::DataRequest(req) => {
+                debug!(
+                    request_id = %req.request_id,
+                    requester = %req.requester.to_hex(),
+                    challenge_id = %req.challenge_id,
+                    data_type = %req.data_type,
+                    "Received data request"
+                );
+            }
+            P2PMessage::DataResponse(resp) => {
+                debug!(
+                    request_id = %resp.request_id,
+                    responder = %resp.responder.to_hex(),
+                    challenge_id = %resp.challenge_id,
+                    data_bytes = resp.data.len(),
+                    "Received data response"
+                );
+            }
+            P2PMessage::TaskProgress(progress) => {
+                debug!(
+                    submission_id = %progress.submission_id,
+                    challenge_id = %progress.challenge_id,
+                    validator = %progress.validator.to_hex(),
+                    task_index = progress.task_index,
+                    total_tasks = progress.total_tasks,
+                    progress_pct = progress.progress_pct,
+                    "Received task progress"
+                );
+                let record = TaskProgressRecord {
+                    submission_id: progress.submission_id.clone(),
+                    challenge_id: progress.challenge_id,
+                    validator: progress.validator,
+                    task_index: progress.task_index,
+                    total_tasks: progress.total_tasks,
+                    status: progress.status,
+                    progress_pct: progress.progress_pct,
+                    updated_at: progress.timestamp,
+                };
+                state_manager.apply(|state| {
+                    state.update_task_progress(record);
+                });
+            }
+            P2PMessage::TaskResult(result) => {
+                info!(
+                    submission_id = %result.submission_id,
+                    challenge_id = %result.challenge_id,
+                    validator = %result.validator.to_hex(),
+                    task_id = %result.task_id,
+                    passed = result.passed,
+                    score = result.score,
+                    execution_time_ms = result.execution_time_ms,
+                    "Received task result"
+                );
+            }
+            P2PMessage::LeaderboardRequest(req) => {
+                debug!(
+                    requester = %req.requester.to_hex(),
+                    challenge_id = %req.challenge_id,
+                    limit = req.limit,
+                    offset = req.offset,
+                    "Received leaderboard request"
+                );
+            }
+            P2PMessage::LeaderboardResponse(resp) => {
+                debug!(
+                    responder = %resp.responder.to_hex(),
+                    challenge_id = %resp.challenge_id,
+                    total_count = resp.total_count,
+                    "Received leaderboard response"
+                );
+            }
+            P2PMessage::ChallengeUpdate(update) => {
+                info!(
+                    challenge_id = %update.challenge_id,
+                    updater = %update.updater.to_hex(),
+                    update_type = %update.update_type,
+                    data_bytes = update.data.len(),
+                    "Received challenge update"
+                );
+            }
+            P2PMessage::StorageProposal(proposal) => {
+                debug!(
+                    proposal_id = %hex::encode(&proposal.proposal_id[..8]),
+                    challenge_id = %proposal.challenge_id,
+                    proposer = %proposal.proposer.to_hex(),
+                    key_len = proposal.key.len(),
+                    value_len = proposal.value.len(),
+                    "Received storage proposal"
+                );
+            }
+            P2PMessage::StorageVote(vote) => {
+                debug!(
+                    proposal_id = %hex::encode(&vote.proposal_id[..8]),
+                    voter = %vote.voter.to_hex(),
+                    approve = vote.approve,
+                    "Received storage vote"
+                );
             }
         },
         NetworkEvent::PeerConnected(peer_id) => {

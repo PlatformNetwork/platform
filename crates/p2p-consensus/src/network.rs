@@ -700,6 +700,17 @@ fn expected_signer(message: &P2PMessage) -> Option<&Hotkey> {
         P2PMessage::WeightVote(msg) => Some(&msg.validator),
         P2PMessage::Heartbeat(msg) => Some(&msg.validator),
         P2PMessage::PeerAnnounce(msg) => Some(&msg.validator),
+        P2PMessage::JobClaim(msg) => Some(&msg.validator),
+        P2PMessage::JobAssignment(msg) => Some(&msg.assigner),
+        P2PMessage::DataRequest(msg) => Some(&msg.requester),
+        P2PMessage::DataResponse(msg) => Some(&msg.responder),
+        P2PMessage::TaskProgress(msg) => Some(&msg.validator),
+        P2PMessage::TaskResult(msg) => Some(&msg.validator),
+        P2PMessage::LeaderboardRequest(msg) => Some(&msg.requester),
+        P2PMessage::LeaderboardResponse(msg) => Some(&msg.responder),
+        P2PMessage::ChallengeUpdate(msg) => Some(&msg.updater),
+        P2PMessage::StorageProposal(msg) => Some(&msg.proposer),
+        P2PMessage::StorageVote(msg) => Some(&msg.voter),
     }
 }
 

@@ -7,9 +7,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info};
 use wasm_runtime_interface::{
-    ExecPolicy, InMemoryStorageBackend, InstanceConfig, NetworkHostFunctions, NetworkPolicy,
-    NoopStorageBackend, RuntimeConfig, SandboxHostFunctions, SandboxPolicy, StorageHostConfig,
-    StorageHostState, TimePolicy, WasmModule, WasmRuntime, WasmRuntimeError,
+    ConsensusPolicy, ExecPolicy, InMemoryStorageBackend, InstanceConfig, NetworkHostFunctions,
+    NetworkPolicy, NoopStorageBackend, RuntimeConfig, SandboxHostFunctions, SandboxPolicy,
+    StorageHostConfig, StorageHostState, TerminalPolicy, TimePolicy, WasmModule, WasmRuntime,
+    WasmRuntimeError,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -393,6 +394,8 @@ impl WasmChallengeExecutor {
             storage_host_config: StorageHostConfig::default(),
             storage_backend: Arc::new(InMemoryStorageBackend::new()),
             fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
         };
 
         let mut instance = self
@@ -473,6 +476,8 @@ impl WasmChallengeExecutor {
             storage_host_config: StorageHostConfig::default(),
             storage_backend: Arc::new(InMemoryStorageBackend::new()),
             fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
         };
 
         let mut instance = self
