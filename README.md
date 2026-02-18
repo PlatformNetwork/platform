@@ -101,6 +101,54 @@ flowchart LR
 
 ---
 
+## WASM Route Handling
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant RPC as RPC Server
+    participant WE as WASM Executor
+    participant WM as WASM Module
+
+    Client->>RPC: challenge_call(id, method, path)
+    RPC->>WE: execute_handle_route(request)
+    WE->>WM: handle_route(serialized_request)
+    WM-->>WE: serialized_response
+    WE-->>RPC: WasmRouteResponse
+    RPC-->>Client: JSON-RPC result
+```
+
+---
+
+## Review Assignment Flow
+
+```mermaid
+flowchart LR
+    Submit[Submission] --> Select[Validator Selection]
+    Select --> LLM[3 LLM Reviewers]
+    Select --> AST[3 AST Reviewers]
+    LLM --> |Review Results| Aggregate[Result Aggregation]
+    AST --> |Review Results| Aggregate
+    Aggregate --> Score[Final Score]
+    LLM -.-> |Timeout| Replace1[Replacement Validator]
+    AST -.-> |Timeout| Replace2[Replacement Validator]
+```
+
+---
+
+## Subnet Owner Resolution
+
+```mermaid
+flowchart TB
+    Sync[Metagraph Sync] --> Parse[Parse Neurons]
+    Parse --> UID0{UID 0 Found?}
+    UID0 -->|Yes| Update[Update ChainState.sudo_key]
+    UID0 -->|No| Keep[Keep Existing]
+    Update --> Owner[Subnet Owner = UID 0 Hotkey]
+```
+
+---
+
 ## Quick Start (Validator)
 
 ```bash

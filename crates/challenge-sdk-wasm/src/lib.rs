@@ -13,6 +13,7 @@ pub use types::{
 };
 pub use types::{ContainerRunRequest, ContainerRunResponse};
 pub use types::{EvaluationInput, EvaluationOutput};
+pub use types::{WasmRouteDefinition, WasmRouteRequest, WasmRouteResponse};
 
 pub trait Challenge {
     fn name(&self) -> &'static str;
@@ -33,6 +34,21 @@ pub trait Challenge {
     }
 
     fn configure(&self, _config: &[u8]) {}
+
+    /// Return serialized [`WasmRouteDefinition`]s describing the HTTP routes
+    /// this challenge exposes. The default implementation returns an empty
+    /// vector (no custom routes).
+    fn routes(&self) -> alloc::vec::Vec<u8> {
+        alloc::vec::Vec::new()
+    }
+
+    /// Handle an incoming route request and return a serialized
+    /// [`WasmRouteResponse`]. The `request` parameter is a bincode-encoded
+    /// [`WasmRouteRequest`]. The default implementation returns an empty
+    /// vector.
+    fn handle_route(&self, _request: &[u8]) -> alloc::vec::Vec<u8> {
+        alloc::vec::Vec::new()
+    }
 }
 
 /// Pack a pointer and length into a single i64 value.
@@ -46,7 +62,8 @@ pub fn pack_ptr_len(ptr: i32, len: i32) -> i64 {
 
 /// Register a [`Challenge`] implementation and export the required WASM ABI
 /// functions (`evaluate`, `validate`, `get_name`, `get_version`,
-/// `generate_task`, `setup_environment`, `get_tasks`, `configure`, and `alloc`).
+/// `generate_task`, `setup_environment`, `get_tasks`, `configure`,
+/// `get_routes`, `handle_route`, and `alloc`).
 ///
 /// The type must provide a `const fn new() -> Self` constructor so that the
 /// challenge instance can be placed in a `static`.
@@ -212,6 +229,40 @@ macro_rules! register_challenge {
             };
             <$ty as $crate::Challenge>::configure(&_CHALLENGE, slice);
             1
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_routes() -> i64 {
+            let output = <$ty as $crate::Challenge>::routes(&_CHALLENGE);
+            if output.is_empty() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            let ptr = $crate::alloc_impl::sdk_alloc(output.len());
+            if ptr.is_null() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(output.as_ptr(), ptr, output.len());
+            }
+            $crate::pack_ptr_len(ptr as i32, output.len() as i32)
+        }
+
+        #[no_mangle]
+        pub extern "C" fn handle_route(req_ptr: i32, req_len: i32) -> i64 {
+            let slice =
+                unsafe { core::slice::from_raw_parts(req_ptr as *const u8, req_len as usize) };
+            let output = <$ty as $crate::Challenge>::handle_route(&_CHALLENGE, slice);
+            if output.is_empty() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            let ptr = $crate::alloc_impl::sdk_alloc(output.len());
+            if ptr.is_null() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(output.as_ptr(), ptr, output.len());
+            }
+            $crate::pack_ptr_len(ptr as i32, output.len() as i32)
         }
     };
 }

@@ -141,3 +141,51 @@ pub struct ContainerRunResponse {
     pub stderr: Vec<u8>,
     pub duration_ms: u64,
 }
+
+/// Definition of a route exposed by a WASM challenge module.
+///
+/// Challenge implementations return a serialized list of these definitions from
+/// [`Challenge::routes`] so the validator can register HTTP endpoints.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WasmRouteDefinition {
+    /// HTTP method (e.g. `"GET"`, `"POST"`).
+    pub method: String,
+    /// URL path pattern (e.g. `"/status"`, `"/submit"`).
+    pub path: String,
+    /// Human-readable description of the route.
+    pub description: String,
+    /// Whether the route requires hotkey authentication.
+    pub requires_auth: bool,
+}
+
+/// Incoming request forwarded to a WASM challenge route handler.
+///
+/// The validator serializes this struct and passes it to
+/// [`Challenge::handle_route`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WasmRouteRequest {
+    /// HTTP method of the incoming request.
+    pub method: String,
+    /// Matched URL path.
+    pub path: String,
+    /// Path parameters extracted from the URL pattern.
+    pub params: Vec<(String, String)>,
+    /// Query-string key/value pairs.
+    pub query: Vec<(String, String)>,
+    /// Raw request body bytes.
+    pub body: Vec<u8>,
+    /// Authenticated caller hotkey, if present.
+    pub auth_hotkey: Option<String>,
+}
+
+/// Response returned by a WASM challenge route handler.
+///
+/// The WASM module serializes this struct and returns it from
+/// [`Challenge::handle_route`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WasmRouteResponse {
+    /// HTTP status code to return to the caller.
+    pub status: u16,
+    /// Raw response body bytes.
+    pub body: Vec<u8>,
+}

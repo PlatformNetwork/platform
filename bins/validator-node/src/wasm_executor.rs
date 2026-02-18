@@ -14,6 +14,8 @@ use wasm_runtime_interface::{
 };
 
 const MAX_EVALUATION_OUTPUT_SIZE: u64 = 64 * 1024 * 1024;
+const MAX_ROUTE_OUTPUT_SIZE: u64 = 16 * 1024 * 1024;
+const MAX_TASK_OUTPUT_SIZE: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvaluationInput {
@@ -470,6 +472,14 @@ impl WasmChallengeExecutor {
         let out_len = (result >> 32) as i32;
         let out_ptr = (result & 0xFFFF_FFFF) as i32;
 
+        if out_len > 0 && out_len as u64 > MAX_TASK_OUTPUT_SIZE {
+            return Err(anyhow::anyhow!(
+                "WASM get_tasks output size {} exceeds maximum allowed {}",
+                out_len,
+                MAX_TASK_OUTPUT_SIZE
+            ));
+        }
+
         let result_data = if out_ptr > 0 && out_len > 0 {
             instance
                 .read_memory(out_ptr as usize, out_len as usize)
@@ -578,6 +588,209 @@ impl WasmChallengeExecutor {
         );
 
         Ok((result, metrics))
+    }
+
+    #[allow(dead_code)]
+    pub fn execute_get_routes(
+        &self,
+        module_path: &str,
+        network_policy: &NetworkPolicy,
+        sandbox_policy: &SandboxPolicy,
+    ) -> Result<(Vec<u8>, ExecutionMetrics)> {
+        let start = Instant::now();
+
+        let module = self
+            .load_module(module_path)
+            .context("Failed to load WASM module")?;
+
+        let network_host_fns = Arc::new(NetworkHostFunctions::all());
+
+        let instance_config = InstanceConfig {
+            network_policy: network_policy.clone(),
+            sandbox_policy: sandbox_policy.clone(),
+            exec_policy: ExecPolicy::default(),
+            time_policy: TimePolicy::default(),
+            audit_logger: None,
+            memory_export: "memory".to_string(),
+            challenge_id: module_path.to_string(),
+            validator_id: "validator".to_string(),
+            restart_id: String::new(),
+            config_version: 0,
+            storage_host_config: StorageHostConfig::default(),
+            storage_backend: Arc::new(InMemoryStorageBackend::new()),
+            fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
+            llm_policy: match &self.config.chutes_api_key {
+                Some(key) => LlmPolicy::with_api_key(key.clone()),
+                None => LlmPolicy::default(),
+            },
+            ..Default::default()
+        };
+
+        let mut instance = self
+            .runtime
+            .instantiate(&module, instance_config, Some(network_host_fns))
+            .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
+
+        let initial_fuel = instance.fuel_remaining();
+
+        let result = instance
+            .call_return_i64("get_routes")
+            .map_err(|e| anyhow::anyhow!("WASM get_routes call failed: {}", e))?;
+
+        let out_len = (result >> 32) as i32;
+        let out_ptr = (result & 0xFFFF_FFFF) as i32;
+
+        if out_len > 0 && out_len as u64 > MAX_ROUTE_OUTPUT_SIZE {
+            return Err(anyhow::anyhow!(
+                "WASM get_routes output size {} exceeds maximum allowed {}",
+                out_len,
+                MAX_ROUTE_OUTPUT_SIZE
+            ));
+        }
+
+        let result_data = if out_ptr > 0 && out_len > 0 {
+            instance
+                .read_memory(out_ptr as usize, out_len as usize)
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to read WASM memory for get_routes output: {}", e)
+                })?
+        } else {
+            Vec::new()
+        };
+
+        let fuel_consumed = match (initial_fuel, instance.fuel_remaining()) {
+            (Some(initial), Some(remaining)) => Some(initial.saturating_sub(remaining)),
+            _ => None,
+        };
+
+        let metrics = ExecutionMetrics {
+            execution_time_ms: start.elapsed().as_millis(),
+            memory_used_bytes: instance.memory().data_size(instance.store()) as u64,
+            network_requests_made: instance.network_requests_made(),
+            fuel_consumed,
+        };
+
+        info!(
+            module = module_path,
+            result_bytes = result_data.len(),
+            execution_time_ms = metrics.execution_time_ms,
+            "WASM get_routes completed"
+        );
+
+        Ok((result_data, metrics))
+    }
+
+    #[allow(dead_code)]
+    pub fn execute_handle_route(
+        &self,
+        module_path: &str,
+        network_policy: &NetworkPolicy,
+        sandbox_policy: &SandboxPolicy,
+        request_data: &[u8],
+    ) -> Result<(Vec<u8>, ExecutionMetrics)> {
+        let start = Instant::now();
+
+        let module = self
+            .load_module(module_path)
+            .context("Failed to load WASM module")?;
+
+        let network_host_fns = Arc::new(NetworkHostFunctions::all());
+
+        let instance_config = InstanceConfig {
+            network_policy: network_policy.clone(),
+            sandbox_policy: sandbox_policy.clone(),
+            exec_policy: ExecPolicy::default(),
+            time_policy: TimePolicy::default(),
+            audit_logger: None,
+            memory_export: "memory".to_string(),
+            challenge_id: module_path.to_string(),
+            validator_id: "validator".to_string(),
+            restart_id: String::new(),
+            config_version: 0,
+            storage_host_config: StorageHostConfig {
+                allow_direct_writes: true,
+                require_consensus: false,
+                ..self.config.storage_host_config.clone()
+            },
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            fixed_timestamp_ms: None,
+            consensus_policy: ConsensusPolicy::default(),
+            terminal_policy: TerminalPolicy::default(),
+            llm_policy: match &self.config.chutes_api_key {
+                Some(key) => LlmPolicy::with_api_key(key.clone()),
+                None => LlmPolicy::default(),
+            },
+            ..Default::default()
+        };
+
+        let mut instance = self
+            .runtime
+            .instantiate(&module, instance_config, Some(network_host_fns))
+            .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
+
+        let initial_fuel = instance.fuel_remaining();
+
+        let ptr = self.allocate_input(&mut instance, request_data)?;
+
+        instance
+            .write_memory(ptr as usize, request_data)
+            .map_err(|e| anyhow::anyhow!("Failed to write request data to WASM memory: {}", e))?;
+
+        let result = instance
+            .call_i32_i32_return_i64("handle_route", ptr, request_data.len() as i32)
+            .map_err(|e| match &e {
+                WasmRuntimeError::FuelExhausted => {
+                    anyhow::anyhow!("WASM execution exceeded fuel limit")
+                }
+                WasmRuntimeError::Execution(msg) if msg.contains("timeout") => {
+                    anyhow::anyhow!("WASM execution timed out")
+                }
+                _ => anyhow::anyhow!("WASM handle_route call failed: {}", e),
+            })?;
+
+        let out_len = (result >> 32) as i32;
+        let out_ptr = (result & 0xFFFF_FFFF) as i32;
+
+        if out_len > 0 && out_len as u64 > MAX_ROUTE_OUTPUT_SIZE {
+            return Err(anyhow::anyhow!(
+                "WASM handle_route output size {} exceeds maximum allowed {}",
+                out_len,
+                MAX_ROUTE_OUTPUT_SIZE
+            ));
+        }
+
+        let result_data = if out_ptr > 0 && out_len > 0 {
+            instance
+                .read_memory(out_ptr as usize, out_len as usize)
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to read WASM memory for handle_route output: {}", e)
+                })?
+        } else {
+            Vec::new()
+        };
+
+        let fuel_consumed = match (initial_fuel, instance.fuel_remaining()) {
+            (Some(initial), Some(remaining)) => Some(initial.saturating_sub(remaining)),
+            _ => None,
+        };
+
+        let metrics = ExecutionMetrics {
+            execution_time_ms: start.elapsed().as_millis(),
+            memory_used_bytes: instance.memory().data_size(instance.store()) as u64,
+            network_requests_made: instance.network_requests_made(),
+            fuel_consumed,
+        };
+
+        info!(
+            module = module_path,
+            result_bytes = result_data.len(),
+            execution_time_ms = metrics.execution_time_ms,
+            "WASM handle_route completed"
+        );
+
+        Ok((result_data, metrics))
     }
 
     fn load_module(&self, module_path: &str) -> Result<Arc<WasmModule>> {
