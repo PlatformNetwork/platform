@@ -54,4 +54,12 @@ impl StorageBackend for ChallengeStorageBackend {
             .block_on(self.storage.delete(&storage_key))
             .map_err(|e| StorageHostError::StorageError(e.to_string()))
     }
+
+    fn get_cross(
+        &self,
+        challenge_id: &str,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StorageHostError> {
+        self.get(challenge_id, key)
+    }
 }

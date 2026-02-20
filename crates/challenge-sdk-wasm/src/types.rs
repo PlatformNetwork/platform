@@ -189,3 +189,13 @@ pub struct WasmRouteResponse {
     /// Raw response body bytes.
     pub body: Vec<u8>,
 }
+
+/// A single weight entry mapping a UID to a weight value.
+///
+/// Returned by [`Challenge::get_weights`] as a serialized `Vec<WeightEntry>`.
+/// Both fields use `u16` to match the on-chain weight vector format.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WeightEntry {
+    pub uid: u16,
+    pub weight: u16,
+}

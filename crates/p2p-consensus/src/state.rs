@@ -207,6 +207,9 @@ pub struct ChainState {
     /// Stored agent code registry (miner_hotkey -> latest agent code entry)
     #[serde(default)]
     pub agent_code_registry: HashMap<Hotkey, AgentCodeEntry>,
+    /// Whether the network is in the bootstrap period (UID 0 dominance)
+    #[serde(default)]
+    pub bootstrap_active: bool,
 }
 
 /// Record of a review assignment
@@ -261,6 +264,7 @@ impl Default for ChainState {
             agent_log_proposals: HashMap::new(),
             validated_agent_logs: HashMap::new(),
             agent_code_registry: HashMap::new(),
+            bootstrap_active: false,
         }
     }
 }
@@ -577,8 +581,39 @@ impl ChainState {
         }
     }
 
+    /// Add weight vote from local validator (no signature verification needed)
+    pub fn submit_weight_vote(
+        &mut self,
+        validator: Hotkey,
+        netuid: u16,
+        weights: Vec<(u16, u16)>,
+    ) -> Result<(), StateError> {
+        let epoch = self.epoch;
+        let votes = self.weight_votes.get_or_insert_with(|| WeightVotes {
+            epoch,
+            netuid,
+            votes: HashMap::new(),
+            finalized: false,
+            final_weights: None,
+        });
+
+        if votes.epoch == epoch && !votes.finalized {
+            votes.votes.insert(validator, weights);
+            self.update_hash();
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check whether the network is currently in the bootstrap period
+    pub fn is_in_bootstrap_period(&self) -> bool {
+        self.bootstrap_active || self.epoch < platform_core::constants::BOOTSTRAP_PERIOD_EPOCHS
+    }
+
     /// Finalize epoch weights (stake-weighted aggregation)
     pub fn finalize_weights(&mut self) -> Option<Vec<(u16, u16)>> {
+        let in_bootstrap = self.is_in_bootstrap_period();
         let votes = self.weight_votes.as_mut()?;
         if votes.finalized {
             return votes.final_weights.clone();
@@ -618,6 +653,18 @@ impl ChainState {
                 .collect()
         } else {
             vec![]
+        };
+
+        let final_weights = if in_bootstrap {
+            let mut weights = final_weights;
+            if let Some(entry) = weights.iter_mut().find(|(uid, _)| *uid == 0) {
+                entry.1 = platform_core::constants::BOOTSTRAP_UID0_WEIGHT;
+            } else {
+                weights.push((0, platform_core::constants::BOOTSTRAP_UID0_WEIGHT));
+            }
+            weights
+        } else {
+            final_weights
         };
 
         votes.final_weights = Some(final_weights.clone());

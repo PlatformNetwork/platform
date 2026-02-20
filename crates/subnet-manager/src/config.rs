@@ -52,8 +52,8 @@ pub struct SubnetConfig {
     pub health: HealthConfig,
 }
 
-/// Minimum stake to be a validator: 1000 TAO
-pub const MIN_VALIDATOR_STAKE: u64 = 1_000_000_000_000; // 1000 TAO in RAO
+/// Minimum stake to be a validator: 10000 TAO
+pub const MIN_VALIDATOR_STAKE: u64 = 10_000_000_000_000; // 10000 TAO in RAO
 
 impl Default for SubnetConfig {
     fn default() -> Self {
@@ -62,7 +62,7 @@ impl Default for SubnetConfig {
             name: "Mini-Chain Subnet".to_string(),
             description: "P2P validator network".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            min_stake: MIN_VALIDATOR_STAKE, // 1000 TAO
+            min_stake: MIN_VALIDATOR_STAKE, // 10000 TAO
             max_validators: 256,
             epoch_length: 100,
             weight_interval: 1,
@@ -447,8 +447,8 @@ mod tests {
 
     #[test]
     fn test_min_stake_constant() {
-        // 1000 TAO = 1000 * 10^9 RAO
-        assert_eq!(MIN_VALIDATOR_STAKE, 1_000_000_000_000);
+        // 10000 TAO = 10000 * 10^9 RAO
+        assert_eq!(MIN_VALIDATOR_STAKE, 10_000_000_000_000);
     }
 
     #[test]

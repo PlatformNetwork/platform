@@ -39,6 +39,8 @@ pub struct P2PConfig {
     pub connection_timeout_secs: u64,
     /// Maximum number of peers to maintain
     pub max_peers: usize,
+    /// Whether this node is a bootnode
+    pub is_bootnode: bool,
 }
 
 impl Default for P2PConfig {
@@ -49,11 +51,12 @@ impl Default for P2PConfig {
             consensus_topic: "platform/consensus/1.0.0".to_string(),
             challenge_topic: "platform/challenge/1.0.0".to_string(),
             netuid: 100,
-            min_stake: 1_000_000_000_000, // 1000 TAO
+            min_stake: 10_000_000_000_000, // 10000 TAO
             heartbeat_interval_secs: 30,
             max_message_size: 16 * 1024 * 1024, // 16 MB
             connection_timeout_secs: 30,
             max_peers: 64,
+            is_bootnode: false,
         }
     }
 }
@@ -83,6 +86,12 @@ impl P2PConfig {
         self
     }
 
+    /// Set whether this node is a bootnode
+    pub fn with_bootnode(mut self, is_bootnode: bool) -> Self {
+        self.is_bootnode = is_bootnode;
+        self
+    }
+
     /// Create a development config with relaxed settings
     pub fn development() -> Self {
         Self {
@@ -96,6 +105,7 @@ impl P2PConfig {
             max_message_size: 16 * 1024 * 1024,
             connection_timeout_secs: 10,
             max_peers: 32,
+            is_bootnode: false,
         }
     }
 
@@ -113,11 +123,12 @@ impl P2PConfig {
             consensus_topic: "platform/consensus/1.0.0".to_string(),
             challenge_topic: "platform/challenge/1.0.0".to_string(),
             netuid: 100,
-            min_stake: 1_000_000_000_000, // 1000 TAO
+            min_stake: 10_000_000_000_000, // 10000 TAO
             heartbeat_interval_secs: 30,
             max_message_size: 16 * 1024 * 1024,
             connection_timeout_secs: 30,
             max_peers: 64,
+            is_bootnode: false,
         }
     }
 }
@@ -130,7 +141,7 @@ mod tests {
     fn test_default_config() {
         let config = P2PConfig::default();
         assert_eq!(config.netuid, 100);
-        assert_eq!(config.min_stake, 1_000_000_000_000);
+        assert_eq!(config.min_stake, 10_000_000_000_000);
         assert!(!config.listen_addrs.is_empty());
     }
 
@@ -157,7 +168,7 @@ mod tests {
     #[test]
     fn test_production_config() {
         let config = P2PConfig::production();
-        assert_eq!(config.min_stake, 1_000_000_000_000);
+        assert_eq!(config.min_stake, 10_000_000_000_000);
         assert_eq!(config.listen_addrs.len(), 2);
     }
 }

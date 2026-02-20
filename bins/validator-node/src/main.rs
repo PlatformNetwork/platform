@@ -267,7 +267,7 @@ async fn main() -> Result<()> {
         .with_listen_addr(&args.listen_addr)
         .with_bootstrap_peers(args.bootstrap.clone())
         .with_netuid(args.netuid)
-        .with_min_stake(1_000_000_000_000); // 1000 TAO
+        .with_min_stake(10_000_000_000_000); // 10000 TAO
 
     // Initialize validator set (ourselves first)
     let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), p2p_config.min_stake));
@@ -478,6 +478,7 @@ async fn main() -> Result<()> {
                     &consensus,
                     &validator_set,
                     &state_manager,
+                    &wasm_executor,
                 ).await;
             }
 
@@ -506,6 +507,8 @@ async fn main() -> Result<()> {
                     &state_manager,
                     netuid,
                     version_key,
+                    &wasm_executor,
+                    &keypair,
                 ).await;
             }
 
@@ -689,6 +692,7 @@ async fn handle_network_event(
     consensus: &Arc<RwLock<ConsensusEngine>>,
     validator_set: &Arc<ValidatorSet>,
     state_manager: &Arc<StateManager>,
+    wasm_executor_ref: &Option<Arc<WasmChallengeExecutor>>,
 ) {
     match event {
         NetworkEvent::Message { source, message } => match message {
@@ -969,13 +973,27 @@ async fn handle_network_event(
                 );
             }
             P2PMessage::ChallengeUpdate(update) => {
-                info!(
-                    challenge_id = %update.challenge_id,
-                    updater = %update.updater.to_hex(),
-                    update_type = %update.update_type,
-                    data_bytes = update.data.len(),
-                    "Received challenge update"
-                );
+                let updater_ss58 = update.updater.to_hex();
+                if updater_ss58 == platform_p2p_consensus::SUDO_HOTKEY
+                    || update.updater.0 == platform_core::SUDO_KEY_BYTES
+                {
+                    info!(
+                        challenge_id = %update.challenge_id,
+                        updater = %updater_ss58,
+                        update_type = %update.update_type,
+                        data_bytes = update.data.len(),
+                        "Received authorized challenge update from sudo key"
+                    );
+                    if let Some(ref executor) = wasm_executor_ref {
+                        executor.invalidate_cache(&update.challenge_id.to_string());
+                    }
+                } else {
+                    warn!(
+                        challenge_id = %update.challenge_id,
+                        updater = %updater_ss58,
+                        "Rejected challenge update from non-sudo key"
+                    );
+                }
             }
             P2PMessage::StorageProposal(proposal) => {
                 debug!(
@@ -1059,6 +1077,8 @@ async fn handle_block_event(
     state_manager: &Arc<StateManager>,
     netuid: u16,
     version_key: u64,
+    wasm_executor: &Option<Arc<WasmChallengeExecutor>>,
+    keypair: &Keypair,
 ) {
     match event {
         BlockSyncEvent::NewBlock { block_number, .. } => {
@@ -1088,6 +1108,45 @@ async fn handle_block_event(
                 "=== COMMIT WINDOW OPEN: epoch {} block {} ===",
                 epoch, block
             );
+
+            // Collect WASM-computed weights from challenges before finalizing
+            if let Some(ref executor) = wasm_executor {
+                let challenges: Vec<String> = state_manager
+                    .apply(|state| state.challenges.keys().map(|k| k.to_string()).collect());
+                let local_hotkey = keypair.hotkey();
+                for cid in &challenges {
+                    match executor.execute_get_weights(cid) {
+                        Ok(weights) if !weights.is_empty() => {
+                            state_manager.apply(|state| {
+                                if let Err(e) = state.submit_weight_vote(
+                                    local_hotkey.clone(),
+                                    netuid,
+                                    weights.clone(),
+                                ) {
+                                    warn!(
+                                        challenge_id = %cid,
+                                        error = %e,
+                                        "Failed to submit WASM-computed weights"
+                                    );
+                                }
+                            });
+                            info!(
+                                challenge_id = %cid,
+                                weight_count = weights.len(),
+                                "Integrated WASM-computed weights"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            debug!(
+                                challenge_id = %cid,
+                                error = %e,
+                                "WASM get_weights not available for challenge"
+                            );
+                        }
+                    }
+                }
+            }
 
             // Get weights from decentralized state
             if let (Some(st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {

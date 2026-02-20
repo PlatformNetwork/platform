@@ -551,6 +551,22 @@ impl ChallengeInstance {
             .map_err(|err: WasmtimeError| WasmRuntimeError::Execution(err.to_string()))
     }
 
+    pub fn call_i32_i32_i32_i32_return_i32(
+        &mut self,
+        name: &str,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ) -> Result<i32, WasmRuntimeError> {
+        let func = self
+            .instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut self.store, name)
+            .map_err(|_| WasmRuntimeError::MissingExport(name.to_string()))?;
+        func.call(&mut self.store, (arg0, arg1, arg2, arg3))
+            .map_err(|err: WasmtimeError| WasmRuntimeError::Execution(err.to_string()))
+    }
+
     pub fn call_i32_return_i32(&mut self, name: &str, arg0: i32) -> Result<i32, WasmRuntimeError> {
         let func = self
             .instance

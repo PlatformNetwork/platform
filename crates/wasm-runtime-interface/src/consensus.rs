@@ -26,6 +26,7 @@ pub const HOST_CONSENSUS_GET_VOTES: &str = "consensus_get_votes";
 pub const HOST_CONSENSUS_GET_STATE_HASH: &str = "consensus_get_state_hash";
 pub const HOST_CONSENSUS_GET_SUBMISSION_COUNT: &str = "consensus_get_submission_count";
 pub const HOST_CONSENSUS_GET_BLOCK_HEIGHT: &str = "consensus_get_block_height";
+pub const HOST_CONSENSUS_GET_SUBNET_CHALLENGES: &str = "consensus_get_subnet_challenges";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -107,6 +108,7 @@ pub struct ConsensusState {
     pub proposed_weights: Vec<(u16, u16)>,
     pub challenge_id: String,
     pub validator_id: String,
+    pub subnet_challenges: Vec<u8>,
 }
 
 impl ConsensusState {
@@ -123,6 +125,7 @@ impl ConsensusState {
             proposed_weights: Vec::new(),
             challenge_id,
             validator_id,
+            subnet_challenges: Vec::new(),
         }
     }
 
@@ -210,6 +213,16 @@ impl HostFunctionRegistrar for ConsensusHostFunctions {
                 HOST_CONSENSUS_NAMESPACE,
                 HOST_CONSENSUS_GET_BLOCK_HEIGHT,
                 |caller: Caller<RuntimeState>| -> i64 { handle_get_block_height(&caller) },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
+        linker
+            .func_wrap(
+                HOST_CONSENSUS_NAMESPACE,
+                HOST_CONSENSUS_GET_SUBNET_CHALLENGES,
+                |mut caller: Caller<RuntimeState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                    handle_get_subnet_challenges(&mut caller, buf_ptr, buf_len)
+                },
             )
             .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
 
@@ -329,6 +342,35 @@ fn handle_get_block_height(caller: &Caller<RuntimeState>) -> i64 {
         return -1;
     }
     state.block_height as i64
+}
+
+fn handle_get_subnet_challenges(
+    caller: &mut Caller<RuntimeState>,
+    buf_ptr: i32,
+    buf_len: i32,
+) -> i32 {
+    let data = {
+        let state = &caller.data().consensus_state;
+        if !state.policy.enabled {
+            return ConsensusHostStatus::Disabled.to_i32();
+        }
+        state.subnet_challenges.clone()
+    };
+
+    if data.is_empty() {
+        return 0;
+    }
+
+    if buf_len < 0 || (data.len() as i32) > buf_len {
+        return ConsensusHostStatus::BufferTooSmall.to_i32();
+    }
+
+    if let Err(err) = write_wasm_memory(caller, buf_ptr, &data) {
+        warn!(error = %err, "consensus_get_subnet_challenges: failed to write to wasm memory");
+        return ConsensusHostStatus::InternalError.to_i32();
+    }
+
+    data.len() as i32
 }
 
 fn write_wasm_memory(

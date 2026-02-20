@@ -13,7 +13,7 @@ pub use types::{
 };
 pub use types::{ContainerRunRequest, ContainerRunResponse};
 pub use types::{EvaluationInput, EvaluationOutput};
-pub use types::{WasmRouteDefinition, WasmRouteRequest, WasmRouteResponse};
+pub use types::{WasmRouteDefinition, WasmRouteRequest, WasmRouteResponse, WeightEntry};
 
 pub trait Challenge {
     fn name(&self) -> &'static str;
@@ -48,6 +48,19 @@ pub trait Challenge {
     /// vector.
     fn handle_route(&self, _request: &[u8]) -> alloc::vec::Vec<u8> {
         alloc::vec::Vec::new()
+    }
+
+    /// Return serialized epoch weight entries (`Vec<WeightEntry>`) that the
+    /// validator should set on-chain. The default implementation returns an
+    /// empty vector (no weights).
+    fn get_weights(&self) -> alloc::vec::Vec<u8> {
+        alloc::vec::Vec::new()
+    }
+
+    /// Validate whether a storage write with the given `key` and `value` is
+    /// permitted. The default implementation allows all writes.
+    fn validate_storage_write(&self, _key: &[u8], _value: &[u8]) -> bool {
+        true
     }
 }
 
@@ -263,6 +276,40 @@ macro_rules! register_challenge {
                 core::ptr::copy_nonoverlapping(output.as_ptr(), ptr, output.len());
             }
             $crate::pack_ptr_len(ptr as i32, output.len() as i32)
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_weights() -> i64 {
+            let output = <$ty as $crate::Challenge>::get_weights(&_CHALLENGE);
+            if output.is_empty() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            let ptr = $crate::alloc_impl::sdk_alloc(output.len());
+            if ptr.is_null() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(output.as_ptr(), ptr, output.len());
+            }
+            $crate::pack_ptr_len(ptr as i32, output.len() as i32)
+        }
+
+        #[no_mangle]
+        pub extern "C" fn validate_storage_write(
+            key_ptr: i32,
+            key_len: i32,
+            val_ptr: i32,
+            val_len: i32,
+        ) -> i32 {
+            let key =
+                unsafe { core::slice::from_raw_parts(key_ptr as *const u8, key_len as usize) };
+            let value =
+                unsafe { core::slice::from_raw_parts(val_ptr as *const u8, val_len as usize) };
+            if <$ty as $crate::Challenge>::validate_storage_write(&_CHALLENGE, key, value) {
+                1
+            } else {
+                0
+            }
         }
     };
 }

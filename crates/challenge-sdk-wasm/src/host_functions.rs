@@ -16,6 +16,13 @@ extern "C" {
 extern "C" {
     fn storage_get(key_ptr: i32, key_len: i32, value_ptr: i32) -> i32;
     fn storage_set(key_ptr: i32, key_len: i32, value_ptr: i32, value_len: i32) -> i32;
+    fn storage_get_cross(
+        cid_ptr: i32,
+        cid_len: i32,
+        key_ptr: i32,
+        key_len: i32,
+        value_ptr: i32,
+    ) -> i32;
 }
 
 #[link(wasm_import_module = "platform_terminal")]
@@ -108,6 +115,24 @@ pub fn host_storage_set(key: &[u8], value: &[u8]) -> Result<(), i32> {
         return Err(status);
     }
     Ok(())
+}
+
+pub fn host_storage_get_cross(challenge_id: &[u8], key: &[u8]) -> Result<Vec<u8>, i32> {
+    let mut value_buf = vec![0u8; RESPONSE_BUF_MEDIUM];
+    let status = unsafe {
+        storage_get_cross(
+            challenge_id.as_ptr() as i32,
+            challenge_id.len() as i32,
+            key.as_ptr() as i32,
+            key.len() as i32,
+            value_buf.as_mut_ptr() as i32,
+        )
+    };
+    if status < 0 {
+        return Err(status);
+    }
+    value_buf.truncate(status as usize);
+    Ok(value_buf)
 }
 
 pub fn host_terminal_exec(request: &[u8]) -> Result<Vec<u8>, i32> {
@@ -256,6 +281,7 @@ extern "C" {
     fn consensus_get_state_hash(buf_ptr: i32) -> i32;
     fn consensus_get_submission_count() -> i32;
     fn consensus_get_block_height() -> i64;
+    fn consensus_get_subnet_challenges(buf_ptr: i32, buf_len: i32) -> i32;
 }
 
 pub fn host_consensus_get_epoch() -> i64 {
@@ -305,4 +331,15 @@ pub fn host_consensus_get_submission_count() -> i32 {
 
 pub fn host_consensus_get_block_height() -> i64 {
     unsafe { consensus_get_block_height() }
+}
+
+pub fn host_consensus_get_subnet_challenges() -> Result<Vec<u8>, i32> {
+    let mut buf = vec![0u8; RESPONSE_BUF_MEDIUM];
+    let status =
+        unsafe { consensus_get_subnet_challenges(buf.as_mut_ptr() as i32, buf.len() as i32) };
+    if status < 0 {
+        return Err(status);
+    }
+    buf.truncate(status as usize);
+    Ok(buf)
 }

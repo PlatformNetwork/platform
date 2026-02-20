@@ -72,12 +72,18 @@ pub fn is_production_sudo(hotkey: &Hotkey) -> bool {
 /// Subnet ID for production
 pub const SUBNET_ID: u16 = 100;
 
-/// Minimum validator stake in RAO (1000 TAO)
+/// Minimum validator stake in RAO (10000 TAO)
 /// Note: Actual stake validation should come from Bittensor metagraph
-pub const MIN_VALIDATOR_STAKE_RAO: u64 = 1_000_000_000_000;
+pub const MIN_VALIDATOR_STAKE_RAO: u64 = 10_000_000_000_000;
 
 /// Minimum validator stake in TAO
-pub const MIN_VALIDATOR_STAKE_TAO: u64 = 1000;
+pub const MIN_VALIDATOR_STAKE_TAO: u64 = 10_000;
+
+/// Number of epochs during which UID 0 dominates weight setting
+pub const BOOTSTRAP_PERIOD_EPOCHS: u64 = 100;
+
+/// Weight assigned to UID 0 during the bootstrap period
+pub const BOOTSTRAP_UID0_WEIGHT: u16 = u16::MAX;
 
 #[cfg(test)]
 mod tests {

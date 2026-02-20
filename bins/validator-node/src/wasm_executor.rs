@@ -793,6 +793,116 @@ impl WasmChallengeExecutor {
         Ok((result_data, metrics))
     }
 
+    pub fn execute_get_weights(&self, module_path: &str) -> Result<Vec<(u16, u16)>> {
+        let start = Instant::now();
+
+        let module = self
+            .load_module(module_path)
+            .context("Failed to load WASM module")?;
+
+        let network_host_fns = Arc::new(NetworkHostFunctions::all());
+
+        let instance_config = InstanceConfig {
+            challenge_id: module_path.to_string(),
+            validator_id: "validator".to_string(),
+            storage_host_config: StorageHostConfig {
+                allow_direct_writes: true,
+                require_consensus: false,
+                ..self.config.storage_host_config.clone()
+            },
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            consensus_policy: ConsensusPolicy::read_only(),
+            ..Default::default()
+        };
+
+        let mut instance = self
+            .runtime
+            .instantiate(&module, instance_config, Some(network_host_fns))
+            .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
+
+        let result = instance
+            .call_return_i64("get_weights")
+            .map_err(|e| anyhow::anyhow!("WASM get_weights call failed: {}", e))?;
+
+        let out_len = (result >> 32) as i32;
+        let out_ptr = (result & 0xFFFF_FFFF) as i32;
+
+        let result_data = if out_ptr > 0 && out_len > 0 {
+            instance
+                .read_memory(out_ptr as usize, out_len as usize)
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to read WASM memory for get_weights output: {}", e)
+                })?
+        } else {
+            return Ok(Vec::new());
+        };
+
+        let weights: Vec<(u16, u16)> = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_ROUTE_OUTPUT_SIZE)
+            .deserialize(&result_data)
+            .context("Failed to deserialize get_weights output")?;
+
+        info!(
+            module = module_path,
+            weight_count = weights.len(),
+            execution_time_ms = start.elapsed().as_millis() as u64,
+            "WASM get_weights completed"
+        );
+
+        Ok(weights)
+    }
+
+    #[allow(dead_code)]
+    pub fn execute_validate_storage_write(
+        &self,
+        module_path: &str,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<bool> {
+        let module = self
+            .load_module(module_path)
+            .context("Failed to load WASM module")?;
+
+        let network_host_fns = Arc::new(NetworkHostFunctions::all());
+
+        let instance_config = InstanceConfig {
+            challenge_id: module_path.to_string(),
+            validator_id: "validator".to_string(),
+            storage_host_config: StorageHostConfig::default(),
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            ..Default::default()
+        };
+
+        let mut instance = self
+            .runtime
+            .instantiate(&module, instance_config, Some(network_host_fns))
+            .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
+
+        let key_ptr = self.allocate_input(&mut instance, key)?;
+        instance
+            .write_memory(key_ptr as usize, key)
+            .map_err(|e| anyhow::anyhow!("Failed to write key to WASM memory: {}", e))?;
+
+        let val_ptr = self.allocate_input(&mut instance, value)?;
+        instance
+            .write_memory(val_ptr as usize, value)
+            .map_err(|e| anyhow::anyhow!("Failed to write value to WASM memory: {}", e))?;
+
+        let result = instance
+            .call_i32_i32_i32_i32_return_i32(
+                "validate_storage_write",
+                key_ptr,
+                key.len() as i32,
+                val_ptr,
+                value.len() as i32,
+            )
+            .map_err(|e| anyhow::anyhow!("WASM validate_storage_write call failed: {}", e))?;
+
+        Ok(result == 1)
+    }
+
     fn load_module(&self, module_path: &str) -> Result<Arc<WasmModule>> {
         {
             let cache = self.module_cache.read();

@@ -228,6 +228,11 @@ impl ValidatorSet {
             .sum()
     }
 
+    /// Check if a given stake meets the minimum requirement
+    pub fn is_stake_sufficient(&self, stake: u64) -> bool {
+        stake >= self.min_stake
+    }
+
     /// Get stake for a validator (0 if unknown or inactive)
     pub fn stake_for(&self, hotkey: &Hotkey) -> u64 {
         self.validators

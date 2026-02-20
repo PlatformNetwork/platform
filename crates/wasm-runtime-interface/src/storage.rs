@@ -36,6 +36,7 @@ pub const HOST_STORAGE_GET: &str = "storage_get";
 pub const HOST_STORAGE_SET: &str = "storage_set";
 pub const HOST_STORAGE_PROPOSE_WRITE: &str = "storage_propose_write";
 pub const HOST_STORAGE_DELETE: &str = "storage_delete";
+pub const HOST_STORAGE_GET_CROSS: &str = "storage_get_cross";
 pub const HOST_STORAGE_GET_RESULT: &str = "storage_get_result";
 pub const HOST_STORAGE_ALLOC: &str = "storage_alloc";
 
@@ -287,6 +288,14 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<[u8; 32], StorageHostError>;
 
     fn delete(&self, challenge_id: &str, key: &[u8]) -> Result<bool, StorageHostError>;
+
+    fn get_cross(
+        &self,
+        challenge_id: &str,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StorageHostError> {
+        self.get(challenge_id, key)
+    }
 }
 
 pub struct NoopStorageBackend;
@@ -459,6 +468,29 @@ impl HostFunctionRegistrar for StorageHostFunctions {
                 HOST_STORAGE_DELETE,
                 |mut caller: Caller<RuntimeState>, key_ptr: i32, key_len: i32| -> i32 {
                     handle_storage_delete(&mut caller, key_ptr, key_len)
+                },
+            )
+            .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
+
+        linker
+            .func_wrap(
+                HOST_STORAGE_NAMESPACE,
+                HOST_STORAGE_GET_CROSS,
+                |mut caller: Caller<RuntimeState>,
+                 cid_ptr: i32,
+                 cid_len: i32,
+                 key_ptr: i32,
+                 key_len: i32,
+                 value_ptr: i32|
+                 -> i32 {
+                    handle_storage_get_cross(
+                        &mut caller,
+                        cid_ptr,
+                        cid_len,
+                        key_ptr,
+                        key_len,
+                        value_ptr,
+                    )
                 },
             )
             .map_err(|err| WasmRuntimeError::HostFunction(err.to_string()))?;
@@ -671,6 +703,66 @@ fn handle_storage_propose_write(
             pack_result(StorageHostStatus::from(err), 0)
         }
     }
+}
+
+fn handle_storage_get_cross(
+    caller: &mut Caller<RuntimeState>,
+    cid_ptr: i32,
+    cid_len: i32,
+    key_ptr: i32,
+    key_len: i32,
+    value_ptr: i32,
+) -> i32 {
+    let cid_bytes = match read_wasm_memory(caller, cid_ptr, cid_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_get_cross: failed to read challenge_id from wasm memory");
+            return StorageHostStatus::InternalError.to_i32();
+        }
+    };
+
+    let challenge_id = match core::str::from_utf8(&cid_bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            warn!("storage_get_cross: challenge_id is not valid UTF-8");
+            return StorageHostStatus::InvalidKey.to_i32();
+        }
+    };
+
+    let key = match read_wasm_memory(caller, key_ptr, key_len) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(error = %err, "storage_get_cross: failed to read key from wasm memory");
+            return StorageHostStatus::InternalError.to_i32();
+        }
+    };
+
+    let storage = &caller.data().storage_state;
+    if let Err(err) = storage.config.validate_key(&key) {
+        warn!(error = %err, "storage_get_cross: key validation failed");
+        return StorageHostStatus::from(err).to_i32();
+    }
+
+    let backend = Arc::clone(&storage.backend);
+
+    let value = match backend.get_cross(&challenge_id, &key) {
+        Ok(Some(v)) => v,
+        Ok(None) => return 0,
+        Err(err) => {
+            warn!(error = %err, "storage_get_cross: backend read failed");
+            return StorageHostStatus::from(err).to_i32();
+        }
+    };
+
+    caller.data_mut().storage_state.bytes_read += value.len() as u64;
+    caller.data_mut().storage_state.operations_count += 1;
+
+    if let Err(err) = write_wasm_memory(caller, value_ptr, &value) {
+        warn!(error = %err, "storage_get_cross: failed to write value to wasm memory");
+        return StorageHostStatus::InternalError.to_i32();
+    }
+
+    value.len() as i32
 }
 
 fn read_wasm_memory(
