@@ -63,19 +63,6 @@ flowchart LR
 | Runtime | WASM sandbox + resource caps | Deterministic isolation |
 | Operations | Key management + monitoring | Reduced operational risk |
 
-## Test Harness Security (Docker)
-
-Docker-backed evaluation is restricted to test environments and guarded by an explicit security policy. Production validators run the WASM runtime only.
-
-```mermaid
-flowchart LR
-    Tester[Test Harness] --> Broker[Secure Container Broker]
-    Broker --> Policy[Security Policy]
-    Policy --> Runtime[Container Runtime]
-    Runtime --> Logs[Audit Logs]
-    Policy --> Broker
-```
-
 ## Operational Controls
 
 - **Key management**: secrets via env vars or secret managers.

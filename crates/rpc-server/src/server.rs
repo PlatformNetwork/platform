@@ -170,7 +170,7 @@ impl RpcServer {
                     },
                 )
             })
-            // Webhook endpoint for progress callbacks from challenge containers
+            // Webhook endpoint for progress callbacks from challenge runtimes
             .route("/webhook/progress", {
                 let handler = rpc_handler.clone();
                 post(move |body: Json<Value>| {
@@ -406,8 +406,8 @@ async fn handle_single_request(
     (StatusCode::OK, Json(response))
 }
 
-/// Handler for webhook progress callbacks from challenge containers
-/// Broadcasts TaskProgressMessage via P2P to other validators
+/// Handler for webhook progress callbacks from challenge runtimes.
+/// Broadcasts TaskProgressMessage via P2P to other validators.
 async fn webhook_progress_handler(handler: Arc<RpcHandler>, body: Value) -> impl IntoResponse {
     use platform_core::{Keypair, NetworkMessage, SignedNetworkMessage, TaskProgressMessage};
 

@@ -2,8 +2,8 @@
 # =============================================================================
 # Platform Comprehensive Test Suite
 # =============================================================================
-# Runs unit, integration, docker, and multi-validator tests.
-# Docker is required only for test harness phases 3 and 8; install via scripts/install-docker.sh.
+# Runs unit, integration, WASM runtime, and multi-validator tests.
+# Docker is required only for phase 8 (multi-validator compose); install via scripts/install-docker.sh.
 # =============================================================================
 
 set -euo pipefail
@@ -76,25 +76,13 @@ else
 fi
 
 log_info "============================================================================="
-log_info "Phase 3: Docker Integration Tests"
+log_info "Phase 3: WASM Runtime Tests"
 log_info "============================================================================="
-if platform_should_run_docker; then
-    if platform_require_compose; then
-        platform_ensure_network
-        log_info "Running secure-container-runtime Docker tests..."
-        if cargo test -p secure-container-runtime --release -- --ignored 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/docker-secure-container.log"; then
-            log_success "Secure container runtime Docker tests passed"
-        else
-            log_failure "Secure container runtime Docker tests failed"
-        fi
-
-        log_info "Challenge orchestrator Docker tests not configured in workspace"
-        log_skip "Challenge orchestrator crate unavailable; skipping"
-    else
-        log_skip "Docker Compose not available"
-    fi
+log_info "Running WASM runtime interface tests..."
+if cargo test -p wasm-runtime-interface --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/wasm-runtime.log"; then
+    log_success "WASM runtime interface tests passed"
 else
-    log_skip "Docker not available, skipping Docker tests"
+    log_failure "WASM runtime interface tests failed"
 fi
 
 log_info "============================================================================="
@@ -108,29 +96,15 @@ else
 fi
 
 log_info "============================================================================="
-log_info "Phase 5: Security Policy Tests"
+log_info "Phase 5: WASM Sandbox Policy Tests"
 log_info "============================================================================="
-log_info "Verifying security policies..."
+log_info "Verifying WASM sandbox policies..."
 
-log_info "Testing Docker socket mount blocking..."
-if cargo test -p secure-container-runtime test_default_policy_blocks_docker_socket --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/policy-docker-socket.log"; then
-    log_success "Docker socket mount blocking verified"
+log_info "Running challenge registry policy tests..."
+if cargo test -p platform-challenge-registry --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/challenge-registry-policy.log"; then
+    log_success "Challenge registry policy tests passed"
 else
-    log_failure "Docker socket mount blocking test failed"
-fi
-
-log_info "Testing image whitelist enforcement..."
-if cargo test -p secure-container-runtime test_strict_policy_blocks_non_whitelisted_images --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/policy-image-whitelist.log"; then
-    log_success "Image whitelist enforcement verified"
-else
-    log_failure "Image whitelist enforcement test failed"
-fi
-
-log_info "Testing resource limit enforcement..."
-if cargo test -p secure-container-runtime test_policy_enforces_resource_limits --release 2>&1 | tee "${PLATFORM_TEST_LOG_DIR}/policy-resource-limits.log"; then
-    log_success "Resource limit enforcement verified"
-else
-    log_failure "Resource limit enforcement test failed"
+    log_failure "Challenge registry policy tests failed"
 fi
 
 log_info "============================================================================="

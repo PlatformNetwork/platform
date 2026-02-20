@@ -1,6 +1,6 @@
 # Architecture
 
-Platform is a **WASM-first, P2P validator network** for deterministic challenge evaluation on Bittensor. Validators exchange submissions, evaluations, and consensus votes directly over libp2p, then submit finalized weight matrices to the chain.
+Platform is a **WASM-only, P2P validator network** for deterministic challenge evaluation on Bittensor. Validators exchange submissions, evaluations, and consensus votes directly over libp2p, then submit finalized weight matrices to the chain.
 
 ## Core Components
 
@@ -74,8 +74,7 @@ flowchart LR
 
 ## Operational Boundaries
 
-- **WASM-first**: challenge execution runs in WASM in production.
-- **Docker test-only**: Docker-backed harnesses are reserved for local/CI testing.
+- **WASM-only**: challenge execution runs in WASM.
 - **Consensus-driven changes**: challenge lifecycle events require PBFT approvals.
 
 ## Storage Model

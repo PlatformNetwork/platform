@@ -1,6 +1,6 @@
 # Validator Operations
 
-This guide covers validator deployment, configuration, monitoring, and lifecycle operations. Validators run directly on host systems with **WASM-first execution**; Docker is used only for integration tests.
+This guide covers validator deployment, configuration, monitoring, and lifecycle operations. Validators run directly on host systems with **WASM-only execution**.
 
 ## Quick Start
 
@@ -133,9 +133,9 @@ rm -rf ./data/distributed-db
 rm -rf ./data/distributed-db
 ```
 
-## Testing (Docker Harness Only)
+## Testing
 
-Docker is required only for integration tests. Use the comprehensive test harness if you need Docker-backed evaluation flows:
+Run the comprehensive test suite (Docker is only needed for the optional multi-validator compose phase):
 
 ```bash
 ./scripts/test-comprehensive.sh

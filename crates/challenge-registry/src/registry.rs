@@ -69,7 +69,6 @@ impl WasmModuleMetadata {
 
 /// Entry for a registered challenge
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(deprecated)]
 pub struct ChallengeEntry {
     /// Unique challenge ID
     pub id: ChallengeId,
@@ -77,10 +76,6 @@ pub struct ChallengeEntry {
     pub name: String,
     /// Current version
     pub version: ChallengeVersion,
-    /// Docker image for the challenge
-    #[deprecated(note = "Use wasm_module instead")]
-    #[serde(default)]
-    pub docker_image: Option<String>,
     /// HTTP endpoint for evaluation
     pub endpoint: Option<String>,
     /// WASM module metadata
@@ -104,15 +99,13 @@ pub struct ChallengeEntry {
     pub metadata: serde_json::Value,
 }
 
-#[allow(deprecated)]
 impl ChallengeEntry {
-    pub fn new(name: String, version: ChallengeVersion, docker_image: Option<String>) -> Self {
+    pub fn new(name: String, version: ChallengeVersion) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         Self {
             id: ChallengeId::new(),
             name,
             version,
-            docker_image,
             endpoint: None,
             wasm_module: None,
             restart_id: None,
@@ -182,7 +175,6 @@ impl ChallengeRegistry {
     }
 
     /// Register a new challenge
-    #[allow(deprecated)]
     pub fn register(&self, entry: ChallengeEntry) -> RegistryResult<ChallengeId> {
         let mut challenges = self.challenges.write();
         let mut name_index = self.name_index.write();
@@ -192,16 +184,11 @@ impl ChallengeRegistry {
             return Err(RegistryError::AlreadyRegistered(entry.name.clone()));
         }
 
-        // Validate: at least one execution method must be configured
-        if entry.docker_image.is_none() && entry.wasm_module.is_none() {
+        // Validate: WASM module must be configured
+        if entry.wasm_module.is_none() {
             return Err(RegistryError::InvalidConfig(
-                "Challenge must have either a docker_image or wasm_module configured".to_string(),
+                "Challenge must have a wasm_module configured".to_string(),
             ));
-        }
-
-        // Prefer WASM execution when available
-        if entry.wasm_module.is_some() {
-            info!(name = %entry.name, "WASM module available; preferring WASM execution over Docker");
         }
 
         let id = entry.id;
@@ -244,8 +231,7 @@ impl ChallengeRegistry {
         let wasm_module =
             WasmModuleMetadata::new(module_hash, module_location, entrypoint, network_policy);
 
-        #[allow(deprecated)]
-        let entry = ChallengeEntry::new(name, version, None).with_wasm_module(wasm_module);
+        let entry = ChallengeEntry::new(name, version).with_wasm_module(wasm_module);
 
         self.register(entry)
     }
@@ -482,15 +468,22 @@ impl Default for ChallengeRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_wasm_module() -> WasmModuleMetadata {
+        WasmModuleMetadata::new(
+            "hash".to_string(),
+            "module.wasm".to_string(),
+            "evaluate".to_string(),
+            NetworkPolicy::default(),
+        )
+    }
+
     #[test]
-    #[allow(deprecated)]
     fn test_register_challenge() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "test-challenge".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry =
+            ChallengeEntry::new("test-challenge".to_string(), ChallengeVersion::new(1, 0, 0))
+                .with_wasm_module(test_wasm_module());
 
         let id = registry.register(entry).unwrap();
         assert!(registry.get(&id).is_some());
@@ -498,19 +491,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_duplicate_registration() {
         let registry = ChallengeRegistry::new();
-        let entry1 = ChallengeEntry::new(
-            "test-challenge".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
-        let entry2 = ChallengeEntry::new(
-            "test-challenge".to_string(),
-            ChallengeVersion::new(2, 0, 0),
-            Some("test:v2".to_string()),
-        );
+        let entry1 =
+            ChallengeEntry::new("test-challenge".to_string(), ChallengeVersion::new(1, 0, 0))
+                .with_wasm_module(test_wasm_module());
+        let entry2 =
+            ChallengeEntry::new("test-challenge".to_string(), ChallengeVersion::new(2, 0, 0))
+                .with_wasm_module(test_wasm_module());
 
         registry.register(entry1).unwrap();
         let result = registry.register(entry2);
@@ -518,14 +506,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_get_by_name() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "my-challenge".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry = ChallengeEntry::new("my-challenge".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         registry.register(entry).unwrap();
         let found = registry.get_by_name("my-challenge");
@@ -534,14 +518,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_unregister() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "test".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry = ChallengeEntry::new("test".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         let id = registry.register(entry).unwrap();
         assert_eq!(registry.count(), 1);
@@ -551,14 +531,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_update_state() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "test".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry = ChallengeEntry::new("test".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         let id = registry.register(entry).unwrap();
         registry.update_state(&id, LifecycleState::Running).unwrap();
@@ -568,14 +544,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_update_version() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "test".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry = ChallengeEntry::new("test".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         let id = registry.register(entry).unwrap();
         let old = registry
@@ -589,20 +561,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_update_restart_config() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "test".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        )
-        .with_wasm_module(WasmModuleMetadata::new(
-            "hash".to_string(),
-            "module.wasm".to_string(),
-            "evaluate".to_string(),
-            NetworkPolicy::default(),
-        ));
+        let entry = ChallengeEntry::new("test".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         let id = registry.register(entry).unwrap();
         let previous = registry
@@ -620,20 +582,13 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_list_active() {
         let registry = ChallengeRegistry::new();
 
-        let entry1 = ChallengeEntry::new(
-            "active".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
-        let entry2 = ChallengeEntry::new(
-            "inactive".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry1 = ChallengeEntry::new("active".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
+        let entry2 = ChallengeEntry::new("inactive".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         let id1 = registry.register(entry1).unwrap();
         registry.register(entry2).unwrap();
@@ -649,29 +604,21 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_entry_builders() {
-        let entry = ChallengeEntry::new(
-            "test".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        )
-        .with_endpoint("http://localhost:8080".to_string())
-        .with_metadata(serde_json::json!({"key": "value"}));
+        let entry = ChallengeEntry::new("test".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module())
+            .with_endpoint("http://localhost:8080".to_string())
+            .with_metadata(serde_json::json!({"key": "value"}));
 
         assert_eq!(entry.endpoint, Some("http://localhost:8080".to_string()));
         assert_eq!(entry.metadata["key"], "value");
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_state_store_access() {
         let registry = ChallengeRegistry::new();
-        let entry = ChallengeEntry::new(
-            "test".to_string(),
-            ChallengeVersion::new(1, 0, 0),
-            Some("test:latest".to_string()),
-        );
+        let entry = ChallengeEntry::new("test".to_string(), ChallengeVersion::new(1, 0, 0))
+            .with_wasm_module(test_wasm_module());
 
         let id = registry.register(entry).unwrap();
         let store = registry.state_store(&id);

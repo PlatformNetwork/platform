@@ -1,8 +1,8 @@
 //! Challenge discovery and auto-registration
 //!
 //! Discovers challenges from:
-//! - Docker registry
 //! - File system (local development)
+//! - WASM module directories
 //! - Network announcements (P2P)
 
 use crate::error::{RegistryError, RegistryResult};
@@ -18,8 +18,6 @@ pub struct DiscoveredChallenge {
     pub name: String,
     /// Challenge version
     pub version: ChallengeVersion,
-    /// Docker image (if available)
-    pub docker_image: Option<String>,
     /// Local path (for development)
     pub local_path: Option<PathBuf>,
     /// Health endpoint URL
@@ -54,8 +52,6 @@ pub struct ChallengeMetadata {
 /// Source where a challenge was discovered
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DiscoverySource {
-    /// Discovered from Docker registry
-    DockerRegistry(String),
     /// Discovered from local filesystem
     LocalFilesystem(PathBuf),
     /// Discovered from WASM module directory
@@ -69,8 +65,6 @@ pub enum DiscoverySource {
 /// Configuration for challenge discovery
 #[derive(Clone, Debug)]
 pub struct DiscoveryConfig {
-    /// Docker registries to scan
-    pub docker_registries: Vec<String>,
     /// Local paths to scan
     pub local_paths: Vec<PathBuf>,
     /// WASM module directories to scan
@@ -86,7 +80,6 @@ pub struct DiscoveryConfig {
 impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
-            docker_registries: vec![],
             local_paths: vec![],
             wasm_paths: vec![],
             enable_p2p: true,
@@ -150,13 +143,6 @@ impl ChallengeDiscovery {
             }
         }
 
-        // Deprecation warning for Docker registries
-        if !self.config.docker_registries.is_empty() {
-            tracing::warn!(
-                "Docker registry discovery is deprecated; prefer WASM module directories via wasm_paths"
-            );
-        }
-
         // Update internal state
         let mut discovered = self.discovered.write();
         *discovered = all_discovered.clone();
@@ -191,7 +177,6 @@ impl ChallengeDiscovery {
                 challenges.push(DiscoveredChallenge {
                     name,
                     version: ChallengeVersion::default(),
-                    docker_image: None,
                     local_path: Some(path.clone()),
                     health_endpoint: None,
                     evaluation_endpoint: None,
@@ -210,7 +195,6 @@ impl ChallengeDiscovery {
                 challenges.push(DiscoveredChallenge {
                     name,
                     version: ChallengeVersion::default(),
-                    docker_image: None,
                     local_path: Some(path.clone()),
                     health_endpoint: None,
                     evaluation_endpoint: None,
@@ -290,7 +274,6 @@ impl ChallengeDiscovery {
                     challenges.push(DiscoveredChallenge {
                         name,
                         version: ChallengeVersion::default(),
-                        docker_image: None,
                         local_path: Some(entry_path.clone()),
                         health_endpoint: None,
                         evaluation_endpoint: None,
@@ -349,7 +332,6 @@ mod tests {
         let challenge = DiscoveredChallenge {
             name: "test-challenge".to_string(),
             version: ChallengeVersion::new(1, 0, 0),
-            docker_image: Some("test:latest".to_string()),
             local_path: None,
             health_endpoint: Some("http://localhost:8080/health".to_string()),
             evaluation_endpoint: Some("http://localhost:8080/evaluate".to_string()),
@@ -363,7 +345,6 @@ mod tests {
         };
 
         assert_eq!(challenge.name, "test-challenge");
-        assert!(challenge.docker_image.is_some());
     }
 
     #[test]
@@ -375,7 +356,6 @@ mod tests {
         discovery.add_discovered(DiscoveredChallenge {
             name: "manual".to_string(),
             version: ChallengeVersion::new(1, 0, 0),
-            docker_image: None,
             local_path: None,
             health_endpoint: None,
             evaluation_endpoint: None,
@@ -393,7 +373,6 @@ mod tests {
     #[test]
     fn test_discovery_config() {
         let config = DiscoveryConfig {
-            docker_registries: vec!["registry.example.com".to_string()],
             local_paths: vec![PathBuf::from("/challenges")],
             wasm_paths: vec![],
             enable_p2p: false,

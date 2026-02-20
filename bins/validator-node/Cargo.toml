@@ -16,7 +16,6 @@ platform-bittensor = { path = "../../crates/bittensor-integration" }
 platform-p2p-consensus = { path = "../../crates/p2p-consensus" }
 platform-distributed-storage = { path = "../../crates/distributed-storage" }
 platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
-secure-container-runtime = { path = "../../crates/secure-container-runtime" }
 wasm-runtime-interface = { path = "../../crates/wasm-runtime-interface" }
 
 # Bittensor

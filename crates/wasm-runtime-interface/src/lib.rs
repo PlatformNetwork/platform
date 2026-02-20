@@ -88,7 +88,7 @@ pub enum HostFunction {
     DnsResolve,
 }
 
-/// Network policy aligned with secure-container-runtime patterns.
+/// Network policy for WASM host network access.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkPolicy {
     /// Whether outbound internet access is allowed.

@@ -1,6 +1,6 @@
 # Challenge Integration Guide
 
-This guide explains how to integrate challenge crates with the Platform validator network. Production execution is **WASM-first**; Docker is reserved for test harnesses only.
+This guide explains how to integrate challenge crates with the Platform validator network. Execution is **WASM-only**.
 
 ## Overview
 
@@ -18,11 +18,9 @@ Challenge outputs feed directly into validator consensus. Validators exchange sc
 ```mermaid
 flowchart TB
     Validator[Platform Validator] --> Registry[Challenge Registry]
-    Validator --> Orchestrator[Challenge Orchestrator]
     Validator --> StateMgr[State Manager]
     Validator --> Checkpoints[Checkpoint System]
     Registry --> Challenges[WASM Challenges]
-    Orchestrator --> Challenges
     StateMgr --> Challenges
 ```
 
@@ -55,10 +53,6 @@ Validators evaluate challenges locally and publish weight commitments over the P
 ## Weight Aggregation at Epoch Boundaries
 
 At each epoch boundary, validators aggregate revealed weights with stake weighting to produce the canonical weight matrix and deterministic state hash. Late or mismatched reveals are rejected to keep aggregation deterministic. The finalized aggregation is the only weight matrix submitted back to Bittensor for the epoch.
-
-## Testing With Docker (Test-Only)
-
-Docker is used only for validator test harnesses. Use `./scripts/test-comprehensive.sh` to run Docker-backed integration tests; it will call `scripts/install-docker.sh` if Docker or Compose are missing (unless `PLATFORM_TEST_DOCKER_MODE=skip`).
 
 ## Creating a Challenge Crate
 

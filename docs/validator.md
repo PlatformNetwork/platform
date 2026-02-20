@@ -1,12 +1,12 @@
 # Validator Guide
 
-This guide explains how to run a Platform validator node on the Bittensor network. Production validators execute challenges in the WASM runtime, while Docker is reserved for integration tests only.
+This guide explains how to run a Platform validator node on the Bittensor network. Validators execute challenges in the WASM runtime.
 
 ## Key Features
 
 - **No GPU required**: validators run on CPU servers.
 - **No third-party APIs**: no external model keys needed.
-- **WASM-first runtime**: deterministic challenge execution.
+- **WASM-only runtime**: deterministic challenge execution.
 - **P2P-only consensus**: libp2p mesh for all validator traffic.
 
 ## Validator Lifecycle
@@ -138,10 +138,6 @@ Expected response:
   "id": 1
 }
 ```
-
-## Docker Policy (Test-Only)
-
-Docker is required only for integration tests. Use `./scripts/test-comprehensive.sh` for Docker-backed evaluation flows.
 
 ## References
 

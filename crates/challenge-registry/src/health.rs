@@ -2,7 +2,7 @@
 //!
 //! Monitors challenge health through:
 //! - HTTP health endpoints
-//! - Container status
+//! - Runtime status
 //! - Resource usage
 
 use parking_lot::RwLock;

@@ -7,7 +7,7 @@
 //! ```text
 //! ┌─────────────────┐         ┌─────────────────┐
 //! │    Challenge    │◄───P2P──│    Validator    │
-//! │   Container     │         │      Node       │
+//! │    Runtime      │         │      Node       │
 //! └─────────────────┘         └─────────────────┘
 //!         │                           │
 //!    Evaluates                 Submits/receives

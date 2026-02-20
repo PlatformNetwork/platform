@@ -1,6 +1,6 @@
 # Platform Challenge Crates
 
-This directory contains challenge crates that integrate with the Platform validator network. Production execution is **WASM-first**; Docker is reserved for test harnesses only.
+This directory contains challenge crates that integrate with the Platform validator network. Production execution is **WASM-only**.
 
 ## Directory Structure
 

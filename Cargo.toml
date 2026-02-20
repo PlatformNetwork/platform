@@ -10,7 +10,6 @@ members = [
     "crates/bittensor-integration",
     "crates/subnet-manager",
     "crates/rpc-server",
-    "crates/secure-container-runtime",
     "crates/p2p-consensus",
     "crates/wasm-runtime-interface",
     "crates/challenge-sdk-wasm",

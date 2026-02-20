@@ -79,7 +79,7 @@ pub struct ComponentStatus {
     pub consensus: HealthStatus,
     /// Bittensor connection status
     pub bittensor: HealthStatus,
-    /// Challenge containers status
+    /// Challenge runtime status
     pub challenges: HealthStatus,
 }
 

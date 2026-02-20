@@ -169,7 +169,6 @@ flowchart TB
 - `crates/bittensor-integration` — Bittensor chain interaction
 - `crates/subnet-manager` — subnet management
 - `crates/rpc-server` — RPC server for validator API
-- `crates/secure-container-runtime` — sandboxed runtime (legacy Docker support)
 - `crates/p2p-consensus` — libp2p gossipsub + DHT consensus
 - `crates/wasm-runtime-interface` — WASM runtime host interface
 - `bins/validator-node` — main validator binary
@@ -177,9 +176,6 @@ flowchart TB
 - `bins/utils` — CLI utilities
 - `bins/mock-subtensor` — mock Bittensor node for testing
 - `tests` — integration tests
-
-**Non-workspace crate** (exists on disk but not in workspace members):
-- `crates/challenge-orchestrator` — Docker-based challenge container orchestration (legacy)
 
 **Note:** Platform is fully decentralized—there is no central server. All validators communicate directly via libp2p (gossipsub + DHT).
 

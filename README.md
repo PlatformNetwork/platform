@@ -20,13 +20,12 @@
 
 ## Overview
 
-Platform is a **WASM-first, peer-to-peer validator network** for deterministic evaluation of miner submissions on Bittensor. Validators execute challenge logic in a hardened WASM runtime, reach stake-weighted consensus over libp2p, and submit finalized weights to the chain. **Docker is reserved for local and CI test harnesses only.**
+Platform is a **WASM-only, peer-to-peer validator network** for deterministic evaluation of miner submissions on Bittensor. Validators execute challenge logic in a hardened WASM runtime, reach stake-weighted consensus over libp2p, and submit finalized weights to the chain.
 
 **Core principles**
 - Decentralized libp2p mesh (gossipsub + DHT) with no centralized relays.
 - Stake-weighted PBFT-style consensus for challenge state and weight aggregation.
 - Deterministic WASM execution with strict runtime policy and auditability.
-- Explicit separation of production runtime (WASM) and test-only containers (Docker).
 
 ---
 
@@ -162,13 +161,6 @@ cargo build --release --bin validator-node
 ```
 
 See [Validator Operations](docs/operations/validator.md) for hardware, configuration, and monitoring.
-
----
-
-## Docker Policy
-
-- **Production**: WASM runtime only.
-- **Testing**: Docker-backed harnesses only (e.g., `./scripts/test-comprehensive.sh`).
 
 ---
 

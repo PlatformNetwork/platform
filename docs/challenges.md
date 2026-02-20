@@ -56,10 +56,6 @@ stateDiagram-v2
     Active --> Retired: Emergency removal
 ```
 
-## Docker Policy (Test-Only)
-
-Docker is used only for integration testing and local harnesses. Production challenge execution relies exclusively on WASM modules.
-
 ## References
 
 - [Challenge Integration Guide](challenge-integration.md)
