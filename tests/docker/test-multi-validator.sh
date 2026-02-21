@@ -711,20 +711,26 @@ test_mock_subtensor_metagraph_endpoint() {
     response=$(docker exec platform-mock-subtensor curl -fsS "http://localhost:9944/test/metagraph" 2>/dev/null)
     echo "${response}" > "${ARTIFACT_DIR}/mock-subtensor-metagraph.json"
 
+    # The summary returns "n" for total count and "validators" for permit holders
+    local n_count
+    n_count=$(echo "${response}" | grep -o '"n":[0-9]*' | head -1 | cut -d':' -f2)
+    if [ -n "${n_count}" ] && [ "${n_count}" -ge 5 ]; then
+        log_info "Metagraph has n=${n_count} validators (>= 5)"
+        return 0
+    fi
     local validator_count
-    validator_count=$(echo "${response}" | grep -o '"total_validators":[0-9]*' | head -1 | cut -d':' -f2)
+    validator_count=$(echo "${response}" | grep -o '"validators":[0-9]*' | head -1 | cut -d':' -f2)
     if [ -n "${validator_count}" ] && [ "${validator_count}" -ge 5 ]; then
-        log_info "Metagraph has ${validator_count} validators (>= 5)"
+        log_info "Metagraph has ${validator_count} validator-permit holders (>= 5)"
         return 0
     fi
-    # Also check for validator array length
-    local has_validators
-    has_validators=$(echo "${response}" | grep -c "hotkey" || true)
-    if [ "${has_validators}" -gt 0 ]; then
-        log_info "Metagraph returned validator data (${has_validators} hotkey references)"
+    local active_count
+    active_count=$(echo "${response}" | grep -o '"active_validators":[0-9]*' | head -1 | cut -d':' -f2)
+    if [ -n "${active_count}" ] && [ "${active_count}" -ge 5 ]; then
+        log_info "Metagraph has ${active_count} active validators (>= 5)"
         return 0
     fi
-    log_info "Metagraph has insufficient validators: ${validator_count}"
+    log_info "Metagraph response: n=${n_count}, validators=${validator_count}, active=${active_count}"
     return 1
 }
 
