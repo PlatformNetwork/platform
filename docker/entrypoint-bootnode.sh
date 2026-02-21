@@ -19,10 +19,7 @@ export VALIDATOR_SECRET_KEY="${BOOTNODE_SECRET_KEY}"
 ARGS="--data-dir ${DATA_DIR:-/data}"
 ARGS="$ARGS --listen-addr /ip4/0.0.0.0/tcp/${P2P_PORT:-8090}"
 ARGS="$ARGS --netuid ${NETUID:-100}"
-
-if [ -n "${SUBTENSOR_ENDPOINT:-}" ]; then
-    ARGS="$ARGS --subtensor-endpoint ${SUBTENSOR_ENDPOINT}"
-fi
+ARGS="$ARGS --bootnode"
 
 if [ -n "${BOOTSTRAP_PEERS:-}" ]; then
     IFS=',' read -ra PEERS <<< "${BOOTSTRAP_PEERS}"

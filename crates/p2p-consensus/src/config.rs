@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// Configure your bootstrap peers via the BOOTSTRAP_PEERS environment variable
 /// or add them here for your deployment.
 pub const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[
-    // Add your bootstrap peers here
+    "/dns4/bootnode.platform.network/tcp/8090/p2p/12D3KooWSpDLH6kBTHuHhJCmS4vZMhuTZa1T35qJYd9NgSVdzGnP",
 ];
 
 /// P2P network configuration
@@ -43,11 +43,17 @@ pub struct P2PConfig {
     pub is_bootnode: bool,
 }
 
+/// Default P2P port
+pub const DEFAULT_P2P_PORT: u16 = 8090;
+
 impl Default for P2PConfig {
     fn default() -> Self {
         Self {
-            listen_addrs: vec!["/ip4/0.0.0.0/tcp/8090".to_string()],
-            bootstrap_peers: vec![],
+            listen_addrs: vec![format!("/ip4/0.0.0.0/tcp/{}", DEFAULT_P2P_PORT)],
+            bootstrap_peers: DEFAULT_BOOTSTRAP_NODES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             consensus_topic: "platform/consensus/1.0.0".to_string(),
             challenge_topic: "platform/challenge/1.0.0".to_string(),
             netuid: 100,
@@ -113,8 +119,8 @@ impl P2PConfig {
     pub fn production() -> Self {
         Self {
             listen_addrs: vec![
-                "/ip4/0.0.0.0/tcp/8090".to_string(),
-                "/ip6/::/tcp/8090".to_string(),
+                format!("/ip4/0.0.0.0/tcp/{}", DEFAULT_P2P_PORT),
+                format!("/ip6/::/tcp/{}", DEFAULT_P2P_PORT),
             ],
             bootstrap_peers: DEFAULT_BOOTSTRAP_NODES
                 .iter()

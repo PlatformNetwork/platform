@@ -181,6 +181,10 @@ struct Args {
     #[arg(long)]
     no_bittensor: bool,
 
+    /// Run as bootnode (read-only Bittensor access, no signing required)
+    #[arg(long)]
+    bootnode: bool,
+
     /// Directory where WASM challenge modules are stored
     #[arg(long, env = "WASM_MODULE_DIR", default_value = "./wasm_modules")]
     wasm_module_dir: PathBuf,
@@ -212,6 +216,7 @@ impl std::fmt::Debug for Args {
             .field("netuid", &self.netuid)
             .field("version_key", &self.version_key)
             .field("no_bittensor", &self.no_bittensor)
+            .field("bootnode", &self.bootnode)
             .field("wasm_module_dir", &self.wasm_module_dir)
             .field("wasm_max_memory", &self.wasm_max_memory)
             .field("wasm_enable_fuel", &self.wasm_enable_fuel)
@@ -296,6 +301,18 @@ async fn main() -> Result<()> {
         network.local_peer_id()
     );
 
+    // Create command channel for P2P network
+    let (p2p_cmd_tx, p2p_cmd_rx) =
+        tokio::sync::mpsc::channel::<platform_p2p_consensus::P2PCommand>(256);
+
+    // Spawn P2P network task
+    let network_clone = network.clone();
+    tokio::spawn(async move {
+        if let Err(e) = network_clone.run(p2p_cmd_rx).await {
+            error!("P2P network error: {}", e);
+        }
+    });
+
     // Initialize consensus engine
     let consensus = Arc::new(RwLock::new(ConsensusEngine::new(
         keypair.clone(),
@@ -313,82 +330,122 @@ async fn main() -> Result<()> {
     if !args.no_bittensor {
         info!("Connecting to Bittensor: {}", args.subtensor_endpoint);
 
-        let state_path = data_dir.join("subtensor_state.json");
-        match Subtensor::with_persistence(&args.subtensor_endpoint, state_path).await {
-            Ok(st) => {
-                let secret = args
-                    .secret_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))?;
+        if args.bootnode {
+            // Bootnode mode: read-only access to metagraph, no signing required
+            info!("Running in bootnode mode (read-only Bittensor access)");
+            subtensor = None;
+            subtensor_signer = None;
 
-                let signer = signer_from_seed(secret).map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to create Bittensor signer from secret key: {}. \
-                        A valid signer is required for weight submission. \
-                        Use --no-bittensor flag if running without Bittensor.",
-                        e
-                    )
-                })?;
-                info!("Bittensor signer initialized: {}", signer.account_id());
-                subtensor_signer = Some(Arc::new(signer));
+            // Create SubtensorClient for metagraph only
+            let mut client = SubtensorClient::new(platform_bittensor::BittensorConfig {
+                endpoint: args.subtensor_endpoint.clone(),
+                netuid: args.netuid,
+                ..Default::default()
+            });
 
-                subtensor = Some(Arc::new(st));
-
-                // Create SubtensorClient for metagraph
-                let mut client = SubtensorClient::new(platform_bittensor::BittensorConfig {
-                    endpoint: args.subtensor_endpoint.clone(),
-                    netuid: args.netuid,
-                    ..Default::default()
-                });
-
-                let bittensor_client =
-                    Arc::new(BittensorClient::new(&args.subtensor_endpoint).await?);
-                match sync_metagraph(&bittensor_client, args.netuid).await {
-                    Ok(mg) => {
-                        info!("Metagraph synced: {} neurons", mg.n);
-
-                        // Update validator set from metagraph
-                        update_validator_set_from_metagraph(&mg, &validator_set);
-                        info!(
-                            "Validator set: {} active validators",
-                            validator_set.active_count()
-                        );
-
-                        client.set_metagraph(mg);
-                    }
-                    Err(e) => warn!("Metagraph sync failed: {}", e),
-                }
-
-                subtensor_client = Some(client);
-
-                // Store bittensor client for metagraph refreshes
-                bittensor_client_for_metagraph = Some(bittensor_client.clone());
-
-                // Block sync
-                let mut sync = BlockSync::new(BlockSyncConfig {
-                    netuid: args.netuid,
-                    ..Default::default()
-                });
-                let rx = sync.take_event_receiver();
-
-                if let Err(e) = sync.connect(bittensor_client).await {
-                    warn!("Block sync failed: {}", e);
-                } else {
-                    tokio::spawn(async move {
-                        if let Err(e) = sync.start().await {
-                            error!("Block sync error: {}", e);
+            match BittensorClient::new(&args.subtensor_endpoint).await {
+                Ok(bittensor_client) => {
+                    let bittensor_client = Arc::new(bittensor_client);
+                    match sync_metagraph(&bittensor_client, args.netuid).await {
+                        Ok(mg) => {
+                            info!("Metagraph synced: {} neurons", mg.n);
+                            update_validator_set_from_metagraph(&mg, &validator_set);
+                            info!(
+                                "Validator set: {} active validators",
+                                validator_set.active_count()
+                            );
+                            client.set_metagraph(mg);
                         }
-                    });
-                    block_rx = rx;
-                    info!("Block sync started");
+                        Err(e) => warn!("Metagraph sync failed: {}", e),
+                    }
+                    subtensor_client = Some(client);
+                    bittensor_client_for_metagraph = Some(bittensor_client);
+                }
+                Err(e) => {
+                    error!("Bittensor client connection failed: {}", e);
+                    subtensor_client = None;
+                    bittensor_client_for_metagraph = None;
                 }
             }
-            Err(e) => {
-                error!("Subtensor connection failed: {}", e);
-                subtensor = None;
-                subtensor_signer = None;
-                subtensor_client = None;
-                bittensor_client_for_metagraph = None;
+        } else {
+            // Full validator mode: requires signing key
+            let state_path = data_dir.join("subtensor_state.json");
+            match Subtensor::with_persistence(&args.subtensor_endpoint, state_path).await {
+                Ok(st) => {
+                    let secret = args
+                        .secret_key
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))?;
+
+                    let signer = signer_from_seed(secret).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to create Bittensor signer from secret key: {}. \
+                            A valid signer is required for weight submission. \
+                            Use --no-bittensor flag if running without Bittensor.",
+                            e
+                        )
+                    })?;
+                    info!("Bittensor signer initialized: {}", signer.account_id());
+                    subtensor_signer = Some(Arc::new(signer));
+
+                    subtensor = Some(Arc::new(st));
+
+                    // Create SubtensorClient for metagraph
+                    let mut client = SubtensorClient::new(platform_bittensor::BittensorConfig {
+                        endpoint: args.subtensor_endpoint.clone(),
+                        netuid: args.netuid,
+                        ..Default::default()
+                    });
+
+                    let bittensor_client =
+                        Arc::new(BittensorClient::new(&args.subtensor_endpoint).await?);
+                    match sync_metagraph(&bittensor_client, args.netuid).await {
+                        Ok(mg) => {
+                            info!("Metagraph synced: {} neurons", mg.n);
+
+                            // Update validator set from metagraph
+                            update_validator_set_from_metagraph(&mg, &validator_set);
+                            info!(
+                                "Validator set: {} active validators",
+                                validator_set.active_count()
+                            );
+
+                            client.set_metagraph(mg);
+                        }
+                        Err(e) => warn!("Metagraph sync failed: {}", e),
+                    }
+
+                    subtensor_client = Some(client);
+
+                    // Store bittensor client for metagraph refreshes
+                    bittensor_client_for_metagraph = Some(bittensor_client.clone());
+
+                    // Block sync
+                    let mut sync = BlockSync::new(BlockSyncConfig {
+                        netuid: args.netuid,
+                        ..Default::default()
+                    });
+                    let rx = sync.take_event_receiver();
+
+                    if let Err(e) = sync.connect(bittensor_client).await {
+                        warn!("Block sync failed: {}", e);
+                    } else {
+                        tokio::spawn(async move {
+                            if let Err(e) = sync.start().await {
+                                error!("Block sync error: {}", e);
+                            }
+                        });
+                        block_rx = rx;
+                        info!("Block sync started");
+                    }
+                }
+                Err(e) => {
+                    error!("Subtensor connection failed: {}", e);
+                    subtensor = None;
+                    subtensor_signer = None;
+                    subtensor_client = None;
+                    bittensor_client_for_metagraph = None;
+                }
             }
         }
     } else {
@@ -465,7 +522,8 @@ async fn main() -> Result<()> {
     let mut wasm_eval_interval = tokio::time::interval(Duration::from_secs(5));
     let mut stale_job_interval = tokio::time::interval(Duration::from_secs(120));
 
-    let (eval_broadcast_tx, mut eval_broadcast_rx) = tokio::sync::mpsc::channel::<P2PMessage>(256);
+    // Clone p2p_cmd_tx for use in the loop
+    let p2p_broadcast_tx = p2p_cmd_tx.clone();
 
     loop {
         tokio::select! {
@@ -478,16 +536,6 @@ async fn main() -> Result<()> {
                     &state_manager,
                     &wasm_executor,
                 ).await;
-            }
-
-            // Outbound evaluation broadcasts
-            Some(msg) = eval_broadcast_rx.recv() => {
-                if let Err(e) = event_tx.send(NetworkEvent::Message {
-                    source: network.local_peer_id(),
-                    message: msg,
-                }).await {
-                    warn!("Failed to forward evaluation broadcast: {}", e);
-                }
             }
 
             // Bittensor block events
@@ -561,7 +609,7 @@ async fn main() -> Result<()> {
                         executor,
                         &state_manager,
                         &keypair,
-                        &eval_broadcast_tx,
+                        &p2p_broadcast_tx,
                     ).await;
                 }
             }
@@ -607,25 +655,36 @@ async fn main() -> Result<()> {
 }
 
 fn load_keypair(args: &Args) -> Result<Keypair> {
-    let secret = args
-        .secret_key
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))?
-        .trim();
+    match args.secret_key.as_ref() {
+        Some(secret) => {
+            let secret = secret.trim();
+            let hex = secret.strip_prefix("0x").unwrap_or(secret);
 
-    let hex = secret.strip_prefix("0x").unwrap_or(secret);
+            if hex.len() == 64 {
+                if let Ok(bytes) = hex::decode(hex) {
+                    if bytes.len() == 32 {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&bytes);
+                        return Ok(Keypair::from_seed(&arr)?);
+                    }
+                }
+            }
 
-    if hex.len() == 64 {
-        if let Ok(bytes) = hex::decode(hex) {
-            if bytes.len() == 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&bytes);
-                return Ok(Keypair::from_seed(&arr)?);
+            Ok(Keypair::from_mnemonic(secret)?)
+        }
+        None => {
+            if args.bootnode {
+                // Bootnode mode without secret key - generate random keypair
+                // Note: This means the PeerId will change on each restart.
+                // For a stable PeerId, provide BOOTNODE_SECRET_KEY.
+                warn!("No secret key provided in bootnode mode, generating random keypair (PeerId will change on restart)");
+                let seed: [u8; 32] = rand::random();
+                Ok(Keypair::from_seed(&seed)?)
+            } else {
+                Err(anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))
             }
         }
     }
-
-    Ok(Keypair::from_mnemonic(secret)?)
 }
 
 /// Load persisted state from distributed storage
@@ -1250,7 +1309,7 @@ async fn process_wasm_evaluations(
     executor: &Arc<WasmChallengeExecutor>,
     state_manager: &Arc<StateManager>,
     keypair: &Keypair,
-    eval_broadcast_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
+    p2p_cmd_tx: &tokio::sync::mpsc::Sender<platform_p2p_consensus::P2PCommand>,
 ) {
     let pending: Vec<(String, ChallengeId, String)> = state_manager.read(|state| {
         state
@@ -1432,7 +1491,10 @@ async fn process_wasm_evaluations(
             signature,
             timestamp,
         });
-        if let Err(e) = eval_broadcast_tx.send(eval_msg).await {
+        if let Err(e) = p2p_cmd_tx
+            .send(platform_p2p_consensus::P2PCommand::Broadcast(eval_msg))
+            .await
+        {
             warn!(
                 submission_id = %submission_id,
                 error = %e,

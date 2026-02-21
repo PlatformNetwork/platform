@@ -23,7 +23,7 @@ services:
   #   --bootstrap /ip4/<BOOTNODE_IP>/tcp/8090/p2p/<PEER_ID>
   # ==========================================================================
   bootnode:
-    image: ghcr.io/platformnetwork/platform-bootnode:latest
+    image: platform-bootnode:latest
     container_name: platform-bootnode
     restart: unless-stopped
     
@@ -55,9 +55,11 @@ services:
   # Platform Validator Node
   # ==========================================================================
   validator:
-    image: ghcr.io/platformnetwork/platform:latest
+    image: platform-validator:latest
     container_name: platform-validator
     restart: unless-stopped
+    depends_on:
+      - bootnode
     # SECURITY NOTE: Privileged mode is required for Docker-in-Docker to spawn challenge containers.
     # This is necessary for the decentralized evaluation architecture where validators run
     # challenge containers locally. If you don't need to run challenges, remove this line.
@@ -68,7 +70,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     
     ports:
-      - "8091:8090"   # P2P libp2p port (8091 on host to avoid conflict with bootnode)
+      - "8091:8090"   # P2P libp2p port (external 8091 to avoid conflict with bootnode)
       - "8080:8080"   # Local RPC API
     
     volumes:
@@ -85,10 +87,8 @@ services:
       - NETUID=100
       # P2P settings
       - P2P_LISTEN_ADDR=/ip4/0.0.0.0/tcp/8090
-      # Optional: Bootstrap peers (comma-separated multiaddrs)
-      # - BOOTSTRAP_PEERS=/ip4/x.x.x.x/tcp/8090/p2p/PEER_ID
-    
-    command: ["validator-node", "--data-dir", "/data", "--listen-addr", "/ip4/0.0.0.0/tcp/8090"]
+      # Bootstrap to local bootnode via Docker network
+      - BOOTSTRAP_PEERS=/dns4/bootnode/tcp/8090/p2p/12D3KooWSpDLH6kBTHuHhJCmS4vZMhuTZa1T35qJYd9NgSVdzGnP
     
     healthcheck:
       test: ["CMD-SHELL", "test -e /data/distributed.db || exit 1"]

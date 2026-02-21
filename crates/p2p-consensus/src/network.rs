@@ -7,11 +7,14 @@ use crate::config::P2PConfig;
 use crate::messages::{P2PMessage, SignedP2PMessage, WeightVoteMessage, MAX_P2P_MESSAGE_SIZE};
 use crate::validator::ValidatorSet;
 use bincode::Options;
+use futures::StreamExt;
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity, MessageId, ValidationMode},
     identify,
     kad::{self, store::MemoryStore},
-    noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    noise,
+    swarm::SwarmEvent,
+    tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use parking_lot::RwLock;
 use platform_core::{hash_data, Hotkey, Keypair};
@@ -43,8 +46,10 @@ pub enum NetworkError {
     RateLimitExceeded { signer: String, count: u32 },
 }
 
-/// Combined network behavior using manual composition
-pub struct NetworkBehaviour {
+/// Combined network behavior using libp2p derive macro
+#[derive(libp2p::swarm::NetworkBehaviour)]
+#[behaviour(to_swarm = "CombinedEvent")]
+pub struct CombinedBehaviour {
     /// Gossipsub for pub/sub messaging
     pub gossipsub: gossipsub::Behaviour,
     /// Kademlia DHT for peer discovery
@@ -52,6 +57,35 @@ pub struct NetworkBehaviour {
     /// Identify protocol for peer identification
     pub identify: identify::Behaviour,
 }
+
+/// Events from the combined behaviour
+#[derive(Debug)]
+pub enum CombinedEvent {
+    Gossipsub(gossipsub::Event),
+    Kademlia(kad::Event),
+    Identify(identify::Event),
+}
+
+impl From<gossipsub::Event> for CombinedEvent {
+    fn from(event: gossipsub::Event) -> Self {
+        CombinedEvent::Gossipsub(event)
+    }
+}
+
+impl From<kad::Event> for CombinedEvent {
+    fn from(event: kad::Event) -> Self {
+        CombinedEvent::Kademlia(event)
+    }
+}
+
+impl From<identify::Event> for CombinedEvent {
+    fn from(event: identify::Event) -> Self {
+        CombinedEvent::Identify(event)
+    }
+}
+
+/// Legacy type alias for backward compatibility
+pub type NetworkBehaviour = CombinedBehaviour;
 
 /// Events from the network layer
 #[derive(Debug)]
@@ -650,42 +684,343 @@ impl P2PNetwork {
         swarm.connected_peers().count()
     }
 
-    /// Start the P2P network and return event/command channels
+    /// Run the P2P network event loop
     ///
-    /// Returns a tuple of (event_receiver, command_sender) that can be used to
-    /// interact with the network. The network runs in the background and processes
-    /// incoming events, broadcasting them through the event channel.
-    pub async fn start(
-        &self,
-    ) -> Result<(mpsc::Receiver<P2PEvent>, mpsc::Sender<P2PCommand>), NetworkError> {
-        let (event_tx, event_rx) = mpsc::channel::<P2PEvent>(1000);
-        let (cmd_tx, _cmd_rx) = mpsc::channel::<P2PCommand>(1000);
-
+    /// This spawns the libp2p swarm and processes all network events.
+    /// Events are forwarded through the event_tx channel passed at construction.
+    /// Commands can be sent through cmd_rx to control the network.
+    pub async fn run(
+        self: Arc<Self>,
+        mut cmd_rx: mpsc::Receiver<P2PCommand>,
+    ) -> Result<(), NetworkError> {
         // Get libp2p keypair
         let seed = self.keypair.seed();
         let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed).map_err(|e| {
             NetworkError::Transport(format!("Failed to create libp2p keypair: {}", e))
         })?;
 
-        // Create behaviour
-        let mut behaviour = self.create_behaviour(&libp2p_keypair)?;
+        // Create swarm with combined behaviour
+        let mut swarm = self.build_swarm(&libp2p_keypair)?;
 
-        // Subscribe to topics
-        self.subscribe(&mut behaviour)?;
+        // Subscribe to gossipsub topics
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&self.consensus_topic)
+            .map_err(|e| {
+                NetworkError::Gossipsub(format!("Failed to subscribe to consensus: {}", e))
+            })?;
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&self.challenge_topic)
+            .map_err(|e| {
+                NetworkError::Gossipsub(format!("Failed to subscribe to challenge: {}", e))
+            })?;
+
+        info!(
+            consensus_topic = %self.config.consensus_topic,
+            challenge_topic = %self.config.challenge_topic,
+            "Subscribed to gossipsub topics"
+        );
+
+        // Start listening
+        for addr_str in &self.config.listen_addrs {
+            match addr_str.parse::<Multiaddr>() {
+                Ok(addr) => match swarm.listen_on(addr.clone()) {
+                    Ok(_) => {
+                        info!(addr = %addr, "Listening on address");
+                    }
+                    Err(e) => {
+                        error!(addr = %addr_str, error = %e, "Failed to listen on address");
+                    }
+                },
+                Err(e) => {
+                    error!(addr = %addr_str, error = %e, "Invalid listen address");
+                }
+            }
+        }
+
+        // Connect to bootstrap peers
+        for addr_str in &self.config.bootstrap_peers {
+            match addr_str.parse::<Multiaddr>() {
+                Ok(addr) => {
+                    info!(addr = %addr, "Dialing bootstrap peer");
+                    if let Some(peer_id) = extract_peer_id(&addr) {
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr.clone());
+                    }
+                    match swarm.dial(addr.clone()) {
+                        Ok(_) => {
+                            info!(addr = %addr, "Dial initiated to bootstrap peer");
+                        }
+                        Err(e) => {
+                            warn!(addr = %addr_str, error = %e, "Failed to dial bootstrap peer");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(addr = %addr_str, error = %e, "Invalid bootstrap address");
+                }
+            }
+        }
+
+        // Bootstrap Kademlia if we have peers
+        if !self.config.bootstrap_peers.is_empty() {
+            match swarm.behaviour_mut().kademlia.bootstrap() {
+                Ok(_) => info!("Started Kademlia bootstrap"),
+                Err(e) => warn!(error = ?e, "Failed to bootstrap Kademlia"),
+            }
+        }
 
         info!(
             peer_id = %self.local_peer_id,
-            "P2P network started, returning event/command channels"
+            "P2P network running"
         );
 
-        // Store event_tx for forwarding events
-        let _event_tx_clone = event_tx.clone();
+        // Main event loop
+        loop {
+            tokio::select! {
+                event = swarm.select_next_some() => {
+                    self.handle_swarm_event(&mut swarm, event).await;
+                }
+                Some(cmd) = cmd_rx.recv() => {
+                    match cmd {
+                        P2PCommand::Broadcast(msg) => {
+                            if let Err(e) = self.do_broadcast(&mut swarm, msg) {
+                                warn!(error = %e, "Failed to broadcast message");
+                            }
+                        }
+                        P2PCommand::Dial(addr_str) => {
+                            match addr_str.parse::<Multiaddr>() {
+                                Ok(addr) => {
+                                    if let Err(e) = swarm.dial(addr.clone()) {
+                                        warn!(addr = %addr, error = %e, "Failed to dial");
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(addr = %addr_str, error = %e, "Invalid dial address");
+                                }
+                            }
+                        }
+                        P2PCommand::Disconnect(peer_str) => {
+                            if let Ok(peer_id) = peer_str.parse::<PeerId>() {
+                                let _ = swarm.disconnect_peer_id(peer_id);
+                            }
+                        }
+                        P2PCommand::Shutdown => {
+                            info!("P2P network shutdown requested");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
-        // The actual event loop would be spawned here in a full implementation
-        // For now, we return the channels and let the caller handle the swarm event loop
-        // This allows for more flexible integration with different runtime patterns
+        Ok(())
+    }
 
-        Ok((event_rx, cmd_tx))
+    /// Build a complete swarm with the combined behaviour
+    fn build_swarm(
+        &self,
+        libp2p_keypair: &libp2p::identity::Keypair,
+    ) -> Result<Swarm<CombinedBehaviour>, NetworkError> {
+        // Create gossipsub
+        let gossipsub_config = gossipsub::ConfigBuilder::default()
+            .heartbeat_interval(Duration::from_secs(1))
+            .validation_mode(ValidationMode::Strict)
+            .message_id_fn(|msg: &gossipsub::Message| {
+                use sha2::Digest;
+                let hash = sha2::Sha256::digest(&msg.data);
+                MessageId::from(hash.to_vec())
+            })
+            .max_transmit_size(self.config.max_message_size)
+            .build()
+            .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
+
+        let gossipsub = gossipsub::Behaviour::new(
+            MessageAuthenticity::Signed(libp2p_keypair.clone()),
+            gossipsub_config,
+        )
+        .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
+
+        // Create kademlia
+        let store = MemoryStore::new(self.local_peer_id);
+        let kademlia = kad::Behaviour::new(self.local_peer_id, store);
+
+        // Create identify
+        let identify_config =
+            identify::Config::new("/platform/1.0.0".to_string(), libp2p_keypair.public());
+        let identify = identify::Behaviour::new(identify_config);
+
+        let behaviour = CombinedBehaviour {
+            gossipsub,
+            kademlia,
+            identify,
+        };
+
+        // Build the swarm
+        let swarm = SwarmBuilder::with_existing_identity(libp2p_keypair.clone())
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default(),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .map_err(|e| NetworkError::Transport(e.to_string()))?
+            .with_dns()
+            .map_err(|e| NetworkError::Transport(e.to_string()))?
+            .with_behaviour(|_| behaviour)
+            .map_err(|e| NetworkError::Transport(e.to_string()))?
+            .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+            .build();
+
+        Ok(swarm)
+    }
+
+    /// Handle swarm events
+    async fn handle_swarm_event(
+        &self,
+        swarm: &mut Swarm<CombinedBehaviour>,
+        event: SwarmEvent<CombinedEvent>,
+    ) {
+        match event {
+            SwarmEvent::Behaviour(CombinedEvent::Gossipsub(gossipsub::Event::Message {
+                propagation_source,
+                message,
+                ..
+            })) => {
+                match self.handle_gossipsub_message(propagation_source, &message.data) {
+                    Ok(msg) => {
+                        debug!(
+                            source = %propagation_source,
+                            msg_type = %msg.type_name(),
+                            "Received gossipsub message"
+                        );
+                        if let Err(e) = self
+                            .event_tx
+                            .send(NetworkEvent::Message {
+                                source: propagation_source,
+                                message: msg,
+                            })
+                            .await
+                        {
+                            error!(error = %e, "Failed to send message event");
+                        }
+                    }
+                    Err(e) => {
+                        debug!(
+                            source = %propagation_source,
+                            error = %e,
+                            "Failed to process gossipsub message"
+                        );
+                    }
+                }
+            }
+            SwarmEvent::Behaviour(CombinedEvent::Gossipsub(gossipsub::Event::Subscribed {
+                peer_id,
+                topic,
+            })) => {
+                debug!(peer = %peer_id, topic = %topic, "Peer subscribed to topic");
+            }
+            SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::RoutingUpdated {
+                peer,
+                ..
+            })) => {
+                debug!(peer = %peer, "Kademlia routing updated");
+            }
+            SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::OutboundQueryProgressed {
+                result: kad::QueryResult::Bootstrap(Ok(_)),
+                ..
+            })) => {
+                info!("Kademlia bootstrap completed");
+            }
+            SwarmEvent::Behaviour(CombinedEvent::Identify(identify::Event::Received {
+                peer_id,
+                info,
+                ..
+            })) => {
+                debug!(
+                    peer = %peer_id,
+                    protocol = %info.protocol_version,
+                    agent = %info.agent_version,
+                    "Received identify info"
+                );
+                // Add peer addresses to Kademlia
+                for addr in &info.listen_addrs {
+                    swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr.clone());
+                }
+                if let Err(e) = self
+                    .event_tx
+                    .send(NetworkEvent::PeerIdentified {
+                        peer_id,
+                        hotkey: self.peer_mapping.get_hotkey(&peer_id),
+                        addresses: info.listen_addrs,
+                    })
+                    .await
+                {
+                    error!(error = %e, "Failed to send peer identified event");
+                }
+            }
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
+                info!(peer = %peer_id, endpoint = ?endpoint, "Connection established");
+                if let Err(e) = self
+                    .event_tx
+                    .send(NetworkEvent::PeerConnected(peer_id))
+                    .await
+                {
+                    error!(error = %e, "Failed to send peer connected event");
+                }
+            }
+            SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                info!(peer = %peer_id, cause = ?cause, "Connection closed");
+                self.peer_mapping.remove_peer(&peer_id);
+                if let Err(e) = self
+                    .event_tx
+                    .send(NetworkEvent::PeerDisconnected(peer_id))
+                    .await
+                {
+                    error!(error = %e, "Failed to send peer disconnected event");
+                }
+            }
+            SwarmEvent::NewListenAddr { address, .. } => {
+                info!(addr = %address, "New listen address");
+            }
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                warn!(peer = ?peer_id, error = %error, "Outgoing connection error");
+            }
+            SwarmEvent::IncomingConnectionError { error, .. } => {
+                warn!(error = %error, "Incoming connection error");
+            }
+            _ => {}
+        }
+    }
+
+    /// Broadcast a message (internal helper for command handling)
+    fn do_broadcast(
+        &self,
+        swarm: &mut Swarm<CombinedBehaviour>,
+        message: P2PMessage,
+    ) -> Result<(), NetworkError> {
+        let signed = self.sign_message(message)?;
+        let bytes =
+            bincode::serialize(&signed).map_err(|e| NetworkError::Serialization(e.to_string()))?;
+
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.consensus_topic.clone(), bytes)
+            .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
+
+        debug!(msg_type = %signed.message.type_name(), "Broadcast message");
+        Ok(())
     }
 }
 
@@ -881,69 +1216,7 @@ impl NetworkRunner {
     }
 }
 
-/// Helper to build a complete swarm with all behaviours
-pub async fn build_swarm(
-    keypair: &Keypair,
-    config: &P2PConfig,
-) -> Result<(Swarm<libp2p::swarm::dummy::Behaviour>, NetworkBehaviour), NetworkError> {
-    let seed = keypair.seed();
-    let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
-        .map_err(|e| NetworkError::Transport(format!("Failed to create keypair: {}", e)))?;
 
-    let local_peer_id = PeerId::from(libp2p_keypair.public());
-
-    // Create gossipsub
-    let gossipsub_config = gossipsub::ConfigBuilder::default()
-        .heartbeat_interval(Duration::from_secs(1))
-        .validation_mode(ValidationMode::Strict)
-        .message_id_fn(|msg: &gossipsub::Message| {
-            use sha2::Digest;
-            let hash = sha2::Sha256::digest(&msg.data);
-            MessageId::from(hash.to_vec())
-        })
-        .max_transmit_size(config.max_message_size)
-        .build()
-        .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
-
-    let gossipsub = gossipsub::Behaviour::new(
-        MessageAuthenticity::Signed(libp2p_keypair.clone()),
-        gossipsub_config,
-    )
-    .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
-
-    // Create kademlia
-    let store = MemoryStore::new(local_peer_id);
-    let kademlia = kad::Behaviour::new(local_peer_id, store);
-
-    // Create identify
-    let identify_config =
-        identify::Config::new("/platform/1.0.0".to_string(), libp2p_keypair.public());
-    let identify = identify::Behaviour::new(identify_config);
-
-    let behaviour = NetworkBehaviour {
-        gossipsub,
-        kademlia,
-        identify,
-    };
-
-    // Build a minimal swarm for structure (actual swarm creation would need the behaviour)
-    let swarm = SwarmBuilder::with_existing_identity(libp2p_keypair)
-        .with_tokio()
-        .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        )
-        .map_err(|e| NetworkError::Transport(e.to_string()))?
-        .with_dns()
-        .map_err(|e| NetworkError::Transport(e.to_string()))?
-        .with_behaviour(|_| libp2p::swarm::dummy::Behaviour)
-        .map_err(|e| NetworkError::Transport(e.to_string()))?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
-        .build();
-
-    Ok((swarm, behaviour))
-}
 
 #[cfg(test)]
 mod tests {

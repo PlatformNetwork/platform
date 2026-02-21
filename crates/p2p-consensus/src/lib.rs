@@ -42,7 +42,7 @@ pub mod state;
 pub mod validator;
 
 // Re-export main types
-pub use config::{P2PConfig, DEFAULT_BOOTSTRAP_NODES};
+pub use config::{P2PConfig, DEFAULT_BOOTSTRAP_NODES, DEFAULT_P2P_PORT};
 pub use consensus::{ConsensusDecision, ConsensusEngine, ConsensusError, ConsensusPhase};
 pub use messages::{
     ChallengeUpdateMessage, CommitMessage, ConsensusProposal, DataRequestMessage,
@@ -55,8 +55,8 @@ pub use messages::{
     WeightVoteMessage,
 };
 pub use network::{
-    NetworkBehaviour, NetworkError, NetworkEvent, NetworkRunner, P2PCommand, P2PEvent, P2PNetwork,
-    PeerMapping,
+    CombinedBehaviour, CombinedEvent, NetworkBehaviour, NetworkError, NetworkEvent, NetworkRunner,
+    P2PCommand, P2PEvent, P2PNetwork, PeerMapping,
 };
 pub use state::{
     build_merkle_proof, compute_merkle_root, verify_merkle_proof, ChainState, ChallengeConfig,
