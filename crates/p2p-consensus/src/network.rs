@@ -986,26 +986,28 @@ impl P2PNetwork {
             return false;
         }
         
-        // Verify the hotkey is a registered validator with sufficient stake
-        if !self.validator_set.is_validator(&announce.validator) {
-            warn!(
-                peer = %source,
-                hotkey = %announce.validator.to_hex(),
-                "PeerAnnounce from non-validator, rejecting"
-            );
-            let _ = swarm.disconnect_peer_id(source);
-            return false;
-        }
-        
-        // Authentication successful - add to peer mapping and remove from pending
-        self.peer_mapping.insert(source, announce.validator.clone());
+        // Remove from pending auth (signature is valid)
         self.pending_auth.write().remove(&source);
         
-        info!(
-            peer = %source,
-            validator = %announce.validator.to_hex(),
-            "Peer authenticated successfully"
-        );
+        // Check if the hotkey is a registered validator with sufficient stake
+        let is_validator = self.validator_set.is_validator(&announce.validator);
+        
+        // Add to peer mapping (even non-validators for relay purposes)
+        self.peer_mapping.insert(source, announce.validator.clone());
+        
+        if is_validator {
+            info!(
+                peer = %source,
+                validator = %announce.validator.to_hex(),
+                "Validator peer authenticated successfully"
+            );
+        } else {
+            info!(
+                peer = %source,
+                hotkey = %announce.validator.to_hex(),
+                "Relay peer authenticated (non-validator, can relay but not send consensus messages)"
+            );
+        }
         
         true
     }
@@ -1233,7 +1235,9 @@ fn expected_signer(message: &P2PMessage) -> Option<&Hotkey> {
 }
 
 fn requires_validator(message: &P2PMessage) -> bool {
-    !matches!(message, P2PMessage::Submission(_))
+    // Submissions and PeerAnnounce don't require validator status
+    // PeerAnnounce is verified separately in handle_peer_announce
+    !matches!(message, P2PMessage::Submission(_) | P2PMessage::PeerAnnounce(_))
 }
 
 fn validate_weight_vote_hash(message: &WeightVoteMessage) -> Result<(), NetworkError> {
