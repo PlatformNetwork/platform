@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+wasm-tests = []
+
 [[test]]
 name = "e2e_tests"
 path = "e2e_tests.rs"
@@ -43,6 +47,7 @@ path = "checkpoint_tests.rs"
 [[test]]
 name = "wasm_challenge_tests"
 path = "wasm_challenge_tests.rs"
+required-features = ["wasm-tests"]
 
 [dependencies]
 platform-core = { path = "../crates/core" }
