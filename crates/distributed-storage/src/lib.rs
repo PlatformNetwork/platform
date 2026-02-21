@@ -1,8 +1,8 @@
 //! Distributed Storage Layer for Platform Network
 //!
 //! This crate provides a decentralized storage layer using DHT (Distributed Hash Table)
-//! combined with local sled database for persistence. It replaces centralized PostgreSQL
-//! with a distributed, eventually-consistent storage system.
+//! combined with local sled database for persistence. It provides a distributed,
+//! eventually-consistent storage system.
 //!
 //! # Features
 //!
