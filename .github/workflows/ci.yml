@@ -156,8 +156,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: docker-test-artifacts
-          path: /tmp/platform-tests/
+          path: |
+            artifacts/tests/
+            /tmp/platform-tests/
           retention-days: 7
+          if-no-files-found: warn
 
   coverage:
     name: Coverage

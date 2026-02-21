@@ -99,7 +99,7 @@ EOF
         fi
         (cd "${TERM_CHALLENGE_DIR}" && cargo build --release --target wasm32-unknown-unknown -p term-challenge-wasm) \
             > "${LOG_DIR}/wasm-build.log" 2>&1
-        log_success "term-challenge WASM built: ${WASM_PATH}"
+        log_info "term-challenge WASM built: ${WASM_PATH}"
     else
         log_failure "term-challenge directory not found at ${TERM_CHALLENGE_DIR}"
         exit 1
@@ -159,7 +159,7 @@ if ! wait_for_health "platform-mock-subtensor" 180; then
     log_failure "mock-subtensor did not become healthy"
     exit 1
 fi
-log_success "mock-subtensor is healthy"
+log_info "mock-subtensor is healthy"
 
 log_info "Waiting for all 5 validators to become healthy..."
 for i in 1 2 3 4 5; do
@@ -167,7 +167,7 @@ for i in 1 2 3 4 5; do
         log_failure "validator-${i} did not become healthy"
         exit 1
     fi
-    log_success "validator-${i} is healthy"
+    log_info "validator-${i} is healthy"
 done
 
 sleep 10
@@ -573,8 +573,8 @@ echo "==========================================================================
 echo ""
 
 if [ "${FAILED}" -gt 0 ]; then
-    log_failure "Integration test completed with ${FAILED} failure(s)"
+    echo -e "${RED}[FAIL]${NC} Integration test completed with ${FAILED} failure(s)"
     exit 1
 fi
 
-log_success "All ${PASSED} integration tests passed (5-validator network)"
+echo -e "${GREEN}[PASS]${NC} All ${PASSED}/${TOTAL} integration tests passed (5-validator network)"
