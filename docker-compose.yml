@@ -23,7 +23,7 @@ services:
   #   --bootstrap /ip4/<BOOTNODE_IP>/tcp/8090/p2p/<PEER_ID>
   # ==========================================================================
   bootnode:
-    image: platform-bootnode:latest
+    image: ghcr.io/platformnetwork/platform-bootnode:latest
     container_name: platform-bootnode
     restart: unless-stopped
     
@@ -55,7 +55,7 @@ services:
   # Platform Validator Node
   # ==========================================================================
   validator:
-    image: platform-validator:latest
+    image: ghcr.io/platformnetwork/platform:latest
     container_name: platform-validator
     restart: unless-stopped
     depends_on:
