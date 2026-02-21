@@ -24,9 +24,8 @@ if [ "${PLATFORM_TEST_DOCKER_MODE:-auto}" = "required" ] && command -v platform_
     platform_install_docker_if_needed
 fi
 
-if [ -n "${VALIDATOR_SECRET_KEY:-}" ]; then
-    ARGS="$ARGS --secret-key ${VALIDATOR_SECRET_KEY}"
-fi
+# VALIDATOR_SECRET_KEY is read from env by the binary (clap env binding).
+# Never pass it as a CLI argument to avoid exposing it in /proc/PID/cmdline.
 
 if [ -n "${NETUID:-}" ]; then
     ARGS="$ARGS --netuid ${NETUID}"

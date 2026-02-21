@@ -68,7 +68,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     
     ports:
-      - "8090:8090"   # P2P libp2p port
+      - "8091:8090"   # P2P libp2p port (8091 on host to avoid conflict with bootnode)
       - "8080:8080"   # Local RPC API
     
     volumes:

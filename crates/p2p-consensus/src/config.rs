@@ -46,7 +46,7 @@ pub struct P2PConfig {
 impl Default for P2PConfig {
     fn default() -> Self {
         Self {
-            listen_addrs: vec!["/ip4/0.0.0.0/tcp/9000".to_string()],
+            listen_addrs: vec!["/ip4/0.0.0.0/tcp/8090".to_string()],
             bootstrap_peers: vec![],
             consensus_topic: "platform/consensus/1.0.0".to_string(),
             challenge_topic: "platform/challenge/1.0.0".to_string(),
@@ -113,8 +113,8 @@ impl P2PConfig {
     pub fn production() -> Self {
         Self {
             listen_addrs: vec![
-                "/ip4/0.0.0.0/tcp/9000".to_string(),
-                "/ip6/::/tcp/9000".to_string(),
+                "/ip4/0.0.0.0/tcp/8090".to_string(),
+                "/ip6/::/tcp/8090".to_string(),
             ],
             bootstrap_peers: DEFAULT_BOOTSTRAP_NODES
                 .iter()
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_with_bootstrap_peers() {
-        let peers = vec!["/ip4/1.2.3.4/tcp/9000".to_string()];
+        let peers = vec!["/ip4/1.2.3.4/tcp/8090".to_string()];
         let config = P2PConfig::default().with_bootstrap_peers(peers.clone());
         assert_eq!(config.bootstrap_peers, peers);
     }
