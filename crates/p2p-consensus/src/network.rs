@@ -1016,12 +1016,16 @@ impl P2PNetwork {
                     agent = %info.agent_version,
                     "Received identify info"
                 );
-                // Add peer addresses to Kademlia
+                // Add peer addresses to Kademlia (filter out private/local addresses)
                 for addr in &info.listen_addrs {
-                    swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, addr.clone());
+                    if !is_private_multiaddr(addr) {
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr.clone());
+                    } else {
+                        debug!(peer = %peer_id, addr = %addr, "Filtered private address from Kademlia");
+                    }
                 }
                 if let Err(e) = self
                     .event_tx
@@ -1213,29 +1217,56 @@ async fn fetch_public_ip(url: &str) -> Option<String> {
 /// Check if an IP address is public (not private/local/reserved)
 fn is_public_ip(ip: &str) -> bool {
     if let Ok(addr) = ip.parse::<std::net::Ipv4Addr>() {
-        let octets = addr.octets();
-        // Private ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
-        // Loopback: 127.x.x.x
-        // Link-local: 169.254.x.x
-        if octets[0] == 10 {
-            return false;
-        }
-        if octets[0] == 172 && (16..=31).contains(&octets[1]) {
-            return false;
-        }
-        if octets[0] == 192 && octets[1] == 168 {
-            return false;
-        }
-        if octets[0] == 127 {
-            return false;
-        }
-        if octets[0] == 169 && octets[1] == 254 {
-            return false;
-        }
-        if octets[0] == 0 {
-            return false;
-        }
+        return !is_private_ipv4(&addr);
+    }
+    false
+}
+
+/// Check if an IPv4 address is private/local/reserved
+fn is_private_ipv4(addr: &std::net::Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    // Private ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+    // Loopback: 127.x.x.x
+    // Link-local: 169.254.x.x
+    // Reserved: 0.x.x.x
+    if octets[0] == 10 {
         return true;
+    }
+    if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+        return true;
+    }
+    if octets[0] == 192 && octets[1] == 168 {
+        return true;
+    }
+    if octets[0] == 127 {
+        return true;
+    }
+    if octets[0] == 169 && octets[1] == 254 {
+        return true;
+    }
+    if octets[0] == 0 {
+        return true;
+    }
+    false
+}
+
+/// Check if a multiaddr contains a private/local IP address
+fn is_private_multiaddr(addr: &Multiaddr) -> bool {
+    for proto in addr.iter() {
+        match proto {
+            libp2p::multiaddr::Protocol::Ip4(ip) => {
+                if is_private_ipv4(&ip) {
+                    return true;
+                }
+            }
+            libp2p::multiaddr::Protocol::Ip6(ip) => {
+                // Filter loopback and link-local IPv6
+                if ip.is_loopback() || ip.segments()[0] == 0xfe80 {
+                    return true;
+                }
+            }
+            _ => {}
+        }
     }
     false
 }
@@ -1326,8 +1357,11 @@ impl NetworkRunner {
                 "Received identify info"
             );
 
+            // Filter out private/local addresses before adding to Kademlia
             for addr in &info.listen_addrs {
-                behaviour.kademlia.add_address(&peer_id, addr.clone());
+                if !is_private_multiaddr(addr) {
+                    behaviour.kademlia.add_address(&peer_id, addr.clone());
+                }
             }
 
             if let Err(e) = self

@@ -26,9 +26,9 @@ use platform_distributed_storage::{
     DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
 };
 use platform_p2p_consensus::{
-    ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord, JobRecord,
-    JobStatus, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager, TaskProgressRecord,
-    ValidatorRecord, ValidatorSet,
+    ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord,
+    HeartbeatMessage, JobRecord, JobStatus, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork,
+    StateManager, TaskProgressRecord, ValidatorRecord, ValidatorSet,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -579,10 +579,32 @@ async fn main() -> Result<()> {
                 ).await;
             }
 
-            // Heartbeat
+            // Heartbeat - broadcast to other validators
             _ = heartbeat_interval.tick() => {
                 let state_hash = state_manager.state_hash();
                 let sequence = state_manager.sequence();
+                let our_hotkey = keypair.hotkey();
+                
+                // Get our stake from validator set
+                let our_stake = validator_set.stake_for(&our_hotkey);
+                
+                let heartbeat = P2PMessage::Heartbeat(HeartbeatMessage {
+                    validator: our_hotkey,
+                    state_hash,
+                    sequence,
+                    stake: our_stake,
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                    signature: vec![], // Will be signed by P2P layer
+                });
+                
+                if let Err(e) = p2p_broadcast_tx.send(platform_p2p_consensus::P2PCommand::Broadcast(heartbeat)).await {
+                    warn!("Failed to broadcast heartbeat: {}", e);
+                }
+                
+                // Also update validator activity count
+                validator_set.mark_stale_validators();
+                debug!("Active validators: {}", validator_set.active_count());
+                
                 debug!("Heartbeat: sequence={}, state_hash={}", sequence, hex::encode(&state_hash[..8]));
             }
 
