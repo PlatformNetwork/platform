@@ -943,8 +943,14 @@ impl P2PNetwork {
                 ..
             })) => match self.handle_gossipsub_message(propagation_source, &message.data) {
                 Ok(msg) => {
+                    let hotkey = self
+                        .peer_mapping
+                        .get_hotkey(&propagation_source)
+                        .map(|h| h.to_ss58())
+                        .unwrap_or_else(|| "unknown".to_string());
                     debug!(
                         source = %propagation_source,
+                        hotkey = %hotkey,
                         msg_type = %msg.type_name(),
                         "Received gossipsub message"
                     );
@@ -960,8 +966,14 @@ impl P2PNetwork {
                     }
                 }
                 Err(e) => {
+                    // Try to extract hotkey from message for debugging
+                    let hotkey = bincode::deserialize::<SignedP2PMessage>(&message.data)
+                        .ok()
+                        .map(|m| m.signer.to_ss58())
+                        .unwrap_or_else(|| "unknown".to_string());
                     debug!(
                         source = %propagation_source,
+                        hotkey = %hotkey,
                         error = %e,
                         "Failed to process gossipsub message"
                     );
@@ -971,7 +983,12 @@ impl P2PNetwork {
                 peer_id,
                 topic,
             })) => {
-                info!(peer = %peer_id, topic = %topic, "Peer subscribed to topic");
+                let hotkey = self
+                    .peer_mapping
+                    .get_hotkey(&peer_id)
+                    .map(|h| h.to_ss58())
+                    .unwrap_or_else(|| "unknown".to_string());
+                info!(peer = %peer_id, hotkey = %hotkey, topic = %topic, "Peer subscribed to topic");
             }
             SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::RoutingUpdated {
                 peer,
@@ -1309,8 +1326,15 @@ impl NetworkRunner {
                 .handle_gossipsub_message(propagation_source, &message.data)
             {
                 Ok(msg) => {
+                    let hotkey = self
+                        .network
+                        .peer_mapping
+                        .get_hotkey(&propagation_source)
+                        .map(|h| h.to_ss58())
+                        .unwrap_or_else(|| "unknown".to_string());
                     debug!(
                         source = %propagation_source,
+                        hotkey = %hotkey,
                         msg_type = %msg.type_name(),
                         "Received gossipsub message"
                     );
@@ -1326,8 +1350,14 @@ impl NetworkRunner {
                     }
                 }
                 Err(e) => {
+                    // Try to extract hotkey from message for debugging
+                    let hotkey = bincode::deserialize::<SignedP2PMessage>(&message.data)
+                        .ok()
+                        .map(|m| m.signer.to_ss58())
+                        .unwrap_or_else(|| "unknown".to_string());
                     warn!(
                         source = %propagation_source,
+                        hotkey = %hotkey,
                         error = %e,
                         "Failed to process gossipsub message"
                     );
