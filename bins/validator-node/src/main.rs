@@ -1121,6 +1121,43 @@ async fn handle_network_event(
                                             state.add_challenge(challenge_config);
                                         }
                                     });
+                                    
+                                    // Load and log WASM routes
+                                    if let Some(ref executor) = wasm_executor_ref {
+                                        match executor.execute_get_routes(
+                                            &challenge_id_str,
+                                            &wasm_runtime_interface::NetworkPolicy::default(),
+                                            &wasm_runtime_interface::SandboxPolicy::default(),
+                                        ) {
+                                            Ok((routes_data, _)) => {
+                                                if let Ok(routes) = serde_json::from_slice::<Vec<platform_challenge_sdk::ChallengeRoute>>(&routes_data) {
+                                                    info!(
+                                                        challenge_id = %update.challenge_id,
+                                                        routes_count = routes.len(),
+                                                        "Loaded WASM challenge routes"
+                                                    );
+                                                    for route in &routes {
+                                                        info!(
+                                                            challenge_id = %update.challenge_id,
+                                                            method = %route.method.as_str(),
+                                                            path = %route.path,
+                                                            description = %route.description,
+                                                            "  Route: {} {}",
+                                                            route.method.as_str(),
+                                                            route.path
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                debug!(
+                                                    challenge_id = %update.challenge_id,
+                                                    error = %e,
+                                                    "No routes exported by WASM module"
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     error!(

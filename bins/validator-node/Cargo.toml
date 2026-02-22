@@ -16,6 +16,8 @@ platform-bittensor = { path = "../../crates/bittensor-integration" }
 platform-p2p-consensus = { path = "../../crates/p2p-consensus" }
 platform-distributed-storage = { path = "../../crates/distributed-storage" }
 platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
+platform-rpc = { path = "../../crates/rpc-server" }
+platform-subnet-manager = { path = "../../crates/subnet-manager" }
 wasm-runtime-interface = { path = "../../crates/wasm-runtime-interface" }
 
 # Bittensor
