@@ -918,20 +918,27 @@ impl WasmChallengeExecutor {
 
         // Try to load from distributed storage first
         let wasm_bytes = if let Some(ref storage) = self.config.distributed_storage {
-            // Use blocking task to call async storage
+            // Use spawn_blocking to avoid blocking the async runtime
             let storage = Arc::clone(storage);
             let key = platform_distributed_storage::StorageKey::new("wasm", module_path);
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    use platform_distributed_storage::DistributedStore;
+
+            // Create a new runtime for blocking context to avoid panic
+            let result = std::thread::scope(|_| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .ok()?;
+                rt.block_on(async {
                     storage
                         .get(&key, platform_distributed_storage::GetOptions::default())
                         .await
+                        .ok()
+                        .flatten()
                 })
             });
 
             match result {
-                Ok(Some(stored)) => {
+                Some(stored) => {
                     info!(
                         module = module_path,
                         size_bytes = stored.data.len(),
@@ -939,15 +946,11 @@ impl WasmChallengeExecutor {
                     );
                     Some(stored.data)
                 }
-                Ok(None) => {
+                None => {
                     debug!(
                         module = module_path,
                         "WASM module not found in distributed storage"
                     );
-                    None
-                }
-                Err(e) => {
-                    debug!(module = module_path, error = %e, "Failed to load from distributed storage");
                     None
                 }
             }
