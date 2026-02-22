@@ -813,7 +813,8 @@ async fn main() -> Result<()> {
                                                 description: String::new(),
                                                 owner: keypair.hotkey(),
                                                 module: platform_core::WasmModuleMetadata {
-                                                    module_path: String::new(),
+                                                    // Use challenge_id as module_path for cache lookup
+                                                    module_path: challenge_id_str.clone(),
                                                     code_hash: hex::encode(metadata.value_hash),
                                                     version: metadata.version.to_string(),
                                                     ..Default::default()
