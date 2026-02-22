@@ -189,8 +189,6 @@ impl WasmChallengeExecutor {
         let serialized =
             bincode::serialize(&input).context("Failed to serialize EvaluationInput")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
@@ -220,7 +218,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -319,8 +317,6 @@ impl WasmChallengeExecutor {
         let serialized =
             bincode::serialize(&input).context("Failed to serialize EvaluationInput")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: SandboxPolicy::default(),
@@ -350,7 +346,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -437,8 +433,6 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
@@ -464,7 +458,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -530,8 +524,6 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
@@ -557,7 +549,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -607,8 +599,6 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
@@ -634,7 +624,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -707,8 +697,7 @@ impl WasmChallengeExecutor {
             .compile_module(wasm_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to compile WASM module: {}", e))?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
+        // Note: Don't pass extra host functions - instantiate() already registers all of them
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
@@ -734,7 +723,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None) // None - host functions already registered
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -800,8 +789,6 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
@@ -831,7 +818,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let initial_fuel = instance.fuel_remaining();
@@ -904,8 +891,6 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             challenge_id: module_path.to_string(),
             validator_id: "validator".to_string(),
@@ -921,7 +906,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let result = instance
@@ -969,8 +954,6 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
-        let network_host_fns = Arc::new(NetworkHostFunctions::all());
-
         let instance_config = InstanceConfig {
             challenge_id: module_path.to_string(),
             validator_id: "validator".to_string(),
@@ -981,7 +964,7 @@ impl WasmChallengeExecutor {
 
         let mut instance = self
             .runtime
-            .instantiate(&module, instance_config, Some(network_host_fns))
+            .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
 
         let key_ptr = self.allocate_input(&mut instance, key)?;
