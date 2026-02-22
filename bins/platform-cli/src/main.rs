@@ -382,6 +382,166 @@ async fn download_binary(client: &reqwest::Client, url: &str, dest: &Path) -> Re
     Ok(())
 }
 
+// ==================== PATH Setup ====================
+
+fn is_bin_in_path() -> Result<bool> {
+    let bin = bin_dir()?;
+    let bin_str = bin.to_string_lossy();
+    if let Ok(path_var) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for entry in path_var.split(sep) {
+            if Path::new(entry) == bin.as_path() {
+                return Ok(true);
+            }
+            if entry == bin_str.as_ref() {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn try_add_to_path() {
+    let bin = match bin_dir() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let bin_str = bin.display().to_string();
+
+    if is_bin_in_path().unwrap_or(false) {
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        try_add_to_path_windows(&bin_str);
+    }
+
+    #[cfg(unix)]
+    {
+        try_add_to_path_unix(&bin_str);
+    }
+}
+
+#[cfg(windows)]
+fn try_add_to_path_windows(bin_str: &str) {
+    use std::process::Command;
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "$p = [Environment]::GetEnvironmentVariable('PATH','User'); \
+                 if ($p -split ';' | Where-Object {{ $_ -eq '{}' }}) {{ exit 0 }} \
+                 else {{ [Environment]::SetEnvironmentVariable('PATH', $p + ';{}', 'User'); exit 1 }}",
+                bin_str, bin_str
+            ),
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.code() == Some(0) => {}
+        Ok(o) if o.status.code() == Some(1) => {
+            println!();
+            println!("  Added {} to your user PATH.", bin_str);
+            println!("  Restart your terminal for the change to take effect.");
+        }
+        _ => {
+            println!();
+            println!("  Could not automatically update PATH.");
+            print_path_instructions_windows(bin_str);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn try_add_to_path_unix(bin_str: &str) {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            print_path_instructions_unix(bin_str);
+            return;
+        }
+    };
+
+    let export_line = format!("export PATH=\"{}:$PATH\"", bin_str);
+
+    let shell_files: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        vec![home.join(".zshrc"), home.join(".bash_profile")]
+    } else {
+        vec![
+            home.join(".bashrc"),
+            home.join(".zshrc"),
+            home.join(".profile"),
+        ]
+    };
+
+    let mut added = false;
+    for rc_file in &shell_files {
+        if !rc_file.exists() {
+            continue;
+        }
+        if let Ok(contents) = std::fs::read_to_string(rc_file) {
+            if contents.contains(bin_str) {
+                debug!("PATH entry already in {}", rc_file.display());
+                return;
+            }
+        }
+        let entry = format!("\n# Added by platform-cli\n{}\n", export_line);
+        if std::fs::OpenOptions::new()
+            .append(true)
+            .open(rc_file)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(entry.as_bytes())
+            })
+            .is_ok()
+        {
+            println!();
+            println!("  Added {} to {}", bin_str, rc_file.display());
+            added = true;
+            break;
+        }
+    }
+
+    if added {
+        println!("  Restart your terminal or run:");
+        println!(
+            "    source {}",
+            shell_files.iter().find(|f| f.exists()).unwrap().display()
+        );
+    } else {
+        print_path_instructions_unix(bin_str);
+    }
+}
+
+#[cfg(windows)]
+fn print_path_instructions_windows(bin_str: &str) {
+    println!("  To add to PATH manually, run in PowerShell:");
+    println!(
+        "    [Environment]::SetEnvironmentVariable('PATH', $env:PATH + ';{}', 'User')",
+        bin_str
+    );
+    println!("  Then restart your terminal.");
+}
+
+#[cfg(unix)]
+fn print_path_instructions_unix(bin_str: &str) {
+    let shell_hint = if cfg!(target_os = "macos") {
+        "~/.zshrc"
+    } else {
+        "~/.bashrc"
+    };
+    println!();
+    println!(
+        "  To add to PATH manually, add this line to {}:",
+        shell_hint
+    );
+    println!("    export PATH=\"{}:$PATH\"", bin_str);
+    println!("  Then restart your terminal or run: source {}", shell_hint);
+}
+
 // ==================== Challenge Lookup ====================
 
 fn resolve_challenge_name(
@@ -465,6 +625,8 @@ async fn cmd_download(challenge_name: &str) -> Result<()> {
         version,
         dest.display()
     );
+
+    try_add_to_path();
 
     Ok(())
 }
