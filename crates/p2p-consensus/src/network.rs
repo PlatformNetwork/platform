@@ -526,7 +526,7 @@ impl P2PNetwork {
             self.peer_mapping.insert(source, signed.signer.clone());
             info!(
                 peer_id = %source,
-                hotkey = %signed.signer.to_hex(),
+                hotkey = %signed.signer.to_ss58(),
                 "Peer authenticated - mapped peer_id to hotkey"
             );
         }
