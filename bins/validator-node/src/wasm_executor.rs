@@ -697,6 +697,13 @@ impl WasmChallengeExecutor {
             .compile_module(wasm_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to compile WASM module: {}", e))?;
 
+        // Cache the compiled module for later use by call_route
+        let module = Arc::new(module);
+        {
+            let mut cache = self.module_cache.write();
+            cache.insert(module_id.to_string(), Arc::clone(&module));
+        }
+
         // Note: Don't pass extra host functions - instantiate() already registers all of them
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
