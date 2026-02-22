@@ -708,6 +708,24 @@ async fn main() -> Result<()> {
 
                             // Also handle locally (store WASM if it's an upload)
                             if update_type == "wasm_upload" && !data.is_empty() {
+                                // Validate WASM before storing
+                                let is_valid = if let Some(ref executor) = wasm_executor {
+                                    match executor.validate_wasm_module(&data) {
+                                        Ok(()) => true,
+                                        Err(e) => {
+                                            error!(
+                                                challenge_id = %challenge_id,
+                                                error = %e,
+                                                "Invalid WASM module, rejecting upload"
+                                            );
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    true
+                                };
+
+                                if is_valid {
                                 let challenge_id_str = challenge_id.to_string();
                                 let wasm_key = StorageKey::new("wasm", &challenge_id_str);
                                 match storage.put(wasm_key, data, PutOptions::default()).await {
@@ -719,22 +737,60 @@ async fn main() -> Result<()> {
                                         );
 
                                         // Sync to ChainState for RPC
-                                        let mut cs = chain_state.write();
-                                        let wasm_config = platform_core::WasmChallengeConfig {
-                                            challenge_id,
-                                            name: challenge_id_str.clone(),
-                                            description: String::new(),
-                                            owner: keypair.hotkey(),
-                                            module: platform_core::WasmModuleMetadata {
-                                                module_path: String::new(),
-                                                code_hash: hex::encode(metadata.value_hash),
-                                                version: metadata.version.to_string(),
-                                                ..Default::default()
-                                            },
-                                            config: platform_core::ChallengeConfig::default(),
-                                            is_active: true,
-                                        };
-                                        cs.register_wasm_challenge(wasm_config);
+                                        {
+                                            let mut cs = chain_state.write();
+                                            let wasm_config = platform_core::WasmChallengeConfig {
+                                                challenge_id,
+                                                name: challenge_id_str.clone(),
+                                                description: String::new(),
+                                                owner: keypair.hotkey(),
+                                                module: platform_core::WasmModuleMetadata {
+                                                    module_path: String::new(),
+                                                    code_hash: hex::encode(metadata.value_hash),
+                                                    version: metadata.version.to_string(),
+                                                    ..Default::default()
+                                                },
+                                                config: platform_core::ChallengeConfig::default(),
+                                                is_active: true,
+                                            };
+                                            cs.register_wasm_challenge(wasm_config);
+                                        }
+
+                                        // Load and register routes
+                                        if let Some(ref executor) = wasm_executor {
+                                            match executor.execute_get_routes(
+                                                &challenge_id_str,
+                                                &wasm_runtime_interface::NetworkPolicy::default(),
+                                                &wasm_runtime_interface::SandboxPolicy::default(),
+                                            ) {
+                                                Ok((routes_data, _)) => {
+                                                    if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
+                                                        info!(
+                                                            challenge_id = %challenge_id,
+                                                            routes_count = routes.len(),
+                                                            "Loaded WASM challenge routes (local upload)"
+                                                        );
+                                                        let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes.iter().map(|r| {
+                                                            platform_core::ChallengeRouteInfo {
+                                                                method: r.method.clone(),
+                                                                path: r.path.clone(),
+                                                                description: r.description.clone(),
+                                                                requires_auth: r.requires_auth,
+                                                            }
+                                                        }).collect();
+                                                        let mut cs = chain_state.write();
+                                                        cs.register_challenge_routes(challenge_id, route_infos);
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    debug!(
+                                                        challenge_id = %challenge_id,
+                                                        error = %e,
+                                                        "No routes exported by WASM module"
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         error!(
@@ -744,6 +800,7 @@ async fn main() -> Result<()> {
                                         );
                                     }
                                 }
+                                } // end if is_valid
                             }
                         }
                     }
@@ -1292,67 +1349,87 @@ async fn handle_network_event(
                     let challenge_id_str = update.challenge_id.to_string();
                     match update.update_type.as_str() {
                         "wasm_upload" => {
-                            // Store WASM in distributed storage
-                            let wasm_key = StorageKey::new("wasm", &challenge_id_str);
-                            match storage
-                                .put(wasm_key, update.data.clone(), PutOptions::default())
-                                .await
-                            {
-                                Ok(metadata) => {
-                                    info!(
-                                        challenge_id = %update.challenge_id,
-                                        version = metadata.version,
-                                        size_bytes = update.data.len(),
-                                        "Stored WASM module in distributed storage"
-                                    );
-                                    // Register challenge in state if not exists
-                                    state_manager.apply(|state| {
-                                        if state.get_challenge(&update.challenge_id).is_none() {
-                                            let challenge_config =
-                                                platform_p2p_consensus::ChallengeConfig {
-                                                    id: update.challenge_id,
-                                                    name: challenge_id_str.clone(),
-                                                    weight: 100, // Default weight
-                                                    is_active: true,
-                                                    creator: update.updater.clone(),
-                                                    created_at: chrono::Utc::now()
-                                                        .timestamp_millis(),
-                                                    wasm_hash: metadata.value_hash,
-                                                };
-                                            state.add_challenge(challenge_config);
-                                        }
-                                    });
-
-                                    // Sync challenge to ChainState for RPC
-                                    {
-                                        let mut cs = chain_state.write();
-                                        let wasm_config = platform_core::WasmChallengeConfig {
-                                            challenge_id: update.challenge_id,
-                                            name: challenge_id_str.clone(),
-                                            description: String::new(),
-                                            owner: update.updater.clone(),
-                                            module: platform_core::WasmModuleMetadata {
-                                                module_path: String::new(),
-                                                code_hash: hex::encode(metadata.value_hash),
-                                                version: metadata.version.to_string(),
-                                                ..Default::default()
-                                            },
-                                            config: platform_core::ChallengeConfig::default(),
-                                            is_active: true,
-                                        };
-                                        cs.register_wasm_challenge(wasm_config);
+                            // Validate WASM before storing
+                            let is_valid = if let Some(ref executor) = wasm_executor_ref {
+                                match executor.validate_wasm_module(&update.data) {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        error!(
+                                            challenge_id = %update.challenge_id,
+                                            error = %e,
+                                            "Invalid WASM module from P2P, rejecting"
+                                        );
+                                        false
                                     }
+                                }
+                            } else {
+                                true // No executor, can't validate
+                            };
 
-                                    // Load and log WASM routes
-                                    if let Some(ref executor) = wasm_executor_ref {
-                                        match executor.execute_get_routes(
-                                            &challenge_id_str,
-                                            &wasm_runtime_interface::NetworkPolicy::default(),
-                                            &wasm_runtime_interface::SandboxPolicy::default(),
-                                        ) {
-                                            Ok((routes_data, _)) => {
-                                                // WASM SDK uses bincode serialization for routes
-                                                if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
+                            if !is_valid {
+                                // Skip storing invalid WASM
+                            } else {
+                                // Store WASM in distributed storage
+                                let wasm_key = StorageKey::new("wasm", &challenge_id_str);
+                                match storage
+                                    .put(wasm_key, update.data.clone(), PutOptions::default())
+                                    .await
+                                {
+                                    Ok(metadata) => {
+                                        info!(
+                                            challenge_id = %update.challenge_id,
+                                            version = metadata.version,
+                                            size_bytes = update.data.len(),
+                                            "Stored WASM module in distributed storage"
+                                        );
+                                        // Register challenge in state if not exists
+                                        state_manager.apply(|state| {
+                                            if state.get_challenge(&update.challenge_id).is_none() {
+                                                let challenge_config =
+                                                    platform_p2p_consensus::ChallengeConfig {
+                                                        id: update.challenge_id,
+                                                        name: challenge_id_str.clone(),
+                                                        weight: 100, // Default weight
+                                                        is_active: true,
+                                                        creator: update.updater.clone(),
+                                                        created_at: chrono::Utc::now()
+                                                            .timestamp_millis(),
+                                                        wasm_hash: metadata.value_hash,
+                                                    };
+                                                state.add_challenge(challenge_config);
+                                            }
+                                        });
+
+                                        // Sync challenge to ChainState for RPC
+                                        {
+                                            let mut cs = chain_state.write();
+                                            let wasm_config = platform_core::WasmChallengeConfig {
+                                                challenge_id: update.challenge_id,
+                                                name: challenge_id_str.clone(),
+                                                description: String::new(),
+                                                owner: update.updater.clone(),
+                                                module: platform_core::WasmModuleMetadata {
+                                                    module_path: String::new(),
+                                                    code_hash: hex::encode(metadata.value_hash),
+                                                    version: metadata.version.to_string(),
+                                                    ..Default::default()
+                                                },
+                                                config: platform_core::ChallengeConfig::default(),
+                                                is_active: true,
+                                            };
+                                            cs.register_wasm_challenge(wasm_config);
+                                        }
+
+                                        // Load and log WASM routes
+                                        if let Some(ref executor) = wasm_executor_ref {
+                                            match executor.execute_get_routes(
+                                                &challenge_id_str,
+                                                &wasm_runtime_interface::NetworkPolicy::default(),
+                                                &wasm_runtime_interface::SandboxPolicy::default(),
+                                            ) {
+                                                Ok((routes_data, _)) => {
+                                                    // WASM SDK uses bincode serialization for routes
+                                                    if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
                                                     info!(
                                                         challenge_id = %update.challenge_id,
                                                         routes_count = routes.len(),
@@ -1370,26 +1447,39 @@ async fn handle_network_event(
                                                             route.path
                                                         );
                                                     }
+                                                    // Register routes in ChainState
+                                                    let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes.iter().map(|r| {
+                                                        platform_core::ChallengeRouteInfo {
+                                                            method: r.method.clone(),
+                                                            path: r.path.clone(),
+                                                            description: r.description.clone(),
+                                                            requires_auth: r.requires_auth,
+                                                        }
+                                                    }).collect();
+                                                    let mut cs = chain_state.write();
+                                                    cs.register_challenge_routes(update.challenge_id, route_infos);
+                                                    drop(cs);
                                                 }
-                                            }
-                                            Err(e) => {
-                                                debug!(
-                                                    challenge_id = %update.challenge_id,
-                                                    error = %e,
-                                                    "No routes exported by WASM module"
-                                                );
+                                                }
+                                                Err(e) => {
+                                                    debug!(
+                                                        challenge_id = %update.challenge_id,
+                                                        error = %e,
+                                                        "No routes exported by WASM module"
+                                                    );
+                                                }
                                             }
                                         }
                                     }
+                                    Err(e) => {
+                                        error!(
+                                            challenge_id = %update.challenge_id,
+                                            error = %e,
+                                            "Failed to store WASM module"
+                                        );
+                                    }
                                 }
-                                Err(e) => {
-                                    error!(
-                                        challenge_id = %update.challenge_id,
-                                        error = %e,
-                                        "Failed to store WASM module"
-                                    );
-                                }
-                            }
+                            } // end else for is_valid
                         }
                         "activate" => {
                             state_manager.apply(|state| {

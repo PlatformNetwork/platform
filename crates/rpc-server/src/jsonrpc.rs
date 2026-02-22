@@ -930,7 +930,6 @@ impl RpcHandler {
 
     fn challenge_list(&self, id: Value, params: Value) -> JsonRpcResponse {
         let chain = self.chain_state.read();
-        let routes = self.challenge_routes.read();
         let only_active = self.get_param_bool(&params, "onlyActive").unwrap_or(false);
 
         // Get WASM challenges only
@@ -939,8 +938,10 @@ impl RpcHandler {
             .values()
             .filter(|c| !only_active || c.is_active)
             .map(|c| {
-                let challenge_routes = routes
-                    .get(&c.challenge_id.to_string())
+                // Read routes from ChainState
+                let routes_count = chain
+                    .challenge_routes
+                    .get(&c.challenge_id)
                     .map(|r| r.len())
                     .unwrap_or(0);
 
@@ -952,7 +953,7 @@ impl RpcHandler {
                     "isActive": c.is_active,
                     "owner": c.owner.to_hex(),
                     "version": c.module.version,
-                    "routesCount": challenge_routes,
+                    "routesCount": routes_count,
                 })
             })
             .collect();

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use bincode::Options;
 use parking_lot::RwLock;
+use platform_distributed_storage::DistributedStore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1013,6 +1014,27 @@ impl WasmChallengeExecutor {
     }
 
     pub fn module_exists(&self, module_path: &str) -> bool {
-        self.resolve_module_path(module_path).exists()
+        // Check filesystem first
+        if self.resolve_module_path(module_path).exists() {
+            return true;
+        }
+        // Check distributed storage
+        if let Some(ref storage) = self.config.distributed_storage {
+            let key = platform_distributed_storage::StorageKey::new("wasm", module_path);
+            if let Ok(exists) = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(storage.exists(&key))
+            }) {
+                return exists;
+            }
+        }
+        false
+    }
+
+    /// Validate that WASM bytes are a valid module
+    pub fn validate_wasm_module(&self, wasm_bytes: &[u8]) -> Result<()> {
+        self.runtime
+            .compile_module(wasm_bytes)
+            .map_err(|e| anyhow::anyhow!("Invalid WASM module: {}", e))?;
+        Ok(())
     }
 }

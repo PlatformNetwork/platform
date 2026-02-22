@@ -77,6 +77,20 @@ pub struct ChainState {
     /// Added in V2
     #[serde(default)]
     pub registered_hotkeys: std::collections::HashSet<Hotkey>,
+
+    /// Challenge routes (challenge_id -> routes)
+    /// Loaded from WASM modules after ChallengeUpdate
+    #[serde(default)]
+    pub challenge_routes: HashMap<ChallengeId, Vec<ChallengeRouteInfo>>,
+}
+
+/// Route information for a challenge
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeRouteInfo {
+    pub method: String,
+    pub path: String,
+    pub description: String,
+    pub requires_auth: bool,
 }
 
 fn default_timestamp() -> chrono::DateTime<chrono::Utc> {
@@ -100,6 +114,7 @@ impl Default for ChainState {
             state_hash: [0u8; 32],
             last_updated: chrono::Utc::now(),
             registered_hotkeys: std::collections::HashSet::new(),
+            challenge_routes: HashMap::new(),
         }
     }
 }
@@ -122,6 +137,7 @@ impl ChainState {
             state_hash: [0u8; 32],
             last_updated: chrono::Utc::now(),
             registered_hotkeys: std::collections::HashSet::new(),
+            challenge_routes: HashMap::new(),
         };
         state.update_hash();
         state
@@ -277,6 +293,24 @@ impl ChainState {
     /// List all WASM challenge configurations
     pub fn list_wasm_challenges(&self) -> &HashMap<ChallengeId, WasmChallengeConfig> {
         &self.wasm_challenge_configs
+    }
+
+    /// Register routes for a challenge
+    pub fn register_challenge_routes(
+        &mut self,
+        challenge_id: ChallengeId,
+        routes: Vec<ChallengeRouteInfo>,
+    ) {
+        self.challenge_routes.insert(challenge_id, routes);
+        self.update_hash();
+    }
+
+    /// Get routes for a challenge
+    pub fn get_challenge_routes(
+        &self,
+        challenge_id: &ChallengeId,
+    ) -> Option<&Vec<ChallengeRouteInfo>> {
+        self.challenge_routes.get(challenge_id)
     }
 
     /// Create a snapshot of the state
