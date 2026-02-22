@@ -586,10 +586,10 @@ async fn main() -> Result<()> {
                     let state_hash = state_manager.state_hash();
                     let sequence = state_manager.sequence();
                     let our_hotkey = keypair.hotkey();
-                    
+
                     // Get our stake from validator set
                     let our_stake = validator_set.stake_for(&our_hotkey);
-                    
+
                     let heartbeat = P2PMessage::Heartbeat(HeartbeatMessage {
                         validator: our_hotkey,
                         state_hash,
@@ -598,14 +598,14 @@ async fn main() -> Result<()> {
                         timestamp: chrono::Utc::now().timestamp_millis(),
                         signature: vec![], // Will be signed by P2P layer
                     });
-                    
+
                     if let Err(e) = p2p_broadcast_tx.send(platform_p2p_consensus::P2PCommand::Broadcast(heartbeat)).await {
                         warn!("Failed to broadcast heartbeat: {}", e);
                     }
-                    
+
                     debug!("Heartbeat: sequence={}, state_hash={}", sequence, hex::encode(&state_hash[..8]));
                 }
-                
+
                 // Update validator activity count (both bootnode and validators)
                 validator_set.mark_stale_validators();
                 debug!("Active validators: {}", validator_set.active_count());

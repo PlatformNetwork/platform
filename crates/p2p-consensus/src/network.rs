@@ -192,7 +192,6 @@ const NONCE_EXPIRY_MS: i64 = 5 * 60 * 1000;
 
 /// Authentication timeout in seconds - peers must send PeerAnnounce within this time
 
-
 /// P2P network node
 pub struct P2PNetwork {
     /// Local keypair
@@ -935,34 +934,32 @@ impl P2PNetwork {
                 propagation_source,
                 message,
                 ..
-            })) => {
-                match self.handle_gossipsub_message(propagation_source, &message.data) {
-                    Ok(msg) => {
-                        debug!(
-                            source = %propagation_source,
-                            msg_type = %msg.type_name(),
-                            "Received gossipsub message"
-                        );
-                        if let Err(e) = self
-                            .event_tx
-                            .send(NetworkEvent::Message {
-                                source: propagation_source,
-                                message: msg,
-                            })
-                            .await
-                        {
-                            error!(error = %e, "Failed to send message event");
-                        }
-                    }
-                    Err(e) => {
-                        debug!(
-                            source = %propagation_source,
-                            error = %e,
-                            "Failed to process gossipsub message"
-                        );
+            })) => match self.handle_gossipsub_message(propagation_source, &message.data) {
+                Ok(msg) => {
+                    debug!(
+                        source = %propagation_source,
+                        msg_type = %msg.type_name(),
+                        "Received gossipsub message"
+                    );
+                    if let Err(e) = self
+                        .event_tx
+                        .send(NetworkEvent::Message {
+                            source: propagation_source,
+                            message: msg,
+                        })
+                        .await
+                    {
+                        error!(error = %e, "Failed to send message event");
                     }
                 }
-            }
+                Err(e) => {
+                    debug!(
+                        source = %propagation_source,
+                        error = %e,
+                        "Failed to process gossipsub message"
+                    );
+                }
+            },
             SwarmEvent::Behaviour(CombinedEvent::Gossipsub(gossipsub::Event::Subscribed {
                 peer_id,
                 topic,
@@ -975,18 +972,23 @@ impl P2PNetwork {
             })) => {
                 debug!(peer = %peer, "Kademlia routing updated");
             }
-            SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::OutboundQueryProgressed {
-                result: kad::QueryResult::Bootstrap(Ok(_)),
-                ..
-            })) => {
+            SwarmEvent::Behaviour(CombinedEvent::Kademlia(
+                kad::Event::OutboundQueryProgressed {
+                    result: kad::QueryResult::Bootstrap(Ok(_)),
+                    ..
+                },
+            )) => {
                 info!("Kademlia bootstrap completed");
             }
-            SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::OutboundQueryProgressed {
-                result: kad::QueryResult::GetClosestPeers(Ok(ok)),
-                ..
-            })) => {
+            SwarmEvent::Behaviour(CombinedEvent::Kademlia(
+                kad::Event::OutboundQueryProgressed {
+                    result: kad::QueryResult::GetClosestPeers(Ok(ok)),
+                    ..
+                },
+            )) => {
                 // Connect to discovered peers
-                let connected_peers: std::collections::HashSet<_> = swarm.connected_peers().cloned().collect();
+                let connected_peers: std::collections::HashSet<_> =
+                    swarm.connected_peers().cloned().collect();
                 for peer_info in ok.peers {
                     let peer_id = peer_info.peer_id;
                     if peer_id != self.local_peer_id && !connected_peers.contains(&peer_id) {
@@ -999,10 +1001,12 @@ impl P2PNetwork {
                     }
                 }
             }
-            SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::OutboundQueryProgressed {
-                result: kad::QueryResult::GetClosestPeers(Err(e)),
-                ..
-            })) => {
+            SwarmEvent::Behaviour(CombinedEvent::Kademlia(
+                kad::Event::OutboundQueryProgressed {
+                    result: kad::QueryResult::GetClosestPeers(Err(e)),
+                    ..
+                },
+            )) => {
                 debug!(error = ?e, "Kademlia get_closest_peers query failed");
             }
             SwarmEvent::Behaviour(CombinedEvent::Identify(identify::Event::Received {
@@ -1132,7 +1136,10 @@ fn expected_signer(message: &P2PMessage) -> Option<&Hotkey> {
 fn requires_validator(message: &P2PMessage) -> bool {
     // Submissions and PeerAnnounce don't require validator status
     // PeerAnnounce is verified separately in handle_peer_announce
-    !matches!(message, P2PMessage::Submission(_) | P2PMessage::PeerAnnounce(_))
+    !matches!(
+        message,
+        P2PMessage::Submission(_) | P2PMessage::PeerAnnounce(_)
+    )
 }
 
 fn validate_weight_vote_hash(message: &WeightVoteMessage) -> Result<(), NetworkError> {
@@ -1161,7 +1168,7 @@ fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
 /// Returns a multiaddr with the detected IP and default P2P port
 async fn detect_public_ip() -> Option<Multiaddr> {
     use crate::config::DEFAULT_P2P_PORT;
-    
+
     // Try multiple services for reliability
     let services = [
         "https://api.ipify.org",
@@ -1169,12 +1176,9 @@ async fn detect_public_ip() -> Option<Multiaddr> {
         "https://icanhazip.com",
         "https://ipinfo.io/ip",
     ];
-    
+
     for service in services {
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            fetch_public_ip(service),
-        ).await {
+        match tokio::time::timeout(Duration::from_secs(5), fetch_public_ip(service)).await {
             Ok(Some(ip)) => {
                 // Validate it's a public IP (not private/local)
                 if is_public_ip(&ip) {
@@ -1191,7 +1195,7 @@ async fn detect_public_ip() -> Option<Multiaddr> {
             }
         }
     }
-    
+
     None
 }
 
@@ -1202,7 +1206,7 @@ async fn fetch_public_ip(url: &str) -> Option<String> {
         .output()
         .await
         .ok()?;
-    
+
     if output.status.success() {
         let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
         // Validate it looks like an IP
@@ -1210,7 +1214,7 @@ async fn fetch_public_ip(url: &str) -> Option<String> {
             return Some(ip);
         }
     }
-    
+
     None
 }
 
@@ -1406,8 +1410,6 @@ impl NetworkRunner {
         Ok(())
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
