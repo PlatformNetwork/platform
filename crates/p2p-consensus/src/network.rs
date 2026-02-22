@@ -299,6 +299,7 @@ impl P2PNetwork {
             .mesh_n(3)
             .mesh_n_low(1)
             .mesh_n_high(6)
+            .mesh_outbound_min(0)
             .build()
             .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
 
@@ -883,6 +884,7 @@ impl P2PNetwork {
             .mesh_n(3)
             .mesh_n_low(1)
             .mesh_n_high(6)
+            .mesh_outbound_min(0)
             .build()
             .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
 
