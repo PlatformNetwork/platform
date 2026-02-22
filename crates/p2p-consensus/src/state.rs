@@ -459,7 +459,7 @@ impl ChainState {
         approve: bool,
     ) -> Option<bool> {
         let total_validators = self.validators.len();
-        
+
         if let Some(proposal) = self.pending_storage_proposals.get_mut(proposal_id) {
             if proposal.finalized {
                 return None;
@@ -1304,6 +1304,7 @@ mod tests {
             is_active: true,
             creator: Hotkey([0u8; 32]),
             created_at: chrono::Utc::now().timestamp_millis(),
+            wasm_hash: [0u8; 32],
         };
 
         let id = config.id;

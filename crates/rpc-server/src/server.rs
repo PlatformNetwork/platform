@@ -819,12 +819,9 @@ mod tests {
 }
 
 /// Handler for sudo challenge management
-async fn sudo_challenge_handler(
-    _handler: Arc<RpcHandler>,
-    body: Value,
-) -> impl IntoResponse {
+async fn sudo_challenge_handler(_handler: Arc<RpcHandler>, body: Value) -> impl IntoResponse {
     use serde::Deserialize;
-    
+
     #[derive(Deserialize)]
     struct SudoRequest {
         action: String,
@@ -836,7 +833,7 @@ async fn sudo_challenge_handler(
         signature: String,
         timestamp: i64,
     }
-    
+
     // Parse the request
     let request: SudoRequest = match serde_json::from_value(body) {
         Ok(r) => r,
@@ -850,7 +847,7 @@ async fn sudo_challenge_handler(
             );
         }
     };
-    
+
     // Verify the timestamp is recent (within 5 minutes)
     let now = chrono::Utc::now().timestamp_millis();
     if (now - request.timestamp).abs() > 5 * 60 * 1000 {
@@ -862,7 +859,7 @@ async fn sudo_challenge_handler(
             })),
         );
     }
-    
+
     // Verify the signature
     let signature_bytes = match hex::decode(&request.signature) {
         Ok(s) => s,
@@ -876,7 +873,7 @@ async fn sudo_challenge_handler(
             );
         }
     };
-    
+
     // Check if signature is from sudo key
     // TODO: Verify signature against SUDO_KEY_BYTES
     if signature_bytes.len() != 64 {
@@ -888,7 +885,7 @@ async fn sudo_challenge_handler(
             })),
         );
     }
-    
+
     // For now, just log the request and return success
     // The actual P2P broadcast would happen here
     info!(
@@ -896,7 +893,7 @@ async fn sudo_challenge_handler(
         challenge_id = %request.challenge_id,
         "Received sudo challenge request"
     );
-    
+
     (
         StatusCode::OK,
         Json(serde_json::json!({

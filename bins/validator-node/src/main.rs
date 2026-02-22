@@ -1096,14 +1096,17 @@ async fn handle_network_event(
                         data_bytes = update.data.len(),
                         "Received authorized challenge update from sudo key"
                     );
-                    
+
                     // Handle different update types
                     let challenge_id_str = update.challenge_id.to_string();
                     match update.update_type.as_str() {
                         "wasm_upload" => {
                             // Store WASM in distributed storage
                             let wasm_key = StorageKey::new("wasm", &challenge_id_str);
-                            match storage.put(wasm_key, update.data.clone(), PutOptions::default()).await {
+                            match storage
+                                .put(wasm_key, update.data.clone(), PutOptions::default())
+                                .await
+                            {
                                 Ok(metadata) => {
                                     info!(
                                         challenge_id = %update.challenge_id,
@@ -1114,19 +1117,21 @@ async fn handle_network_event(
                                     // Register challenge in state if not exists
                                     state_manager.apply(|state| {
                                         if state.get_challenge(&update.challenge_id).is_none() {
-                                            let challenge_config = platform_p2p_consensus::ChallengeConfig {
-                                                id: update.challenge_id,
-                                                name: challenge_id_str.clone(),
-                                                weight: 100, // Default weight
-                                                is_active: true,
-                                                creator: update.updater.clone(),
-                                                created_at: chrono::Utc::now().timestamp_millis(),
-                                                wasm_hash: metadata.value_hash,
-                                            };
+                                            let challenge_config =
+                                                platform_p2p_consensus::ChallengeConfig {
+                                                    id: update.challenge_id,
+                                                    name: challenge_id_str.clone(),
+                                                    weight: 100, // Default weight
+                                                    is_active: true,
+                                                    creator: update.updater.clone(),
+                                                    created_at: chrono::Utc::now()
+                                                        .timestamp_millis(),
+                                                    wasm_hash: metadata.value_hash,
+                                                };
                                             state.add_challenge(challenge_config);
                                         }
                                     });
-                                    
+
                                     // Load and log WASM routes
                                     if let Some(ref executor) = wasm_executor_ref {
                                         match executor.execute_get_routes(
@@ -1195,7 +1200,7 @@ async fn handle_network_event(
                             );
                         }
                     }
-                    
+
                     // Invalidate WASM cache
                     if let Some(ref executor) = wasm_executor_ref {
                         executor.invalidate_cache(&challenge_id_str);
@@ -1217,10 +1222,10 @@ async fn handle_network_event(
                     value_len = proposal.value.len(),
                     "Received storage proposal"
                 );
-                
+
                 // Verify proposer is a known validator
                 let proposer_valid = validator_set.is_validator(&proposal.proposer);
-                
+
                 if !proposer_valid {
                     warn!(
                         proposer = %proposal.proposer.to_hex(),
@@ -1238,21 +1243,21 @@ async fn handle_network_event(
                         votes: std::collections::HashMap::new(),
                         finalized: false,
                     };
-                    
+
                     state_manager.apply(|state| {
                         state.add_storage_proposal(storage_proposal);
                     });
-                    
+
                     // Auto-vote approve (validator trusts other validators)
                     // In production, could verify via WASM validate_storage_write
                     let my_hotkey = keypair.hotkey();
                     let timestamp = chrono::Utc::now().timestamp_millis();
-                    
+
                     // Sign the vote
                     let vote_data = bincode::serialize(&(&proposal.proposal_id, true, timestamp))
                         .unwrap_or_default();
                     let signature = keypair.sign_bytes(&vote_data).unwrap_or_default();
-                    
+
                     let vote_msg = P2PMessage::StorageVote(StorageVoteMessage {
                         proposal_id: proposal.proposal_id,
                         voter: my_hotkey,
@@ -1260,8 +1265,11 @@ async fn handle_network_event(
                         timestamp,
                         signature,
                     });
-                    
-                    if let Err(e) = p2p_cmd_tx.send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg)).await {
+
+                    if let Err(e) = p2p_cmd_tx
+                        .send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg))
+                        .await
+                    {
                         warn!(error = %e, "Failed to broadcast storage vote");
                     }
                 }
@@ -1273,29 +1281,35 @@ async fn handle_network_event(
                     approve = vote.approve,
                     "Received storage vote"
                 );
-                
+
                 // Verify voter is a known validator
                 if !validator_set.is_validator(&vote.voter) {
                     warn!(voter = %vote.voter.to_hex(), "Vote from unknown validator");
                 } else {
                     // Add vote to proposal
                     let consensus_result = state_manager.apply(|state| {
-                        state.vote_storage_proposal(&vote.proposal_id, vote.voter.clone(), vote.approve)
+                        state.vote_storage_proposal(
+                            &vote.proposal_id,
+                            vote.voter.clone(),
+                            vote.approve,
+                        )
                     });
-                    
+
                     // If consensus reached and approved, write to distributed storage
                     if let Some(true) = consensus_result {
-                        let proposal_opt = state_manager.apply(|state| {
-                            state.remove_storage_proposal(&vote.proposal_id)
-                        });
-                        
+                        let proposal_opt = state_manager
+                            .apply(|state| state.remove_storage_proposal(&vote.proposal_id));
+
                         if let Some(proposal) = proposal_opt {
                             let storage_key = StorageKey::new(
                                 &format!("challenge:{}", proposal.challenge_id),
                                 &proposal.key,
                             );
-                            
-                            match storage.put(storage_key, proposal.value.clone(), PutOptions::default()).await {
+
+                            match storage
+                                .put(storage_key, proposal.value.clone(), PutOptions::default())
+                                .await
+                            {
                                 Ok(_) => {
                                     info!(
                                         proposal_id = %hex::encode(&proposal.proposal_id[..8]),

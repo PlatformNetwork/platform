@@ -928,7 +928,7 @@ impl WasmChallengeExecutor {
                         .await
                 })
             });
-            
+
             match result {
                 Ok(Some(stored)) => {
                     info!(
@@ -939,7 +939,10 @@ impl WasmChallengeExecutor {
                     Some(stored.data)
                 }
                 Ok(None) => {
-                    debug!(module = module_path, "WASM module not found in distributed storage");
+                    debug!(
+                        module = module_path,
+                        "WASM module not found in distributed storage"
+                    );
                     None
                 }
                 Err(e) => {
@@ -956,8 +959,9 @@ impl WasmChallengeExecutor {
             Some(bytes) => bytes,
             None => {
                 let full_path = self.config.module_dir.join(module_path);
-                std::fs::read(&full_path)
-                    .with_context(|| format!("Failed to read WASM module from {}", full_path.display()))?
+                std::fs::read(&full_path).with_context(|| {
+                    format!("Failed to read WASM module from {}", full_path.display())
+                })?
             }
         };
 

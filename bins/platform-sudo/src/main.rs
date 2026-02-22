@@ -10,7 +10,7 @@ use rustyline::DefaultEditor;
 use serde::{Deserialize, Serialize};
 use sp_core::{sr25519, Pair};
 use std::path::PathBuf;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Parser)]
 #[command(name = "platform-sudo")]
@@ -104,15 +104,16 @@ impl SudoCli {
     fn new(rpc_url: String, sudo_key: Option<String>) -> Result<Self> {
         let keypair = if let Some(key) = sudo_key {
             // Try to parse as hex or file
-            let key_bytes = if key.starts_with("0x") {
-                hex::decode(&key[2..]).context("Invalid hex key")?
+            let key_bytes = if let Some(stripped) = key.strip_prefix("0x") {
+                hex::decode(stripped).context("Invalid hex key")?
             } else if std::path::Path::new(&key).exists() {
                 std::fs::read(&key).context("Failed to read key file")?
             } else {
                 hex::decode(&key).context("Invalid hex key")?
             };
-            
-            let seed: [u8; 32] = key_bytes.try_into()
+
+            let seed: [u8; 32] = key_bytes
+                .try_into()
                 .map_err(|_| anyhow::anyhow!("Key must be 32 bytes"))?;
             Some(sr25519::Pair::from_seed(&seed))
         } else {
@@ -127,21 +128,29 @@ impl SudoCli {
     }
 
     fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
-        let keypair = self.keypair.as_ref()
+        let keypair = self
+            .keypair
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sudo key not configured"))?;
         Ok(keypair.sign(data).0.to_vec())
     }
 
     fn hotkey(&self) -> Result<Hotkey> {
-        let keypair = self.keypair.as_ref()
+        let keypair = self
+            .keypair
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sudo key not configured"))?;
         Ok(Hotkey(keypair.public().0))
     }
 
-    async fn upload_wasm(&self, file: &PathBuf, challenge_id: &str, name: Option<String>) -> Result<()> {
-        let wasm_bytes = std::fs::read(file)
-            .context("Failed to read WASM file")?;
-        
+    async fn upload_wasm(
+        &self,
+        file: &PathBuf,
+        challenge_id: &str,
+        name: Option<String>,
+    ) -> Result<()> {
+        let wasm_bytes = std::fs::read(file).context("Failed to read WASM file")?;
+
         info!(file = %file.display(), size = wasm_bytes.len(), "Uploading WASM module");
 
         let challenge_id = if challenge_id == "new" {
@@ -151,7 +160,7 @@ impl SudoCli {
         };
 
         let timestamp = chrono::Utc::now().timestamp_millis();
-        
+
         // Create the update message
         let update = ChallengeUpdateMessage {
             challenge_id,
@@ -176,7 +185,8 @@ impl SudoCli {
             timestamp,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/sudo/challenge", self.rpc_url))
             .json(&request)
             .send()
@@ -202,7 +212,7 @@ impl SudoCli {
     async fn set_challenge_status(&self, challenge_id: &str, active: bool) -> Result<()> {
         let action = if active { "activate" } else { "deactivate" };
         let timestamp = chrono::Utc::now().timestamp_millis();
-        
+
         let challenge_id = ChallengeId::from_string(challenge_id);
 
         let update = ChallengeUpdateMessage {
@@ -226,7 +236,8 @@ impl SudoCli {
             timestamp,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/sudo/challenge", self.rpc_url))
             .json(&request)
             .send()
@@ -250,7 +261,8 @@ impl SudoCli {
     }
 
     async fn list_challenges(&self) -> Result<()> {
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/challenges", self.rpc_url))
             .send()
             .await
@@ -273,7 +285,8 @@ impl SudoCli {
     }
 
     async fn status(&self) -> Result<()> {
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/health", self.rpc_url))
             .send()
             .await
@@ -294,7 +307,7 @@ impl SudoCli {
 
     async fn interactive(&self) -> Result<()> {
         let mut rl = DefaultEditor::new()?;
-        
+
         println!("\nPlatform Sudo CLI - Interactive Mode");
         println!("Type 'help' for available commands, 'exit' to quit\n");
 
@@ -303,8 +316,8 @@ impl SudoCli {
             match readline {
                 Ok(line) => {
                     let _ = rl.add_history_entry(&line);
-                    let parts: Vec<&str> = line.trim().split_whitespace().collect();
-                    
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+
                     if parts.is_empty() {
                         continue;
                     }
@@ -314,9 +327,15 @@ impl SudoCli {
                             println!("\nCommands:");
                             println!("  upload <file> <challenge_id> [name]  - Upload WASM module");
                             println!("  activate <challenge_id>              - Activate challenge");
-                            println!("  deactivate <challenge_id>            - Deactivate challenge");
-                            println!("  list                                 - List all challenges");
-                            println!("  status                               - Show validator status");
+                            println!(
+                                "  deactivate <challenge_id>            - Deactivate challenge"
+                            );
+                            println!(
+                                "  list                                 - List all challenges"
+                            );
+                            println!(
+                                "  status                               - Show validator status"
+                            );
                             println!("  exit | quit                          - Exit CLI\n");
                         }
                         "upload" if parts.len() >= 3 => {
@@ -356,8 +375,8 @@ impl SudoCli {
                         }
                     }
                 }
-                Err(rustyline::error::ReadlineError::Interrupted) |
-                Err(rustyline::error::ReadlineError::Eof) => {
+                Err(rustyline::error::ReadlineError::Interrupted)
+                | Err(rustyline::error::ReadlineError::Eof) => {
                     println!("\nGoodbye!");
                     break;
                 }
