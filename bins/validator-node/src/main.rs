@@ -195,7 +195,7 @@ struct Args {
     bootnode: bool,
 
     /// Also run an embedded bootnode on a separate port (validator + bootnode mode)
-    #[arg(long)]
+    #[arg(long, env = "WITH_BOOTNODE")]
     with_bootnode: bool,
 
     /// Bootnode P2P port (only used with --with-bootnode)
