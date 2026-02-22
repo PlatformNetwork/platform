@@ -23,7 +23,8 @@ use platform_core::{
     ChallengeId, Hotkey, Keypair, SUDO_KEY_SS58,
 };
 use platform_distributed_storage::{
-    DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
+    DistributedStore, DistributedStoreExt, LocalStorage, LocalStorageBuilder, PutOptions,
+    StorageKey,
 };
 use platform_p2p_consensus::{
     ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord,
@@ -496,6 +497,7 @@ async fn main() -> Result<()> {
         storage_host_config: wasm_runtime_interface::StorageHostConfig::default(),
         storage_backend: std::sync::Arc::new(wasm_runtime_interface::InMemoryStorageBackend::new()),
         chutes_api_key: None,
+        distributed_storage: Some(Arc::clone(&storage)),
     }) {
         Ok(executor) => {
             info!(
@@ -557,6 +559,7 @@ async fn main() -> Result<()> {
                     &validator_set,
                     &state_manager,
                     &wasm_executor,
+                    &storage,
                 ).await;
             }
 
@@ -796,6 +799,7 @@ async fn handle_network_event(
     validator_set: &Arc<ValidatorSet>,
     state_manager: &Arc<StateManager>,
     wasm_executor_ref: &Option<Arc<WasmChallengeExecutor>>,
+    storage: &Arc<LocalStorage>,
 ) {
     match event {
         NetworkEvent::Message { source, message } => match message {
@@ -1087,8 +1091,70 @@ async fn handle_network_event(
                         data_bytes = update.data.len(),
                         "Received authorized challenge update from sudo key"
                     );
+                    
+                    // Handle different update types
+                    let challenge_id_str = update.challenge_id.to_string();
+                    match update.update_type.as_str() {
+                        "wasm_upload" => {
+                            // Store WASM in distributed storage
+                            let wasm_key = StorageKey::new("wasm", &challenge_id_str);
+                            match storage.put(wasm_key, update.data.clone(), PutOptions::default()).await {
+                                Ok(metadata) => {
+                                    info!(
+                                        challenge_id = %update.challenge_id,
+                                        version = metadata.version,
+                                        size_bytes = update.data.len(),
+                                        "Stored WASM module in distributed storage"
+                                    );
+                                    // Register challenge in state if not exists
+                                    state_manager.apply(|state| {
+                                        if state.get_challenge(&update.challenge_id).is_none() {
+                                            let challenge_config = platform_p2p_consensus::ChallengeConfig {
+                                                id: update.challenge_id,
+                                                name: challenge_id_str.clone(),
+                                                weight: 100, // Default weight
+                                                is_active: true,
+                                                creator: update.updater.clone(),
+                                                created_at: chrono::Utc::now().timestamp_millis(),
+                                                wasm_hash: metadata.value_hash,
+                                            };
+                                            state.add_challenge(challenge_config);
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    error!(
+                                        challenge_id = %update.challenge_id,
+                                        error = %e,
+                                        "Failed to store WASM module"
+                                    );
+                                }
+                            }
+                        }
+                        "activate" => {
+                            state_manager.apply(|state| {
+                                state.set_challenge_active(&update.challenge_id, true);
+                            });
+                            info!(challenge_id = %update.challenge_id, "Challenge activated");
+                        }
+                        "deactivate" => {
+                            state_manager.apply(|state| {
+                                state.set_challenge_active(&update.challenge_id, false);
+                            });
+                            info!(challenge_id = %update.challenge_id, "Challenge deactivated");
+                        }
+                        other => {
+                            warn!(
+                                challenge_id = %update.challenge_id,
+                                update_type = %other,
+                                "Unknown challenge update type"
+                            );
+                        }
+                    }
+                    
+                    // Invalidate WASM cache
                     if let Some(ref executor) = wasm_executor_ref {
-                        executor.invalidate_cache(&update.challenge_id.to_string());
+                        executor.invalidate_cache(&challenge_id_str);
                     }
                 } else {
                     warn!(

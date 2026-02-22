@@ -71,6 +71,8 @@ pub struct WasmExecutorConfig {
     pub storage_host_config: StorageHostConfig,
     pub storage_backend: Arc<dyn StorageBackend>,
     pub chutes_api_key: Option<String>,
+    /// Optional distributed storage for loading WASM modules
+    pub distributed_storage: Option<Arc<platform_distributed_storage::LocalStorage>>,
 }
 
 impl std::fmt::Debug for WasmExecutorConfig {
@@ -98,6 +100,7 @@ impl Default for WasmExecutorConfig {
             storage_host_config: StorageHostConfig::default(),
             storage_backend: Arc::new(InMemoryStorageBackend::new()),
             chutes_api_key: None,
+            distributed_storage: None,
         }
     }
 }
@@ -912,9 +915,51 @@ impl WasmChallengeExecutor {
             }
         }
 
-        let full_path = self.config.module_dir.join(module_path);
-        let wasm_bytes = std::fs::read(&full_path)
-            .with_context(|| format!("Failed to read WASM module from {}", full_path.display()))?;
+        // Try to load from distributed storage first
+        let wasm_bytes = if let Some(ref storage) = self.config.distributed_storage {
+            // Use blocking task to call async storage
+            let storage = Arc::clone(storage);
+            let key = platform_distributed_storage::StorageKey::new("wasm", module_path);
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    use platform_distributed_storage::DistributedStore;
+                    storage
+                        .get(&key, platform_distributed_storage::GetOptions::default())
+                        .await
+                })
+            });
+            
+            match result {
+                Ok(Some(stored)) => {
+                    info!(
+                        module = module_path,
+                        size_bytes = stored.data.len(),
+                        "Loading WASM module from distributed storage"
+                    );
+                    Some(stored.data)
+                }
+                Ok(None) => {
+                    debug!(module = module_path, "WASM module not found in distributed storage");
+                    None
+                }
+                Err(e) => {
+                    debug!(module = module_path, error = %e, "Failed to load from distributed storage");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Fallback to filesystem if not in distributed storage
+        let wasm_bytes = match wasm_bytes {
+            Some(bytes) => bytes,
+            None => {
+                let full_path = self.config.module_dir.join(module_path);
+                std::fs::read(&full_path)
+                    .with_context(|| format!("Failed to read WASM module from {}", full_path.display()))?
+            }
+        };
 
         info!(
             module = module_path,

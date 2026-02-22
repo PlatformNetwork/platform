@@ -92,6 +92,9 @@ pub struct ChallengeConfig {
     pub creator: Hotkey,
     /// Creation timestamp
     pub created_at: i64,
+    /// WASM module hash (SHA256)
+    #[serde(default)]
+    pub wasm_hash: [u8; 32],
 }
 
 /// Weight votes for epoch finalization
@@ -401,6 +404,19 @@ impl ChainState {
             self.increment_sequence();
         }
         removed
+    }
+
+    /// Get a challenge by ID
+    pub fn get_challenge(&self, id: &ChallengeId) -> Option<&ChallengeConfig> {
+        self.challenges.get(id)
+    }
+
+    /// Set challenge active status
+    pub fn set_challenge_active(&mut self, id: &ChallengeId, active: bool) {
+        if let Some(config) = self.challenges.get_mut(id) {
+            config.is_active = active;
+            self.increment_sequence();
+        }
     }
 
     /// Add an evaluation record
