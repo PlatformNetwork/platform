@@ -728,6 +728,7 @@ async fn main() -> Result<()> {
                                 if is_valid {
                                 let challenge_id_str = challenge_id.to_string();
                                 let wasm_key = StorageKey::new("wasm", &challenge_id_str);
+                                let wasm_data = data.clone(); // Clone for route loading later
                                 match storage.put(wasm_key, data, PutOptions::default()).await {
                                     Ok(metadata) => {
                                         info!(
@@ -756,13 +757,53 @@ async fn main() -> Result<()> {
                                             cs.register_wasm_challenge(wasm_config);
                                         }
 
-                                        // TODO: Route loading disabled due to tokio runtime nesting issues
-                                        // Routes will be loaded on-demand when requested via RPC
-                                        let _ = wasm_executor;
-                                        /*
-                                        // Load and register routes using the WASM bytes we already have
+                                        // Load routes in a blocking thread to avoid tokio runtime issues
                                         if let Some(ref executor) = wasm_executor {
-                                            // Get the WASM bytes from distributed storage (just stored)
+                                            let wasm_bytes = wasm_data.clone();
+                                            let executor = executor.clone();
+                                            let challenge_id_for_routes = challenge_id;
+                                            let challenge_id_str_for_routes = challenge_id_str.clone();
+                                            let chain_state_for_routes = chain_state.clone();
+
+                                            std::thread::spawn(move || {
+                                                match executor.execute_get_routes_from_bytes(
+                                                    &challenge_id_str_for_routes,
+                                                    &wasm_bytes,
+                                                    &wasm_runtime_interface::NetworkPolicy::default(),
+                                                    &wasm_runtime_interface::SandboxPolicy::default(),
+                                                ) {
+                                                    Ok((routes_data, _)) => {
+                                                        if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
+                                                            tracing::info!(
+                                                                challenge_id = %challenge_id_for_routes,
+                                                                routes_count = routes.len(),
+                                                                "Loaded WASM challenge routes (local upload)"
+                                                            );
+                                                            let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes.iter().map(|r| {
+                                                                platform_core::ChallengeRouteInfo {
+                                                                    method: r.method.clone(),
+                                                                    path: r.path.clone(),
+                                                                    description: r.description.clone(),
+                                                                    requires_auth: r.requires_auth,
+                                                                }
+                                                            }).collect();
+                                                            let mut cs = chain_state_for_routes.write();
+                                                            cs.register_challenge_routes(challenge_id_for_routes, route_infos);
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::debug!(
+                                                            challenge_id = %challenge_id_for_routes,
+                                                            error = %e,
+                                                            "No routes exported by WASM module"
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        /*
+                                        // Old code - kept for reference
+                                        if let Some(ref executor) = wasm_executor {
                                             let wasm_bytes_result = storage.get(
                                                 &StorageKey::new("wasm", &challenge_id_str),
                                                 platform_distributed_storage::GetOptions::default()
@@ -1434,9 +1475,61 @@ async fn handle_network_event(
                                             cs.register_wasm_challenge(wasm_config);
                                         }
 
-                                        // TODO: Route loading disabled due to tokio runtime nesting issues
-                                        // Routes will be loaded on-demand when requested via RPC
-                                        let _ = wasm_executor_ref;
+                                        // Load routes in a blocking thread to avoid tokio runtime issues
+                                        if let Some(ref executor) = wasm_executor_ref {
+                                            let wasm_bytes = update.data.clone();
+                                            let executor = executor.clone();
+                                            let challenge_id_for_routes = update.challenge_id;
+                                            let challenge_id_str_for_routes =
+                                                challenge_id_str.clone();
+                                            let chain_state_for_routes = chain_state.clone();
+
+                                            std::thread::spawn(move || {
+                                                match executor.execute_get_routes_from_bytes(
+                                                    &challenge_id_str_for_routes,
+                                                    &wasm_bytes,
+                                                    &wasm_runtime_interface::NetworkPolicy::default(),
+                                                    &wasm_runtime_interface::SandboxPolicy::default(),
+                                                ) {
+                                                    Ok((routes_data, _)) => {
+                                                        if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
+                                                            tracing::info!(
+                                                                challenge_id = %challenge_id_for_routes,
+                                                                routes_count = routes.len(),
+                                                                "Loaded WASM challenge routes (P2P)"
+                                                            );
+                                                            for route in &routes {
+                                                                tracing::info!(
+                                                                    challenge_id = %challenge_id_for_routes,
+                                                                    method = %route.method,
+                                                                    path = %route.path,
+                                                                    "  Route: {} {}",
+                                                                    route.method,
+                                                                    route.path
+                                                                );
+                                                            }
+                                                            let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes.iter().map(|r| {
+                                                                platform_core::ChallengeRouteInfo {
+                                                                    method: r.method.clone(),
+                                                                    path: r.path.clone(),
+                                                                    description: r.description.clone(),
+                                                                    requires_auth: r.requires_auth,
+                                                                }
+                                                            }).collect();
+                                                            let mut cs = chain_state_for_routes.write();
+                                                            cs.register_challenge_routes(challenge_id_for_routes, route_infos);
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::debug!(
+                                                            challenge_id = %challenge_id_for_routes,
+                                                            error = %e,
+                                                            "No routes exported by WASM module"
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         error!(
