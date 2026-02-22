@@ -971,7 +971,7 @@ impl P2PNetwork {
                 peer_id,
                 topic,
             })) => {
-                debug!(peer = %peer_id, topic = %topic, "Peer subscribed to topic");
+                info!(peer = %peer_id, topic = %topic, "Peer subscribed to topic");
             }
             SwarmEvent::Behaviour(CombinedEvent::Kademlia(kad::Event::RoutingUpdated {
                 peer,
