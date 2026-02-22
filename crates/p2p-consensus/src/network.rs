@@ -191,7 +191,6 @@ const RATE_LIMIT_WINDOW_MS: i64 = 1000;
 const NONCE_EXPIRY_MS: i64 = 5 * 60 * 1000;
 
 /// Authentication timeout in seconds - peers must send PeerAnnounce within this time
-
 /// P2P network node
 pub struct P2PNetwork {
     /// Local keypair
