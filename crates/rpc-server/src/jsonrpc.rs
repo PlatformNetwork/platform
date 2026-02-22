@@ -1158,11 +1158,25 @@ impl RpcHandler {
         // Verify the challenge has registered routes
         {
             let routes = self.challenge_routes.read();
-            if !routes.contains_key(&challenge_id) {
-                // Try to find by name
+            let has_routes = routes.contains_key(&challenge_id);
+            drop(routes);
+
+            if !has_routes {
+                // Check chain_state.challenge_routes for WASM challenges
                 let chain = self.chain_state.read();
-                let found = chain.challenges.values().any(|c| c.name == challenge_id);
-                if !found {
+                let challenge_uuid = uuid::Uuid::parse_str(&challenge_id)
+                    .ok()
+                    .map(platform_core::ChallengeId);
+
+                let found_in_chain = challenge_uuid
+                    .as_ref()
+                    .map(|id| chain.challenge_routes.contains_key(id))
+                    .unwrap_or(false);
+
+                // Also check legacy challenges by name
+                let found_legacy = chain.challenges.values().any(|c| c.name == challenge_id);
+
+                if !found_in_chain && !found_legacy {
                     return JsonRpcResponse::error(
                         id,
                         CHALLENGE_NOT_FOUND,
