@@ -26,6 +26,7 @@ bincode = { workspace = true }
 # Crypto
 sp-core = { version = "31.0", default-features = false, features = ["std"] }
 hex = { workspace = true }
+base64 = "0.22"
 
 # Utils
 tracing = { workspace = true }

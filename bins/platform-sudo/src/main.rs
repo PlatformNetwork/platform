@@ -3,8 +3,7 @@
 use anyhow::{Context, Result};
 use base64::Engine;
 use clap::{Parser, Subcommand};
-use platform_core::{ChallengeId, Hotkey};
-use platform_p2p_consensus::messages::ChallengeUpdateMessage;
+use platform_core::ChallengeId;
 use reqwest::Client;
 use rustyline::DefaultEditor;
 use serde::{Deserialize, Serialize};
@@ -144,14 +143,6 @@ impl SudoCli {
         Ok(keypair.sign(data).0.to_vec())
     }
 
-    fn hotkey(&self) -> Result<Hotkey> {
-        let keypair = self
-            .keypair
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Sudo key not configured"))?;
-        Ok(Hotkey(keypair.public().0))
-    }
-
     async fn upload_wasm(
         &self,
         file: &PathBuf,
@@ -170,19 +161,9 @@ impl SudoCli {
 
         let timestamp = chrono::Utc::now().timestamp_millis();
 
-        // Create the update message
-        let update = ChallengeUpdateMessage {
-            challenge_id,
-            updater: self.hotkey()?,
-            update_type: "wasm_upload".to_string(),
-            data: wasm_bytes.clone(),
-            timestamp,
-            signature: vec![],
-        };
-
-        // Sign the message
-        let msg_bytes = serde_json::to_vec(&update)?;
-        let signature = self.sign(&msg_bytes)?;
+        // Sign the message (format must match server: "sudo:{action}:{challenge_id}:{timestamp}")
+        let msg_to_sign = format!("sudo:wasm_upload:{}:{}", challenge_id, timestamp);
+        let signature = self.sign(msg_to_sign.as_bytes())?;
 
         // Send via RPC
         let request = SudoRequest {
@@ -224,17 +205,9 @@ impl SudoCli {
 
         let challenge_id = ChallengeId::from_string(challenge_id);
 
-        let update = ChallengeUpdateMessage {
-            challenge_id,
-            updater: self.hotkey()?,
-            update_type: action.to_string(),
-            data: vec![],
-            timestamp,
-            signature: vec![],
-        };
-
-        let msg_bytes = serde_json::to_vec(&update)?;
-        let signature = self.sign(&msg_bytes)?;
+        // Sign the message (format must match server: "sudo:{action}:{challenge_id}:{timestamp}")
+        let msg_to_sign = format!("sudo:{}:{}:{}", action, challenge_id, timestamp);
+        let signature = self.sign(msg_to_sign.as_bytes())?;
 
         let request = SudoRequest {
             action: action.to_string(),

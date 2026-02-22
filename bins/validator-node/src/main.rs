@@ -544,6 +544,10 @@ async fn main() -> Result<()> {
             }
         };
 
+    // Create channel for RPC -> P2P communication
+    let (rpc_p2p_tx, mut rpc_p2p_rx) =
+        tokio::sync::mpsc::channel::<platform_rpc::RpcP2PCommand>(64);
+
     // Start RPC server (enabled by default)
     if !args.no_rpc {
         let rpc_addr: std::net::SocketAddr =
@@ -560,7 +564,8 @@ async fn main() -> Result<()> {
             cors_enabled: true,
         };
 
-        let rpc_server = RpcServer::new(rpc_config, chain_state_for_rpc, bans);
+        let rpc_server =
+            RpcServer::with_p2p(rpc_config, chain_state_for_rpc, bans, rpc_p2p_tx.clone());
 
         tokio::spawn(async move {
             if let Err(e) = rpc_server.run().await {
@@ -621,6 +626,66 @@ async fn main() -> Result<()> {
                     &wasm_executor,
                     &keypair,
                 ).await;
+            }
+
+            // RPC -> P2P commands (challenge updates from sudo)
+            Some(cmd) = rpc_p2p_rx.recv() => {
+                match cmd {
+                    platform_rpc::RpcP2PCommand::BroadcastChallengeUpdate { challenge_id, update_type, data } => {
+                        info!(
+                            challenge_id = %challenge_id,
+                            update_type = %update_type,
+                            data_bytes = data.len(),
+                            "Broadcasting ChallengeUpdate from RPC"
+                        );
+
+                        // Create and sign the message
+                        let timestamp = chrono::Utc::now().timestamp_millis();
+                        let msg_to_sign = format!("challenge_update:{}:{}:{}", challenge_id, update_type, timestamp);
+                        let signature = keypair.sign(msg_to_sign.as_bytes());
+
+                        let update_msg = platform_p2p_consensus::ChallengeUpdateMessage {
+                            challenge_id,
+                            updater: keypair.hotkey(),
+                            update_type: update_type.clone(),
+                            data: data.clone(),
+                            timestamp,
+                            signature: signature.signature.to_vec(),
+                        };
+
+                        let msg = P2PMessage::ChallengeUpdate(update_msg);
+                        if let Err(e) = p2p_broadcast_tx.send(platform_p2p_consensus::P2PCommand::Broadcast(msg)).await {
+                            error!("Failed to broadcast ChallengeUpdate: {}", e);
+                        } else {
+                            info!(
+                                challenge_id = %challenge_id,
+                                update_type = %update_type,
+                                "ChallengeUpdate broadcast successful"
+                            );
+
+                            // Also handle locally (store WASM if it's an upload)
+                            if update_type == "wasm_upload" && !data.is_empty() {
+                                let wasm_key = StorageKey::new("wasm", &challenge_id.to_string());
+                                match storage.put(wasm_key, data, PutOptions::default()).await {
+                                    Ok(metadata) => {
+                                        info!(
+                                            challenge_id = %challenge_id,
+                                            version = metadata.version,
+                                            "WASM stored locally in distributed storage"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            challenge_id = %challenge_id,
+                                            error = %e,
+                                            "Failed to store WASM locally"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Heartbeat - broadcast to other validators (skip in bootnode mode)

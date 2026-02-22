@@ -9,14 +9,17 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine;
 use parking_lot::RwLock;
 use platform_challenge_sdk::RouteRequest;
-use platform_core::ChainState;
+use platform_core::{ChainState, ChallengeId, Hotkey, SUDO_KEY_BYTES};
 use platform_subnet_manager::BanList;
 use serde_json::Value;
+use sp_core::Pair;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info, trace, warn};
@@ -48,11 +51,23 @@ impl Default for RpcConfig {
     }
 }
 
+/// Command for broadcasting P2P messages from RPC
+#[derive(Debug, Clone)]
+pub enum RpcP2PCommand {
+    /// Broadcast a ChallengeUpdate message
+    BroadcastChallengeUpdate {
+        challenge_id: ChallengeId,
+        update_type: String,
+        data: Vec<u8>,
+    },
+}
+
 /// RPC Server
 pub struct RpcServer {
     config: RpcConfig,
     state: Arc<RpcState>,
     rpc_handler: Arc<RpcHandler>,
+    p2p_tx: Option<mpsc::Sender<RpcP2PCommand>>,
 }
 
 impl RpcServer {
@@ -76,6 +91,32 @@ impl RpcServer {
             config,
             state,
             rpc_handler,
+            p2p_tx: None,
+        }
+    }
+
+    /// Create a new RPC server with P2P broadcast capability
+    pub fn with_p2p(
+        config: RpcConfig,
+        chain_state: Arc<RwLock<ChainState>>,
+        bans: Arc<RwLock<BanList>>,
+        p2p_tx: mpsc::Sender<RpcP2PCommand>,
+    ) -> Self {
+        let state = Arc::new(RpcState::new(
+            chain_state.clone(),
+            bans,
+            config.netuid,
+            config.name.clone(),
+            config.min_stake,
+        ));
+
+        let rpc_handler = Arc::new(RpcHandler::new(chain_state, config.netuid));
+
+        Self {
+            config,
+            state,
+            rpc_handler,
+            p2p_tx: Some(p2p_tx),
         }
     }
 
@@ -181,9 +222,11 @@ impl RpcServer {
             // Sudo endpoint for challenge management
             .route("/sudo/challenge", {
                 let handler = rpc_handler.clone();
+                let p2p_tx = self.p2p_tx.clone();
                 post(move |body: Json<Value>| {
                     let handler = handler.clone();
-                    async move { sudo_challenge_handler(handler, body.0).await }
+                    let p2p_tx = p2p_tx.clone();
+                    async move { sudo_challenge_handler(handler, p2p_tx, body.0).await }
                 })
             })
             .with_state(self.state.clone())
@@ -819,7 +862,11 @@ mod tests {
 }
 
 /// Handler for sudo challenge management
-async fn sudo_challenge_handler(_handler: Arc<RpcHandler>, body: Value) -> impl IntoResponse {
+async fn sudo_challenge_handler(
+    _handler: Arc<RpcHandler>,
+    p2p_tx: Option<mpsc::Sender<RpcP2PCommand>>,
+    body: Value,
+) -> impl IntoResponse {
     use serde::Deserialize;
 
     #[derive(Deserialize)]
@@ -874,8 +921,7 @@ async fn sudo_challenge_handler(_handler: Arc<RpcHandler>, body: Value) -> impl 
         }
     };
 
-    // Check if signature is from sudo key
-    // TODO: Verify signature against SUDO_KEY_BYTES
+    // Check signature length
     if signature_bytes.len() != 64 {
         return (
             StatusCode::UNAUTHORIZED,
@@ -886,19 +932,112 @@ async fn sudo_challenge_handler(_handler: Arc<RpcHandler>, body: Value) -> impl 
         );
     }
 
-    // For now, just log the request and return success
-    // The actual P2P broadcast would happen here
+    // Verify signature is from sudo key
+    let message = format!(
+        "sudo:{}:{}:{}",
+        request.action, request.challenge_id, request.timestamp
+    );
+
+    let signature = match sp_core::sr25519::Signature::try_from(signature_bytes.as_slice()) {
+        Ok(sig) => sig,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "success": false,
+                    "message": "Invalid signature format"
+                })),
+            );
+        }
+    };
+
+    let sudo_public = sp_core::sr25519::Public::from_raw(SUDO_KEY_BYTES);
+    if !sp_core::sr25519::Pair::verify(&signature, message.as_bytes(), &sudo_public) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "success": false,
+                "message": "Invalid signature - not from sudo key"
+            })),
+        );
+    }
+
     info!(
         action = %request.action,
         challenge_id = %request.challenge_id,
         "Received sudo challenge request"
     );
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "success": true,
-            "message": format!("Action '{}' received for challenge {}", request.action, request.challenge_id)
-        })),
-    )
+    // Broadcast via P2P if channel is available
+    if let Some(tx) = p2p_tx {
+        // Parse challenge ID (UUID format)
+        let challenge_id = match uuid::Uuid::parse_str(&request.challenge_id) {
+            Ok(uuid) => ChallengeId::from_uuid(uuid),
+            Err(_) => {
+                // Try as simple string
+                ChallengeId::from_string(&request.challenge_id)
+            }
+        };
+
+        // Decode data if present (base64)
+        let data = match &request.data {
+            Some(d) => {
+                match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, d) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({
+                                "success": false,
+                                "message": "Invalid base64 data"
+                            })),
+                        );
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
+
+        // Send broadcast command
+        let cmd = RpcP2PCommand::BroadcastChallengeUpdate {
+            challenge_id,
+            update_type: request.action.clone(),
+            data,
+        };
+
+        if let Err(e) = tx.send(cmd).await {
+            warn!(error = %e, "Failed to send P2P broadcast command");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "message": "Failed to broadcast update"
+                })),
+            );
+        }
+
+        info!(
+            action = %request.action,
+            challenge_id = %request.challenge_id,
+            "Challenge update broadcast initiated"
+        );
+
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "message": format!("Action '{}' broadcast for challenge {}", request.action, request.challenge_id)
+            })),
+        )
+    } else {
+        // No P2P channel, just log
+        warn!("P2P broadcast not available - RPC server not configured with P2P channel");
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "message": format!("Action '{}' received for challenge {} (P2P broadcast not configured)", request.action, request.challenge_id)
+            })),
+        )
+    }
 }
