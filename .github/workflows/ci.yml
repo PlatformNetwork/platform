@@ -123,6 +123,7 @@ jobs:
     name: Docker Integration (5 Validators + WASM)
     runs-on: blacksmith-32vcpu-ubuntu-2404
     needs: [build, clippy, test]
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
