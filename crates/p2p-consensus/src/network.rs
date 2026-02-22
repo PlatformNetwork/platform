@@ -296,6 +296,9 @@ impl P2PNetwork {
                 MessageId::from(hash.to_vec())
             })
             .max_transmit_size(self.config.max_message_size)
+            .mesh_n(3)
+            .mesh_n_low(1)
+            .mesh_n_high(6)
             .build()
             .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
 
@@ -867,7 +870,7 @@ impl P2PNetwork {
         &self,
         libp2p_keypair: &libp2p::identity::Keypair,
     ) -> Result<Swarm<CombinedBehaviour>, NetworkError> {
-        // Create gossipsub
+        // Create gossipsub with low mesh requirements for small networks
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(1))
             .validation_mode(ValidationMode::Strict)
@@ -877,6 +880,9 @@ impl P2PNetwork {
                 MessageId::from(hash.to_vec())
             })
             .max_transmit_size(self.config.max_message_size)
+            .mesh_n(3)
+            .mesh_n_low(1)
+            .mesh_n_high(6)
             .build()
             .map_err(|e| NetworkError::Gossipsub(e.to_string()))?;
 
