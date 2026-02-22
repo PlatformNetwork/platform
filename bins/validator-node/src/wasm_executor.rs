@@ -918,27 +918,30 @@ impl WasmChallengeExecutor {
 
         // Try to load from distributed storage first
         let wasm_bytes = if let Some(ref storage) = self.config.distributed_storage {
-            // Use spawn_blocking to avoid blocking the async runtime
             let storage = Arc::clone(storage);
             let key = platform_distributed_storage::StorageKey::new("wasm", module_path);
 
-            // Create a new runtime for blocking context to avoid panic
-            let result = std::thread::scope(|_| {
+            // Spawn a new thread with its own runtime to avoid nesting runtimes
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
-                    .build()
-                    .ok()?;
-                rt.block_on(async {
-                    storage
-                        .get(&key, platform_distributed_storage::GetOptions::default())
-                        .await
-                        .ok()
-                        .flatten()
-                })
+                    .build();
+                let result = match rt {
+                    Ok(rt) => rt.block_on(async {
+                        storage
+                            .get(&key, platform_distributed_storage::GetOptions::default())
+                            .await
+                            .ok()
+                            .flatten()
+                    }),
+                    Err(_) => None,
+                };
+                let _ = tx.send(result);
             });
 
-            match result {
-                Some(stored) => {
+            match rx.recv() {
+                Ok(Some(stored)) => {
                     info!(
                         module = module_path,
                         size_bytes = stored.data.len(),
@@ -946,7 +949,7 @@ impl WasmChallengeExecutor {
                     );
                     Some(stored.data)
                 }
-                None => {
+                _ => {
                     debug!(
                         module = module_path,
                         "WASM module not found in distributed storage"
