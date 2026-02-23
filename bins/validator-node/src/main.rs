@@ -960,14 +960,18 @@ async fn main() -> Result<()> {
                     platform_rpc::RpcP2PCommand::BroadcastSudoAction { action } => {
                         info!("Received sudo action from RPC: {:?}", action);
 
-                        // Apply to local chain state (RPC server already applied, but handle
-                        // the case where this is received from P2P relay)
-                        {
-                            let mut cs = chain_state.write();
-                            if let Err(e) = cs.apply_sudo_action(&action) {
-                                error!("Failed to apply sudo action: {}", e);
-                            }
-                        }
+                        // Apply to local chain state and persist
+                        mutate_and_persist(
+                            storage.clone(),
+                            chain_state.clone(),
+                            "sudo_action_rpc",
+                            |cs| {
+                                if let Err(e) = cs.apply_sudo_action(&action) {
+                                    error!("Failed to apply sudo action: {}", e);
+                                }
+                            },
+                        )
+                        .await;
 
                         // Broadcast as a ChallengeUpdate with type "sudo_action"
                         // so peer validators can receive and apply it
@@ -1102,31 +1106,35 @@ async fn main() -> Result<()> {
                                             "WASM stored locally in distributed storage"
                                         );
 
-                                        // Sync to ChainState for RPC
-                                        {
-                                            let challenge_name = name.as_deref().unwrap_or(&challenge_id_str).to_string();
-                                            let mut cs = chain_state.write();
-                                            let wasm_config = platform_core::WasmChallengeConfig {
-                                                challenge_id,
-                                                name: challenge_name,
-                                                description: String::new(),
-                                                owner: keypair.hotkey(),
-                                                module: platform_core::WasmModuleMetadata {
-                                                    module_path: challenge_id_str.clone(),
-                                                    code_hash: hex::encode(metadata.value_hash),
-                                                    version: metadata.version.to_string(),
-                                                    ..Default::default()
-                                                },
-                                                config: platform_core::ChallengeConfig::default(),
-                                                is_active: true,
-                                            };
-                                            cs.register_wasm_challenge(wasm_config);
-                                        }
-
-                                        // Persist core state immediately so challenge survives restart
-                                        if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
-                                            warn!("Failed to persist core state after challenge registration: {}", e);
-                                        }
+                                        // Sync to ChainState for RPC and persist
+                                        let challenge_name = name.as_deref().unwrap_or(&challenge_id_str).to_string();
+                                        let owner = keypair.hotkey();
+                                        let code_hash = hex::encode(metadata.value_hash);
+                                        let version = metadata.version.to_string();
+                                        let module_path = challenge_id_str.clone();
+                                        mutate_and_persist(
+                                            storage.clone(),
+                                            chain_state.clone(),
+                                            "wasm_upload_local",
+                                            |cs| {
+                                                let wasm_config = platform_core::WasmChallengeConfig {
+                                                    challenge_id,
+                                                    name: challenge_name,
+                                                    description: String::new(),
+                                                    owner,
+                                                    module: platform_core::WasmModuleMetadata {
+                                                        module_path,
+                                                        code_hash,
+                                                        version,
+                                                        ..Default::default()
+                                                    },
+                                                    config: platform_core::ChallengeConfig::default(),
+                                                    is_active: true,
+                                                };
+                                                cs.register_wasm_challenge(wasm_config);
+                                            },
+                                        )
+                                        .await;
 
                                         // Load routes in a blocking thread to avoid tokio runtime issues
                                         if let Some(ref executor) = wasm_executor {
@@ -2213,33 +2221,39 @@ async fn handle_network_event(
                                             }
                                         });
 
-                                        // Sync challenge to ChainState for RPC
-                                        {
-                                            let mut cs = chain_state.write();
-                                            let wasm_config = platform_core::WasmChallengeConfig {
-                                                challenge_id: update.challenge_id,
-                                                name: challenge_name,
-                                                description: String::new(),
-                                                owner: update.updater.clone(),
-                                                module: platform_core::WasmModuleMetadata {
-                                                    module_path: challenge_id_str.clone(),
-                                                    code_hash: hex::encode(metadata.value_hash),
-                                                    version: metadata.version.to_string(),
-                                                    ..Default::default()
-                                                },
-                                                config: platform_core::ChallengeConfig::default(),
-                                                is_active: true,
-                                            };
-                                            cs.register_wasm_challenge(wasm_config);
-                                        }
-
-                                        // Persist core state immediately so challenge survives restart
-                                        if let Err(e) =
-                                            persist_core_state_to_storage(storage, chain_state)
-                                                .await
-                                        {
-                                            warn!("Failed to persist core state after P2P challenge registration: {}", e);
-                                        }
+                                        // Sync challenge to ChainState for RPC and persist
+                                        let cid = update.challenge_id;
+                                        let owner = update.updater.clone();
+                                        let code_hash = hex::encode(metadata.value_hash);
+                                        let version = metadata.version.to_string();
+                                        let module_path = challenge_id_str.clone();
+                                        let cname = challenge_name.clone();
+                                        mutate_and_persist(
+                                            storage.clone(),
+                                            chain_state.clone(),
+                                            "wasm_upload_p2p",
+                                            |cs| {
+                                                let wasm_config =
+                                                    platform_core::WasmChallengeConfig {
+                                                        challenge_id: cid,
+                                                        name: cname,
+                                                        description: String::new(),
+                                                        owner,
+                                                        module: platform_core::WasmModuleMetadata {
+                                                            module_path,
+                                                            code_hash,
+                                                            version,
+                                                            ..Default::default()
+                                                        },
+                                                        config:
+                                                            platform_core::ChallengeConfig::default(
+                                                            ),
+                                                        is_active: true,
+                                                    };
+                                                cs.register_wasm_challenge(wasm_config);
+                                            },
+                                        )
+                                        .await;
 
                                         // Load routes in a blocking thread to avoid tokio runtime issues
                                         if let Some(ref executor) = wasm_executor_ref {
@@ -2790,23 +2804,35 @@ async fn handle_network_event(
                                         let wasm_key = StorageKey::new("wasm", &challenge_id_str);
                                         match storage.put(wasm_key, entry.data.clone(), PutOptions::default()).await {
                                             Ok(metadata) => {
-                                                let mut cs = chain_state.write();
-                                                let wasm_config = platform_core::WasmChallengeConfig {
-                                                    challenge_id: *challenge_id,
-                                                    name: challenge_id_str.clone(),
-                                                    description: String::new(),
-                                                    owner: entry.proposer.clone(),
-                                                    module: platform_core::WasmModuleMetadata {
-                                                        module_path: challenge_id_str.clone(),
-                                                        code_hash: hex::encode(metadata.value_hash),
-                                                        version: metadata.version.to_string(),
-                                                        ..Default::default()
+                                                let cid = *challenge_id;
+                                                let owner = entry.proposer.clone();
+                                                let code_hash = hex::encode(metadata.value_hash);
+                                                let version = metadata.version.to_string();
+                                                let module_path = challenge_id_str.clone();
+                                                let cname = challenge_id_str.clone();
+                                                mutate_and_persist(
+                                                    storage.clone(),
+                                                    chain_state.clone(),
+                                                    "wasm_consensus",
+                                                    |cs| {
+                                                        let wasm_config = platform_core::WasmChallengeConfig {
+                                                            challenge_id: cid,
+                                                            name: cname,
+                                                            description: String::new(),
+                                                            owner,
+                                                            module: platform_core::WasmModuleMetadata {
+                                                                module_path,
+                                                                code_hash,
+                                                                version,
+                                                                ..Default::default()
+                                                            },
+                                                            config: platform_core::ChallengeConfig::default(),
+                                                            is_active: true,
+                                                        };
+                                                        cs.register_wasm_challenge(wasm_config);
                                                     },
-                                                    config: platform_core::ChallengeConfig::default(),
-                                                    is_active: true,
-                                                };
-                                                cs.register_wasm_challenge(wasm_config);
-                                                drop(cs);
+                                                )
+                                                .await;
 
                                                 info!(
                                                     challenge_id = %challenge_id,
