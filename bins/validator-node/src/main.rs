@@ -885,6 +885,7 @@ async fn main() -> Result<()> {
     let mut wasm_eval_interval = tokio::time::interval(Duration::from_secs(5));
     let mut stale_job_interval = tokio::time::interval(Duration::from_secs(120));
     let mut weight_check_interval = tokio::time::interval(Duration::from_secs(30));
+    let mut last_weight_submission_epoch: u64 = 0; // Local tracking of weight submissions
 
     // Clone p2p_cmd_tx for use in the loop
     let p2p_broadcast_tx = p2p_cmd_tx.clone();
@@ -1344,14 +1345,13 @@ async fn main() -> Result<()> {
             _ = weight_check_interval.tick() => {
                 let current_block = state_manager.apply(|state| state.bittensor_block);
                 let current_epoch = current_block / 360;
-                let last_submitted = state_manager.apply(|state| state.last_weight_submission_epoch);
 
                 // Submit weights if we're at an epoch boundary and haven't submitted for this epoch
                 // Check within first 30 blocks of epoch to catch up if we missed
-                if current_epoch > last_submitted && current_block % 360 < 30 {
+                if current_epoch > last_weight_submission_epoch && current_block % 360 < 30 {
                     info!(
                         "Weight submission due: block={}, epoch={}, last_submitted={}",
-                        current_block, current_epoch, last_submitted
+                        current_block, current_epoch, last_weight_submission_epoch
                     );
 
                     if let (Some(st), Some(sig)) = (subtensor.as_ref(), subtensor_signer.as_ref()) {
@@ -1371,9 +1371,7 @@ async fn main() -> Result<()> {
                                 match st.set_mechanism_weights(sig, netuid, mechanism_id, &uids, &vals, version_key, ExtrinsicWait::Finalized).await {
                                     Ok(resp) if resp.success => {
                                         info!("Weights submitted for epoch {}: {:?}", current_epoch, resp.tx_hash);
-                                        state_manager.apply(|state| {
-                                            state.last_weight_submission_epoch = current_epoch;
-                                        });
+                                        last_weight_submission_epoch = current_epoch;
                                     }
                                     Ok(resp) => warn!("Weight submission issue: {}", resp.message),
                                     Err(e) => error!("Weight submission failed: {}", e),
@@ -1385,9 +1383,7 @@ async fn main() -> Result<()> {
                                 match st.set_mechanism_weights(sig, netuid, mechanism_id, &[0u16], &[65535u16], version_key, ExtrinsicWait::Finalized).await {
                                     Ok(resp) if resp.success => {
                                         info!("Burn weights submitted for epoch {}: {:?}", current_epoch, resp.tx_hash);
-                                        state_manager.apply(|state| {
-                                            state.last_weight_submission_epoch = current_epoch;
-                                        });
+                                        last_weight_submission_epoch = current_epoch;
                                     }
                                     Ok(resp) => warn!("Burn weight submission issue: {}", resp.message),
                                     Err(e) => error!("Burn weight submission failed: {}", e),
