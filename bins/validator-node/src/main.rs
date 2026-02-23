@@ -448,6 +448,7 @@ async fn main() -> Result<()> {
                                 &chain_state,
                                 &valid_voters,
                                 &state_root_consensus,
+                                &state_manager,
                             );
                             info!(
                                 "Validator set: {} active validators",
@@ -509,6 +510,7 @@ async fn main() -> Result<()> {
                                 &chain_state,
                                 &valid_voters,
                                 &state_root_consensus,
+                                &state_manager,
                             );
                             info!(
                                 "Validator set: {} active validators",
@@ -1238,7 +1240,7 @@ async fn main() -> Result<()> {
                     match sync_metagraph(client, netuid).await {
                         Ok(mg) => {
                             info!("Metagraph refreshed: {} neurons", mg.n);
-                            update_validator_set_from_metagraph(&mg, &validator_set, &chain_state, &valid_voters, &state_root_consensus);
+                            update_validator_set_from_metagraph(&mg, &validator_set, &chain_state, &valid_voters, &state_root_consensus, &state_manager);
                             if let Some(sc) = subtensor_client.as_mut() {
                                 sc.set_metagraph(mg);
                             }
@@ -1453,9 +1455,13 @@ fn update_validator_set_from_metagraph(
     state_root_consensus: &Arc<
         parking_lot::Mutex<platform_distributed_storage::state_consensus::StateRootConsensus>,
     >,
+    state_manager: &Arc<StateManager>,
 ) {
     let mut cs = chain_state.write();
     cs.registered_hotkeys.clear();
+
+    // Collect validators for P2P state manager
+    let mut p2p_validators: Vec<(Hotkey, u64)> = Vec::new();
 
     for neuron in metagraph.neurons.values() {
         let hotkey_bytes: [u8; 32] = neuron.hotkey.clone().into();
@@ -1476,8 +1482,9 @@ fn update_validator_set_from_metagraph(
         // Use the same min_stake threshold as the P2P validator set (10000 TAO = 10e12 RAO)
         if stake >= 10_000_000_000_000 {
             cs.validators.entry(hotkey.clone()).or_insert_with(|| {
-                platform_core::ValidatorInfo::new(hotkey, platform_core::Stake(stake))
+                platform_core::ValidatorInfo::new(hotkey.clone(), platform_core::Stake(stake))
             });
+            p2p_validators.push((hotkey, stake));
         }
     }
 
@@ -1487,6 +1494,13 @@ fn update_validator_set_from_metagraph(
     state_root_consensus.lock().set_valid_voters(voter_hotkeys);
 
     cs.update_hash();
+
+    // Sync validators to P2P state manager for storage consensus
+    state_manager.apply(|state| {
+        for (hotkey, stake) in p2p_validators {
+            state.update_validator(hotkey, stake);
+        }
+    });
 }
 
 async fn handle_network_event(
