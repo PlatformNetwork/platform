@@ -652,7 +652,7 @@ async fn main() -> Result<()> {
 
     // Channel for local storage proposals (proposer adds to own state)
     let (local_proposal_tx, mut local_proposal_rx) =
-        tokio::sync::mpsc::channel::<StorageProposal>(256);
+        tokio::sync::mpsc::channel::<StorageProposal>(4096);
 
     // Cast storage to trait object for WASM executor
     let storage_dyn: Arc<dyn DistributedStore> = Arc::clone(&storage) as Arc<dyn DistributedStore>;

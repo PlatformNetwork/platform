@@ -609,6 +609,13 @@ impl ChainState {
 
     /// Add a storage proposal
     pub fn add_storage_proposal(&mut self, proposal: StorageProposal) {
+        // Don't overwrite existing proposal (preserves accumulated votes)
+        if self
+            .pending_storage_proposals
+            .contains_key(&proposal.proposal_id)
+        {
+            return;
+        }
         info!(
             proposal_id = %hex::encode(&proposal.proposal_id[..8]),
             challenge_id = %proposal.challenge_id,
