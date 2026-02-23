@@ -2279,21 +2279,50 @@ async fn handle_network_event(
                             } // end else for is_valid
                         }
                         "activate" => {
+                            {
+                                let mut cs = chain_state.write();
+                                cs.set_challenge_active(&update.challenge_id, true);
+                            }
                             state_manager.apply(|state| {
                                 state.set_challenge_active(&update.challenge_id, true);
                             });
+                            // Persist state change
+                            if let Err(e) =
+                                persist_core_state_to_storage(storage, chain_state).await
+                            {
+                                warn!("Failed to persist state after activate: {}", e);
+                            }
                             info!(challenge_id = %update.challenge_id, "Challenge activated");
                         }
                         "deactivate" => {
+                            {
+                                let mut cs = chain_state.write();
+                                cs.set_challenge_active(&update.challenge_id, false);
+                            }
                             state_manager.apply(|state| {
                                 state.set_challenge_active(&update.challenge_id, false);
                             });
+                            // Persist state change
+                            if let Err(e) =
+                                persist_core_state_to_storage(storage, chain_state).await
+                            {
+                                warn!("Failed to persist state after deactivate: {}", e);
+                            }
                             info!(challenge_id = %update.challenge_id, "Challenge deactivated");
                         }
                         "rename" => {
                             if let Ok(new_name) = String::from_utf8(update.data.clone()) {
-                                let mut cs = chain_state.write();
-                                if cs.rename_challenge(&update.challenge_id, new_name.clone()) {
+                                let renamed = {
+                                    let mut cs = chain_state.write();
+                                    cs.rename_challenge(&update.challenge_id, new_name.clone())
+                                };
+                                if renamed {
+                                    // Persist state change
+                                    if let Err(e) =
+                                        persist_core_state_to_storage(storage, chain_state).await
+                                    {
+                                        warn!("Failed to persist state after rename: {}", e);
+                                    }
                                     info!(
                                         challenge_id = %update.challenge_id,
                                         new_name = %new_name,
@@ -2312,11 +2341,19 @@ async fn handle_network_event(
                             match bincode::deserialize::<platform_core::SudoAction>(&update.data) {
                                 Ok(action) => {
                                     info!("Applying sudo action from P2P: {:?}", action);
-                                    let mut cs = chain_state.write();
-                                    if let Err(e) = cs.apply_sudo_action(&action) {
-                                        error!("Failed to apply sudo action from P2P: {}", e);
-                                    } else {
-                                        info!("Sudo action applied from P2P successfully");
+                                    {
+                                        let mut cs = chain_state.write();
+                                        if let Err(e) = cs.apply_sudo_action(&action) {
+                                            error!("Failed to apply sudo action from P2P: {}", e);
+                                        } else {
+                                            info!("Sudo action applied from P2P successfully");
+                                        }
+                                    }
+                                    // Persist state change
+                                    if let Err(e) =
+                                        persist_core_state_to_storage(storage, chain_state).await
+                                    {
+                                        warn!("Failed to persist state after sudo action: {}", e);
                                     }
                                 }
                                 Err(e) => {

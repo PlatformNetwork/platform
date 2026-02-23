@@ -545,6 +545,21 @@ impl ChainState {
         self.challenge_routes.get(challenge_id)
     }
 
+    /// Set challenge active status
+    pub fn set_challenge_active(&mut self, id: &ChallengeId, active: bool) -> bool {
+        if let Some(config) = self.wasm_challenge_configs.get_mut(id) {
+            config.is_active = active;
+            self.increment_mutation_sequence();
+            return true;
+        }
+        if let Some(config) = self.challenges.get_mut(id) {
+            config.is_active = active;
+            self.increment_mutation_sequence();
+            return true;
+        }
+        false
+    }
+
     /// Rename a challenge (storage unaffected - uses UUID namespace)
     pub fn rename_challenge(&mut self, id: &ChallengeId, new_name: String) -> bool {
         // Check name uniqueness in wasm_challenge_configs
