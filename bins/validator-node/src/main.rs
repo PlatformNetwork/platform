@@ -2249,10 +2249,15 @@ async fn handle_network_event(
 
                     let vote_msg = P2PMessage::StorageVote(StorageVoteMessage {
                         proposal_id: proposal.proposal_id,
-                        voter: my_hotkey,
+                        voter: my_hotkey.clone(),
                         approve,
                         timestamp,
                         signature,
+                    });
+
+                    // Add our own vote locally (we don't receive our own broadcasts)
+                    state_manager.apply(|state| {
+                        state.vote_storage_proposal(&proposal.proposal_id, my_hotkey, approve);
                     });
 
                     if let Err(e) = p2p_cmd_tx
