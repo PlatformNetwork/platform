@@ -216,6 +216,9 @@ pub struct ChainState {
     /// Pending storage proposals awaiting consensus (proposal_id -> proposal)
     #[serde(default)]
     pub pending_storage_proposals: HashMap<[u8; 32], StorageProposal>,
+    /// Pending state mutation proposals awaiting consensus (proposal_id -> proposal)
+    #[serde(default)]
+    pub pending_state_mutations: HashMap<[u8; 32], StateMutationEntry>,
     /// Validator penalty counters (hotkey -> consecutive epochs penalized)
     #[serde(default)]
     pub validator_penalties: HashMap<Hotkey, u32>,
@@ -263,6 +266,21 @@ pub struct StorageProposal {
     pub finalized: bool,
 }
 
+/// State mutation proposal awaiting consensus
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StateMutationEntry {
+    pub proposal_id: [u8; 32],
+    pub mutation_type: crate::messages::StateMutationType,
+    pub data: Vec<u8>,
+    pub proposer: Hotkey,
+    pub timestamp: i64,
+    pub mutation_sequence: u64,
+    /// Votes received (voter -> approve)
+    pub votes: HashMap<Hotkey, bool>,
+    /// Whether finalized
+    pub finalized: bool,
+}
+
 impl Default for ChainState {
     fn default() -> Self {
         Self {
@@ -290,6 +308,7 @@ impl Default for ChainState {
             agent_code_registry: HashMap::new(),
             bootstrap_active: false,
             pending_storage_proposals: HashMap::new(),
+            pending_state_mutations: HashMap::new(),
             validator_penalties: HashMap::new(),
         }
     }
@@ -546,6 +565,89 @@ impl ChainState {
 
         for id in old_proposals {
             self.pending_storage_proposals.remove(&id);
+        }
+    }
+
+    /// Add a state mutation proposal
+    pub fn add_state_mutation(&mut self, entry: StateMutationEntry) {
+        info!(
+            proposal_id = %hex::encode(&entry.proposal_id[..8]),
+            mutation_type = ?entry.mutation_type,
+            "Adding state mutation proposal"
+        );
+        self.pending_state_mutations
+            .insert(entry.proposal_id, entry);
+        self.increment_sequence();
+    }
+
+    /// Vote on a state mutation proposal
+    /// Returns Some(true) if approved by consensus, Some(false) if rejected, None if pending
+    pub fn vote_state_mutation(
+        &mut self,
+        proposal_id: &[u8; 32],
+        voter: Hotkey,
+        approve: bool,
+    ) -> Option<bool> {
+        let total_validators = self.validators.len();
+
+        if let Some(entry) = self.pending_state_mutations.get_mut(proposal_id) {
+            if entry.finalized {
+                return None;
+            }
+            entry.votes.insert(voter, approve);
+
+            if total_validators == 0 {
+                return Some(false);
+            }
+
+            let threshold = (2 * total_validators / 3) + 1;
+
+            let approve_count = entry.votes.values().filter(|&&v| v).count();
+            if approve_count >= threshold {
+                entry.finalized = true;
+                self.increment_sequence();
+                return Some(true);
+            }
+
+            let reject_count = entry.votes.values().filter(|&&v| !v).count();
+            if reject_count >= threshold {
+                entry.finalized = true;
+                self.increment_sequence();
+                return Some(false);
+            }
+
+            self.increment_sequence();
+            None
+        } else {
+            None
+        }
+    }
+
+    /// Get a pending state mutation
+    pub fn get_state_mutation(&self, proposal_id: &[u8; 32]) -> Option<&StateMutationEntry> {
+        self.pending_state_mutations.get(proposal_id)
+    }
+
+    /// Remove a finalized state mutation
+    pub fn remove_state_mutation(&mut self, proposal_id: &[u8; 32]) -> Option<StateMutationEntry> {
+        let removed = self.pending_state_mutations.remove(proposal_id);
+        if removed.is_some() {
+            self.increment_sequence();
+        }
+        removed
+    }
+
+    /// Clean up old state mutation proposals
+    pub fn cleanup_old_state_mutations(&mut self, max_age_ms: i64) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let old: Vec<[u8; 32]> = self
+            .pending_state_mutations
+            .iter()
+            .filter(|(_, e)| now - e.timestamp > max_age_ms)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in old {
+            self.pending_state_mutations.remove(&id);
         }
     }
 

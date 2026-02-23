@@ -65,6 +65,15 @@ pub enum P2PMessage {
 
     /// Storage root hash broadcast for divergence detection
     StorageRootSync(StorageRootSyncMessage),
+
+    /// State mutation proposal for consensus
+    StateMutationProposal(StateMutationProposalMessage),
+    /// Vote on a state mutation proposal
+    StateMutationVote(StateMutationVoteMessage),
+    /// Core state sync request
+    CoreStateRequest(CoreStateRequestMessage),
+    /// Core state sync response
+    CoreStateResponse(CoreStateResponseMessage),
 }
 
 impl P2PMessage {
@@ -121,6 +130,10 @@ impl P2PMessage {
             P2PMessage::ReviewResult(_) => "ReviewResult",
             P2PMessage::AgentLogProposal(_) => "AgentLogProposal",
             P2PMessage::StorageRootSync(_) => "StorageRootSync",
+            P2PMessage::StateMutationProposal(_) => "StateMutationProposal",
+            P2PMessage::StateMutationVote(_) => "StateMutationVote",
+            P2PMessage::CoreStateRequest(_) => "CoreStateRequest",
+            P2PMessage::CoreStateResponse(_) => "CoreStateResponse",
         }
     }
 }
@@ -395,6 +408,9 @@ pub struct HeartbeatMessage {
     pub validator: Hotkey,
     /// Current state hash
     pub state_hash: [u8; 32],
+    /// Core chain state hash (wasm_challenge_configs, routes, etc.)
+    #[serde(default)]
+    pub core_state_hash: [u8; 32],
     /// Current sequence number
     pub sequence: SequenceNumber,
     /// Validator's stake (self-reported, verify against chain)
@@ -757,6 +773,100 @@ impl SignedP2PMessage {
     }
 }
 
+// ============================================================================
+// State Mutation Consensus Messages
+// ============================================================================
+
+/// Types of state mutations that require P2P consensus
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StateMutationType {
+    /// WASM challenge upload
+    WasmUpload { challenge_id: ChallengeId },
+    /// Challenge rename
+    ChallengeRename { challenge_id: ChallengeId },
+    /// Sudo action (emergency pause, config changes, etc.)
+    SudoAction,
+    /// Route registration after WASM load
+    RouteRegistration { challenge_id: ChallengeId },
+    /// Epoch transition
+    EpochTransition { new_epoch: u64 },
+    /// Challenge activation/deactivation
+    ChallengeActivation {
+        challenge_id: ChallengeId,
+        active: bool,
+    },
+}
+
+/// Proposal to mutate shared state, requiring 2f+1 consensus
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StateMutationProposalMessage {
+    /// Unique proposal ID (hash of mutation data)
+    pub proposal_id: [u8; 32],
+    /// Type of mutation
+    pub mutation_type: StateMutationType,
+    /// Serialized mutation data
+    pub data: Vec<u8>,
+    /// Proposer's hotkey
+    pub proposer: Hotkey,
+    /// Proposal timestamp
+    pub timestamp: i64,
+    /// Proposer's signature over (proposal_id, mutation_type, data_hash, timestamp)
+    pub signature: Vec<u8>,
+    /// Mutation sequence number (for ordering)
+    pub mutation_sequence: u64,
+}
+
+/// Vote on a state mutation proposal
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StateMutationVoteMessage {
+    /// Proposal being voted on
+    pub proposal_id: [u8; 32],
+    /// Voter's hotkey
+    pub voter: Hotkey,
+    /// Whether the voter approves
+    pub approve: bool,
+    /// Vote timestamp
+    pub timestamp: i64,
+    /// Voter's signature over (proposal_id, approve, timestamp)
+    pub signature: Vec<u8>,
+}
+
+// ============================================================================
+// Core State Sync Messages
+// ============================================================================
+
+/// Request for core chain state synchronization
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CoreStateRequestMessage {
+    /// Requesting validator
+    pub requester: Hotkey,
+    /// Current core state hash
+    pub current_hash: [u8; 32],
+    /// Current mutation sequence
+    pub mutation_sequence: u64,
+    /// Request timestamp
+    pub timestamp: i64,
+    /// Signature
+    pub signature: Vec<u8>,
+}
+
+/// Response with core chain state data
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CoreStateResponseMessage {
+    /// Responding validator
+    pub responder: Hotkey,
+    /// Core state hash
+    pub state_hash: [u8; 32],
+    /// Mutation sequence
+    pub mutation_sequence: u64,
+    /// Serialized core chain state (JSON)
+    pub state_data: Vec<u8>,
+    /// Response timestamp
+    pub timestamp: i64,
+    /// Signature
+    pub signature: Vec<u8>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,6 +876,7 @@ mod tests {
         let msg = P2PMessage::Heartbeat(HeartbeatMessage {
             validator: Hotkey([1u8; 32]),
             state_hash: [2u8; 32],
+            core_state_hash: [0u8; 32],
             sequence: 100,
             stake: 1_000_000_000_000,
             timestamp: 1234567890,
@@ -797,6 +908,7 @@ mod tests {
         let heartbeat = P2PMessage::Heartbeat(HeartbeatMessage {
             validator: Hotkey([0u8; 32]),
             state_hash: [0u8; 32],
+            core_state_hash: [0u8; 32],
             sequence: 0,
             stake: 0,
             timestamp: 0,
@@ -841,6 +953,7 @@ mod tests {
             message: P2PMessage::Heartbeat(HeartbeatMessage {
                 validator: Hotkey([1u8; 32]),
                 state_hash: [0u8; 32],
+                core_state_hash: [0u8; 32],
                 sequence: 1,
                 stake: 0,
                 timestamp: 0,

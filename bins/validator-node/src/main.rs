@@ -968,6 +968,43 @@ async fn main() -> Result<()> {
                                 "ChallengeUpdate broadcast successful"
                             );
 
+                            // Broadcast StateMutationProposal for consensus validation
+                            if update_type == "wasm_upload" || update_type == "rename" || update_type == "sudo_action" {
+                                let mutation_type = match update_type.as_str() {
+                                    "wasm_upload" => platform_p2p_consensus::StateMutationType::WasmUpload { challenge_id },
+                                    "rename" => platform_p2p_consensus::StateMutationType::ChallengeRename { challenge_id },
+                                    "sudo_action" => platform_p2p_consensus::StateMutationType::SudoAction,
+                                    _ => unreachable!(),
+                                };
+
+                                let mutation_seq = chain_state.read().mutation_sequence;
+                                let proposal_id = platform_core::hash_data(&(&data, mutation_seq))
+                                    .unwrap_or([0u8; 32]);
+
+                                let ts = chrono::Utc::now().timestamp_millis();
+                                let sign_data = bincode::serialize(&(&proposal_id, ts)).unwrap_or_default();
+                                let sig = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                                let mutation_msg = P2PMessage::StateMutationProposal(
+                                    platform_p2p_consensus::StateMutationProposalMessage {
+                                        proposal_id,
+                                        mutation_type,
+                                        data: data.clone(),
+                                        proposer: keypair.hotkey(),
+                                        timestamp: ts,
+                                        signature: sig,
+                                        mutation_sequence: mutation_seq,
+                                    },
+                                );
+
+                                if let Err(e) = p2p_broadcast_tx
+                                    .send(platform_p2p_consensus::P2PCommand::Broadcast(mutation_msg))
+                                    .await
+                                {
+                                    warn!(error = %e, "Failed to broadcast StateMutationProposal");
+                                }
+                            }
+
                             // Also handle locally (store WASM if it's an upload)
                             if update_type == "wasm_upload" && !data.is_empty() {
                                 // Validate WASM before storing
@@ -1018,6 +1055,11 @@ async fn main() -> Result<()> {
                                                 is_active: true,
                                             };
                                             cs.register_wasm_challenge(wasm_config);
+                                        }
+
+                                        // Persist core state immediately so challenge survives restart
+                                        if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
+                                            warn!("Failed to persist core state after challenge registration: {}", e);
                                         }
 
                                         // Load routes in a blocking thread to avoid tokio runtime issues
@@ -1153,9 +1195,12 @@ async fn main() -> Result<()> {
                     // Get our stake from validator set
                     let our_stake = validator_set.stake_for(&our_hotkey);
 
+                    let core_state_hash = chain_state.read().state_hash;
+
                     let heartbeat = P2PMessage::Heartbeat(HeartbeatMessage {
                         validator: our_hotkey,
                         state_hash,
+                        core_state_hash,
                         sequence,
                         stake: our_stake,
                         timestamp: chrono::Utc::now().timestamp_millis(),
@@ -1233,6 +1278,10 @@ async fn main() -> Result<()> {
                 if !stale.is_empty() {
                     info!(count = stale.len(), "Cleaned up stale jobs");
                 }
+                // Clean up old state mutation proposals (5 min timeout)
+                state_manager.apply(|state| state.cleanup_old_state_mutations(300_000));
+                // Clean up old storage proposals (5 min timeout)
+                state_manager.apply(|state| state.cleanup_old_proposals(300_000));
             }
 
             // Periodic checkpoint
@@ -1248,7 +1297,23 @@ async fn main() -> Result<()> {
 
             // Ctrl+C
             _ = tokio::signal::ctrl_c() => {
-                info!("Received shutdown signal, creating final checkpoint...");
+                info!("Received shutdown signal, persisting state...");
+
+                // Persist core state (wasm_challenge_configs, routes, validators)
+                if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
+                    error!("Failed to persist core state on shutdown: {}", e);
+                } else {
+                    info!("Core state persisted on shutdown");
+                }
+
+                // Persist P2P consensus state
+                if let Err(e) = persist_state_to_storage(&storage, &state_manager).await {
+                    error!("Failed to persist P2P state on shutdown: {}", e);
+                } else {
+                    info!("P2P state persisted on shutdown");
+                }
+
+                // Create checkpoint
                 if let Some(handler) = shutdown_handler.as_mut() {
                     if let Err(e) = handler.create_checkpoint() {
                         error!("Failed to create shutdown checkpoint: {}", e);
@@ -1518,7 +1583,46 @@ async fn handle_network_event(
                         peer_id: None,
                         x25519_pubkey: None,
                     };
-                    state.validators.insert(hb.validator, validator_info);
+                    state
+                        .validators
+                        .insert(hb.validator.clone(), validator_info);
+
+                    // Check core state hash divergence
+                    let our_core_hash = state.state_hash;
+                    drop(state);
+
+                    if hb.core_state_hash != [0u8; 32] && hb.core_state_hash != our_core_hash {
+                        let our_mutation_seq = chain_state.read().mutation_sequence;
+                        debug!(
+                            peer = %hb.validator.to_hex(),
+                            peer_core_hash = %hex::encode(&hb.core_state_hash[..8]),
+                            our_core_hash = %hex::encode(&our_core_hash[..8]),
+                            "Core state hash divergence detected, requesting sync"
+                        );
+
+                        let timestamp = chrono::Utc::now().timestamp_millis();
+                        let sign_data =
+                            bincode::serialize(&(&our_core_hash, our_mutation_seq, timestamp))
+                                .unwrap_or_default();
+                        let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                        let req = P2PMessage::CoreStateRequest(
+                            platform_p2p_consensus::CoreStateRequestMessage {
+                                requester: keypair.hotkey(),
+                                current_hash: our_core_hash,
+                                mutation_sequence: our_mutation_seq,
+                                timestamp,
+                                signature,
+                            },
+                        );
+
+                        if let Err(e) = p2p_cmd_tx
+                            .send(platform_p2p_consensus::P2PCommand::Broadcast(req))
+                            .await
+                        {
+                            warn!(error = %e, "Failed to send core state request");
+                        }
+                    }
                 }
             }
             P2PMessage::Submission(sub) => {
@@ -1818,6 +1922,14 @@ async fn handle_network_event(
                                                 is_active: true,
                                             };
                                             cs.register_wasm_challenge(wasm_config);
+                                        }
+
+                                        // Persist core state immediately so challenge survives restart
+                                        if let Err(e) =
+                                            persist_core_state_to_storage(storage, &chain_state)
+                                                .await
+                                        {
+                                            warn!("Failed to persist core state after P2P challenge registration: {}", e);
                                         }
 
                                         // Load routes in a blocking thread to avoid tokio runtime issues
@@ -2165,6 +2277,272 @@ async fn handle_network_event(
                                     "Storage root divergence detected"
                                 );
                             }
+                        }
+                    }
+                }
+            }
+            P2PMessage::StateMutationProposal(proposal) => {
+                info!(
+                    proposal_id = %hex::encode(&proposal.proposal_id[..8]),
+                    mutation_type = ?proposal.mutation_type,
+                    proposer = %proposal.proposer.to_hex(),
+                    "Received state mutation proposal"
+                );
+
+                if !validator_set.is_validator(&proposal.proposer) {
+                    warn!(proposer = %proposal.proposer.to_hex(), "State mutation from unknown validator");
+                } else {
+                    // Add proposal to P2P state
+                    let entry = platform_p2p_consensus::StateMutationEntry {
+                        proposal_id: proposal.proposal_id,
+                        mutation_type: proposal.mutation_type.clone(),
+                        data: proposal.data.clone(),
+                        proposer: proposal.proposer.clone(),
+                        timestamp: proposal.timestamp,
+                        mutation_sequence: proposal.mutation_sequence,
+                        votes: std::collections::HashMap::new(),
+                        finalized: false,
+                    };
+                    state_manager.apply(|state| {
+                        state.add_state_mutation(entry);
+                    });
+
+                    // Validate and vote
+                    let approve = match &proposal.mutation_type {
+                        platform_p2p_consensus::StateMutationType::WasmUpload { .. } => {
+                            // Validate WASM module
+                            if let Some(ref executor) = wasm_executor_ref {
+                                executor.validate_wasm_module(&proposal.data).is_ok()
+                            } else {
+                                true
+                            }
+                        }
+                        platform_p2p_consensus::StateMutationType::SudoAction => {
+                            // Verify proposer is sudo
+                            let proposer_hex = proposal.proposer.to_hex();
+                            proposer_hex == platform_p2p_consensus::SUDO_HOTKEY
+                                || proposal.proposer.0 == platform_core::SUDO_KEY_BYTES
+                        }
+                        _ => true,
+                    };
+
+                    let my_hotkey = keypair.hotkey();
+                    let timestamp = chrono::Utc::now().timestamp_millis();
+                    let vote_data =
+                        bincode::serialize(&(&proposal.proposal_id, approve, timestamp))
+                            .unwrap_or_default();
+                    let signature = keypair.sign_bytes(&vote_data).unwrap_or_default();
+
+                    let vote_msg = P2PMessage::StateMutationVote(
+                        platform_p2p_consensus::StateMutationVoteMessage {
+                            proposal_id: proposal.proposal_id,
+                            voter: my_hotkey,
+                            approve,
+                            timestamp,
+                            signature,
+                        },
+                    );
+
+                    if let Err(e) = p2p_cmd_tx
+                        .send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg))
+                        .await
+                    {
+                        warn!(error = %e, "Failed to broadcast state mutation vote");
+                    }
+                }
+            }
+            P2PMessage::StateMutationVote(vote) => {
+                debug!(
+                    proposal_id = %hex::encode(&vote.proposal_id[..8]),
+                    voter = %vote.voter.to_hex(),
+                    approve = vote.approve,
+                    "Received state mutation vote"
+                );
+
+                if !validator_set.is_validator(&vote.voter) {
+                    warn!(voter = %vote.voter.to_hex(), "State mutation vote from unknown validator");
+                } else {
+                    let consensus_result = state_manager.apply(|state| {
+                        state.vote_state_mutation(
+                            &vote.proposal_id,
+                            vote.voter.clone(),
+                            vote.approve,
+                        )
+                    });
+
+                    if let Some(approved) = consensus_result {
+                        let entry_opt = state_manager
+                            .apply(|state| state.remove_state_mutation(&vote.proposal_id));
+
+                        if let Some(entry) = entry_opt {
+                            if approved {
+                                info!(
+                                    proposal_id = %hex::encode(&entry.proposal_id[..8]),
+                                    mutation_type = ?entry.mutation_type,
+                                    "State mutation consensus reached - applying"
+                                );
+
+                                // Apply the mutation to core chain state
+                                match &entry.mutation_type {
+                                    platform_p2p_consensus::StateMutationType::WasmUpload { challenge_id } => {
+                                        let challenge_id_str = challenge_id.to_string();
+                                        let wasm_key = StorageKey::new("wasm", &challenge_id_str);
+                                        match storage.put(wasm_key, entry.data.clone(), PutOptions::default()).await {
+                                            Ok(metadata) => {
+                                                let mut cs = chain_state.write();
+                                                let wasm_config = platform_core::WasmChallengeConfig {
+                                                    challenge_id: *challenge_id,
+                                                    name: challenge_id_str.clone(),
+                                                    description: String::new(),
+                                                    owner: entry.proposer.clone(),
+                                                    module: platform_core::WasmModuleMetadata {
+                                                        module_path: challenge_id_str.clone(),
+                                                        code_hash: hex::encode(metadata.value_hash),
+                                                        version: metadata.version.to_string(),
+                                                        ..Default::default()
+                                                    },
+                                                    config: platform_core::ChallengeConfig::default(),
+                                                    is_active: true,
+                                                };
+                                                cs.register_wasm_challenge(wasm_config);
+                                                drop(cs);
+
+                                                info!(
+                                                    challenge_id = %challenge_id,
+                                                    "WASM challenge registered via consensus"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "Failed to store WASM after consensus");
+                                            }
+                                        }
+                                    }
+                                    platform_p2p_consensus::StateMutationType::SudoAction => {
+                                        if let Ok(action) = bincode::deserialize::<platform_core::SudoAction>(&entry.data) {
+                                            let mut cs = chain_state.write();
+                                            if let Err(e) = cs.apply_sudo_action(&action) {
+                                                error!("Failed to apply sudo action via consensus: {}", e);
+                                            }
+                                        }
+                                    }
+                                    platform_p2p_consensus::StateMutationType::ChallengeRename { challenge_id } => {
+                                        if let Ok(new_name) = String::from_utf8(entry.data.clone()) {
+                                            let mut cs = chain_state.write();
+                                            cs.rename_challenge(challenge_id, new_name);
+                                        }
+                                    }
+                                    platform_p2p_consensus::StateMutationType::RouteRegistration { challenge_id } => {
+                                        if let Ok(routes) = bincode::deserialize::<Vec<platform_core::ChallengeRouteInfo>>(&entry.data) {
+                                            let mut cs = chain_state.write();
+                                            cs.register_challenge_routes(*challenge_id, routes);
+                                        }
+                                    }
+                                    platform_p2p_consensus::StateMutationType::ChallengeActivation { challenge_id, active } => {
+                                        state_manager.apply(|state| {
+                                            state.set_challenge_active(challenge_id, *active);
+                                        });
+                                    }
+                                    platform_p2p_consensus::StateMutationType::EpochTransition { new_epoch } => {
+                                        info!(new_epoch = new_epoch, "Epoch transition via consensus");
+                                        state_manager.apply(|state| {
+                                            state.next_epoch();
+                                        });
+                                    }
+                                }
+
+                                // Persist immediately after consensus-approved mutation
+                                if let Err(e) =
+                                    persist_core_state_to_storage(storage, &chain_state).await
+                                {
+                                    warn!(
+                                        "Failed to persist core state after consensus mutation: {}",
+                                        e
+                                    );
+                                }
+                            } else {
+                                info!(
+                                    proposal_id = %hex::encode(&entry.proposal_id[..8]),
+                                    "State mutation rejected by consensus"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            P2PMessage::CoreStateRequest(req) => {
+                info!(
+                    requester = %req.requester.to_hex(),
+                    mutation_seq = req.mutation_sequence,
+                    "Received core state sync request"
+                );
+
+                if !validator_set.is_validator(&req.requester) {
+                    warn!(requester = %req.requester.to_hex(), "Core state request from unknown validator");
+                } else {
+                    let cs = chain_state.read();
+                    let state_data = serde_json::to_vec(&*cs).unwrap_or_default();
+                    let state_hash = cs.state_hash;
+                    let mutation_sequence = cs.mutation_sequence;
+                    drop(cs);
+
+                    let timestamp = chrono::Utc::now().timestamp_millis();
+                    let sign_data =
+                        bincode::serialize(&(&state_hash, mutation_sequence, timestamp))
+                            .unwrap_or_default();
+                    let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                    let response = P2PMessage::CoreStateResponse(
+                        platform_p2p_consensus::CoreStateResponseMessage {
+                            responder: keypair.hotkey(),
+                            state_hash,
+                            mutation_sequence,
+                            state_data,
+                            timestamp,
+                            signature,
+                        },
+                    );
+
+                    if let Err(e) = p2p_cmd_tx
+                        .send(platform_p2p_consensus::P2PCommand::Broadcast(response))
+                        .await
+                    {
+                        warn!(error = %e, "Failed to send core state response");
+                    }
+                }
+            }
+            P2PMessage::CoreStateResponse(resp) => {
+                info!(
+                    responder = %resp.responder.to_hex(),
+                    mutation_seq = resp.mutation_sequence,
+                    "Received core state sync response"
+                );
+
+                if !validator_set.is_validator(&resp.responder) {
+                    warn!(responder = %resp.responder.to_hex(), "Core state response from unknown validator");
+                } else {
+                    // Deserialize and merge
+                    match serde_json::from_slice::<platform_core::ChainState>(&resp.state_data) {
+                        Ok(peer_state) => {
+                            let mut cs = chain_state.write();
+                            if cs.merge_from(&peer_state) {
+                                info!(
+                                    new_mutation_seq = cs.mutation_sequence,
+                                    "Core state merged from peer"
+                                );
+                                drop(cs);
+
+                                // Persist merged state
+                                if let Err(e) =
+                                    persist_core_state_to_storage(storage, &chain_state).await
+                                {
+                                    warn!("Failed to persist merged core state: {}", e);
+                                }
+                            } else {
+                                debug!("Core state from peer not newer, skipping merge");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to deserialize peer core state");
                         }
                     }
                 }

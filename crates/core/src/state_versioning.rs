@@ -161,6 +161,7 @@ impl ChainStateV1 {
             challenge_routes: HashMap::new(),
             paused: false,
             pause_reason: None,
+            mutation_sequence: 0,
         }
     }
 }
@@ -214,6 +215,7 @@ impl ChainStateV2 {
             challenge_routes: HashMap::new(),
             paused: false,
             pause_reason: None,
+            mutation_sequence: 0,
         }
     }
 }

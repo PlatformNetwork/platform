@@ -92,6 +92,10 @@ pub struct ChainState {
     /// Reason for the pause (if paused)
     #[serde(default)]
     pub pause_reason: Option<String>,
+
+    /// Monotonic mutation sequence number for deterministic ordering
+    #[serde(default)]
+    pub mutation_sequence: u64,
 }
 
 /// Route information for a challenge
@@ -127,6 +131,7 @@ impl Default for ChainState {
             challenge_routes: HashMap::new(),
             paused: false,
             pause_reason: None,
+            mutation_sequence: 0,
         }
     }
 }
@@ -152,6 +157,7 @@ impl ChainState {
             challenge_routes: HashMap::new(),
             paused: false,
             pause_reason: None,
+            mutation_sequence: 0,
         };
         state.update_hash();
         state
@@ -176,7 +182,10 @@ impl ChainState {
             sudo_key: &'a Hotkey,
             validator_count: usize,
             challenge_count: usize,
+            wasm_challenge_count: usize,
             pending_jobs: usize,
+            mutation_sequence: u64,
+            route_count: usize,
         }
 
         let input = HashInput {
@@ -184,11 +193,20 @@ impl ChainState {
             sudo_key: &self.sudo_key,
             validator_count: self.validators.len(),
             challenge_count: self.challenges.len(),
+            wasm_challenge_count: self.wasm_challenge_configs.len(),
             pending_jobs: self.pending_jobs.len(),
+            mutation_sequence: self.mutation_sequence,
+            route_count: self.challenge_routes.len(),
         };
 
         self.state_hash = hash_data(&input).unwrap_or([0u8; 32]);
         self.last_updated = chrono::Utc::now();
+    }
+
+    /// Increment mutation sequence and update hash
+    pub fn increment_mutation_sequence(&mut self) {
+        self.mutation_sequence += 1;
+        self.update_hash();
     }
 
     /// Check if a hotkey is the sudo key
@@ -282,7 +300,7 @@ impl ChainState {
                 self.rename_challenge(challenge_id, new_name.clone());
             }
         }
-        self.update_hash();
+        self.increment_mutation_sequence();
         Ok(())
     }
 
@@ -391,7 +409,7 @@ impl ChainState {
     pub fn register_wasm_challenge(&mut self, config: WasmChallengeConfig) {
         self.wasm_challenge_configs
             .insert(config.challenge_id, config);
-        self.update_hash();
+        self.increment_mutation_sequence();
     }
 
     /// List all WASM challenge configurations
@@ -406,7 +424,7 @@ impl ChainState {
         routes: Vec<ChallengeRouteInfo>,
     ) {
         self.challenge_routes.insert(challenge_id, routes);
-        self.update_hash();
+        self.increment_mutation_sequence();
     }
 
     /// Get routes for a challenge
@@ -432,7 +450,7 @@ impl ChainState {
         if let Some(config) = self.wasm_challenge_configs.get_mut(id) {
             tracing::info!(challenge_id = %id, old_name = %config.name, new_name = %new_name, "Renaming WASM challenge");
             config.name = new_name.clone();
-            self.update_hash();
+            self.increment_mutation_sequence();
             return true;
         }
 
@@ -440,11 +458,35 @@ impl ChainState {
         if let Some(config) = self.challenges.get_mut(id) {
             tracing::info!(challenge_id = %id, old_name = %config.name, new_name = %new_name, "Renaming legacy challenge");
             config.name = new_name;
-            self.update_hash();
+            self.increment_mutation_sequence();
             return true;
         }
 
         false
+    }
+
+    /// Merge state from a peer (for catch-up sync).
+    /// Only merges if the peer's mutation_sequence is higher.
+    pub fn merge_from(&mut self, peer_state: &ChainState) -> bool {
+        if peer_state.mutation_sequence <= self.mutation_sequence {
+            return false;
+        }
+
+        for (id, config) in &peer_state.wasm_challenge_configs {
+            self.wasm_challenge_configs
+                .entry(*id)
+                .or_insert_with(|| config.clone());
+        }
+
+        for (id, routes) in &peer_state.challenge_routes {
+            self.challenge_routes
+                .entry(*id)
+                .or_insert_with(|| routes.clone());
+        }
+
+        self.mutation_sequence = peer_state.mutation_sequence;
+        self.update_hash();
+        true
     }
 
     /// Create a snapshot of the state
