@@ -26,6 +26,7 @@ use platform_distributed_storage::{
     DistributedStore, DistributedStoreExt, LocalStorage, LocalStorageBuilder, PutOptions,
     StorageKey,
 };
+use platform_epoch::{EpochConfig, WeightAggregator};
 use platform_p2p_consensus::{
     ChainState, ConsensusEngine, EvaluationMessage, EvaluationMetrics, EvaluationRecord,
     HeartbeatMessage, JobRecord, JobStatus, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork,
@@ -2302,8 +2303,25 @@ async fn handle_block_event(
 
             // Get weights from decentralized state
             if let (Some(st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {
-                // TODO: Call detect_suspicious_validators and apply_penalties with excluded validators
+                // Detect suspicious validators and apply penalties before finalizing
+                let aggregator = WeightAggregator::new(EpochConfig::default());
+                let finalized_weights_list: Vec<platform_epoch::FinalizedWeights> = Vec::new();
+                let suspicious = aggregator.detect_suspicious_validators(&finalized_weights_list);
+                if !suspicious.is_empty() {
+                    let excluded: Vec<Hotkey> =
+                        suspicious.iter().map(|s| s.hotkey.clone()).collect();
+                    state_manager.apply(|state| state.apply_penalties(&excluded));
+                    info!(
+                        "Applied penalties to {} suspicious validators",
+                        excluded.len()
+                    );
+                }
                 let final_weights = state_manager.apply(|state| state.finalize_weights());
+
+                let mechanism_id = {
+                    let cs = chain_state.read();
+                    cs.mechanism_configs.keys().next().copied().unwrap_or(0u8)
+                };
 
                 match final_weights {
                     Some(weights) if !weights.is_empty() => {
@@ -2312,11 +2330,6 @@ async fn handle_block_event(
                         let vals: Vec<u16> = weights.iter().map(|(_, w)| *w).collect();
 
                         info!("Submitting weights for {} UIDs", uids.len());
-                        // TODO(H6): mechanism_id is hardcoded to 0. Should be derived from
-                        // challenge config (e.g. mechanism_configs) or subnet hyperparameters.
-                        // Each subnet mechanism may have a different ID; using 0 assumes a
-                        // single-mechanism subnet.
-                        let mechanism_id = 0u8;
                         match st
                             .set_mechanism_weights(
                                 sig,
@@ -2338,8 +2351,6 @@ async fn handle_block_event(
                     }
                     _ => {
                         info!("No challenge weights for epoch {} - submitting burn weights (100% to UID 0)", epoch);
-                        // TODO(H6): mechanism_id is hardcoded to 0 (see note above)
-                        let mechanism_id = 0u8;
                         match st
                             .set_mechanism_weights(
                                 sig,

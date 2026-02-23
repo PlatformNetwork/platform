@@ -39,12 +39,18 @@ impl CommitRevealState {
         }
     }
 
-    // TODO: Add phase validation - enforce commit phase timing before allowing commitments
     /// Submit a commitment
     pub fn submit_commitment(
         &mut self,
+        current_phase: crate::EpochPhase,
         commitment: WeightCommitment,
     ) -> Result<(), CommitRevealError> {
+        if current_phase != crate::EpochPhase::Commit {
+            return Err(CommitRevealError::WrongPhase {
+                expected: "Commit".to_string(),
+                got: format!("{:?}", current_phase),
+            });
+        }
         if commitment.epoch != self.epoch {
             return Err(CommitRevealError::WrongEpoch {
                 expected: self.epoch,
@@ -70,9 +76,18 @@ impl CommitRevealState {
         Ok(())
     }
 
-    // TODO: Add phase validation - enforce reveal phase timing, reject if still in commit phase
     /// Submit a reveal
-    pub fn submit_reveal(&mut self, reveal: WeightReveal) -> Result<(), CommitRevealError> {
+    pub fn submit_reveal(
+        &mut self,
+        current_phase: crate::EpochPhase,
+        reveal: WeightReveal,
+    ) -> Result<(), CommitRevealError> {
+        if current_phase != crate::EpochPhase::Reveal {
+            return Err(CommitRevealError::WrongPhase {
+                expected: "Reveal".to_string(),
+                got: format!("{:?}", current_phase),
+            });
+        }
         if reveal.epoch != self.epoch {
             return Err(CommitRevealError::WrongEpoch {
                 expected: self.epoch,
@@ -320,6 +335,9 @@ pub enum CommitRevealError {
 
     #[error("Aggregation failed: {0}")]
     AggregationFailed(String),
+
+    #[error("Wrong phase: expected {expected}, got {got}")]
+    WrongPhase { expected: String, got: String },
 }
 
 /// Manager for multiple challenges' commit-reveal states
@@ -364,7 +382,7 @@ impl CommitRevealManager {
             .entry(key)
             .or_insert_with(|| CommitRevealState::new(epoch, challenge_id));
 
-        state.submit_commitment(commitment)
+        state.submit_commitment(crate::EpochPhase::Commit, commitment)
     }
 
     /// Submit reveal
@@ -381,7 +399,7 @@ impl CommitRevealManager {
             .get_mut(&key)
             .ok_or(CommitRevealError::NoCommitment)?;
 
-        state.submit_reveal(reveal)
+        state.submit_reveal(crate::EpochPhase::Reveal, reveal)
     }
 
     /// Finalize epoch
@@ -423,6 +441,7 @@ impl Default for CommitRevealManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EpochPhase;
     use platform_core::Keypair;
 
     fn create_test_commitment(
@@ -466,11 +485,13 @@ mod tests {
         let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
 
         // Submit commitment
-        state.submit_commitment(commitment).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
         assert!(state.has_committed(&validator.hotkey()));
 
         // Submit reveal
-        state.submit_reveal(reveal).unwrap();
+        state.submit_reveal(EpochPhase::Reveal, reveal).unwrap();
         assert!(state.has_revealed(&validator.hotkey()));
     }
 
@@ -482,12 +503,14 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, mut reveal) = create_test_commitment(&validator, 0, challenge_id);
 
-        state.submit_commitment(commitment).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
 
         // Modify reveal to not match commitment
         reveal.secret = b"wrong_secret".to_vec();
 
-        let result = state.submit_reveal(reveal);
+        let result = state.submit_reveal(EpochPhase::Reveal, reveal);
         assert!(matches!(result, Err(CommitRevealError::CommitmentMismatch)));
     }
 
@@ -500,7 +523,7 @@ mod tests {
         let (mut commitment, _) = create_test_commitment(&validator, 1, challenge_id);
         commitment.epoch = 1; // Wrong epoch
 
-        let result = state.submit_commitment(commitment);
+        let result = state.submit_commitment(EpochPhase::Commit, commitment);
         assert!(matches!(
             result,
             Err(CommitRevealError::WrongEpoch {
@@ -519,7 +542,7 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, _) = create_test_commitment(&validator, 0, different_challenge);
 
-        let result = state.submit_commitment(commitment);
+        let result = state.submit_commitment(EpochPhase::Commit, commitment);
         assert!(matches!(result, Err(CommitRevealError::WrongChallenge)));
     }
 
@@ -531,8 +554,10 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, _) = create_test_commitment(&validator, 0, challenge_id);
 
-        state.submit_commitment(commitment.clone()).unwrap();
-        let result = state.submit_commitment(commitment);
+        state
+            .submit_commitment(EpochPhase::Commit, commitment.clone())
+            .unwrap();
+        let result = state.submit_commitment(EpochPhase::Commit, commitment);
         assert!(matches!(result, Err(CommitRevealError::AlreadyCommitted)));
     }
 
@@ -544,10 +569,14 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
 
-        state.submit_commitment(commitment).unwrap();
-        state.submit_reveal(reveal.clone()).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
+        state
+            .submit_reveal(EpochPhase::Reveal, reveal.clone())
+            .unwrap();
 
-        let result = state.submit_reveal(reveal);
+        let result = state.submit_reveal(EpochPhase::Reveal, reveal);
         assert!(matches!(result, Err(CommitRevealError::AlreadyRevealed)));
     }
 
@@ -559,7 +588,7 @@ mod tests {
         let validator = Keypair::generate();
         let (_, reveal) = create_test_commitment(&validator, 0, challenge_id);
 
-        let result = state.submit_reveal(reveal);
+        let result = state.submit_reveal(EpochPhase::Reveal, reveal);
         assert!(matches!(result, Err(CommitRevealError::NoCommitment)));
     }
 
@@ -571,10 +600,12 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, mut reveal) = create_test_commitment(&validator, 0, challenge_id);
 
-        state.submit_commitment(commitment).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
         reveal.epoch = 1; // Wrong epoch
 
-        let result = state.submit_reveal(reveal);
+        let result = state.submit_reveal(EpochPhase::Reveal, reveal);
         assert!(matches!(
             result,
             Err(CommitRevealError::WrongEpoch {
@@ -592,8 +623,10 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
 
-        state.submit_commitment(commitment).unwrap();
-        state.submit_reveal(reveal).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
+        state.submit_reveal(EpochPhase::Reveal, reveal).unwrap();
 
         // Require more validators than we have
         let result = state.finalize(0.3, 5);
@@ -619,13 +652,13 @@ mod tests {
         let (c2, r2) = create_test_commitment(&validator2, 0, challenge_id);
         let (c3, r3) = create_test_commitment(&validator3, 0, challenge_id);
 
-        state.submit_commitment(c1).unwrap();
-        state.submit_commitment(c2).unwrap();
-        state.submit_commitment(c3).unwrap();
+        state.submit_commitment(EpochPhase::Commit, c1).unwrap();
+        state.submit_commitment(EpochPhase::Commit, c2).unwrap();
+        state.submit_commitment(EpochPhase::Commit, c3).unwrap();
 
-        state.submit_reveal(r1).unwrap();
-        state.submit_reveal(r2).unwrap();
-        state.submit_reveal(r3).unwrap();
+        state.submit_reveal(EpochPhase::Reveal, r1).unwrap();
+        state.submit_reveal(EpochPhase::Reveal, r2).unwrap();
+        state.submit_reveal(EpochPhase::Reveal, r3).unwrap();
 
         let finalized = state.finalize(0.3, 3).unwrap();
         assert_eq!(finalized.epoch, 0);
@@ -647,13 +680,13 @@ mod tests {
         let (c2, _r2) = create_test_commitment(&validator2, 0, challenge_id);
         let (c3, r3) = create_test_commitment(&validator3, 0, challenge_id);
 
-        state.submit_commitment(c1).unwrap();
-        state.submit_commitment(c2).unwrap();
-        state.submit_commitment(c3).unwrap();
+        state.submit_commitment(EpochPhase::Commit, c1).unwrap();
+        state.submit_commitment(EpochPhase::Commit, c2).unwrap();
+        state.submit_commitment(EpochPhase::Commit, c3).unwrap();
 
-        state.submit_reveal(r1).unwrap();
+        state.submit_reveal(EpochPhase::Reveal, r1).unwrap();
         // validator2 doesn't reveal
-        state.submit_reveal(r3).unwrap();
+        state.submit_reveal(EpochPhase::Reveal, r3).unwrap();
 
         let finalized = state.finalize(0.3, 2).unwrap();
         assert_eq!(finalized.participating_validators.len(), 2);
@@ -670,7 +703,9 @@ mod tests {
 
         let validator = Keypair::generate();
         let (commitment, _) = create_test_commitment(&validator, 0, challenge_id);
-        state.submit_commitment(commitment).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
 
         assert_eq!(state.commitment_count(), 1);
     }
@@ -684,8 +719,10 @@ mod tests {
 
         let validator = Keypair::generate();
         let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
-        state.submit_commitment(commitment).unwrap();
-        state.submit_reveal(reveal).unwrap();
+        state
+            .submit_commitment(EpochPhase::Commit, commitment)
+            .unwrap();
+        state.submit_reveal(EpochPhase::Reveal, reveal).unwrap();
 
         assert_eq!(state.reveal_count(), 1);
     }

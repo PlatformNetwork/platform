@@ -1052,7 +1052,17 @@ impl DistributedStorage {
                     self.data_tree
                         .remove(&key)
                         .map_err(|e| StorageError::Database(e.to_string()))?;
-                    // TODO: Clean up orphaned index entries for expired data
+                    // Clean up orphaned index entries for expired data
+                    let idx_key = format!(
+                        "{}:{}:{}",
+                        entry.header.challenge_id, entry.header.category as u8, entry.header.key
+                    );
+                    let _ = self.index_tree.remove(idx_key.as_bytes());
+                    let creator_key = format!(
+                        "creator:{}:{}:{}",
+                        entry.header.creator, entry.header.challenge_id, entry.header.key
+                    );
+                    let _ = self.index_tree.remove(creator_key.as_bytes());
                     expired_keys.push(key.to_vec());
                     removed += 1;
                 }

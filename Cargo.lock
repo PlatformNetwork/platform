@@ -8691,6 +8691,7 @@ dependencies = [
  "platform-challenge-sdk-wasm",
  "platform-core",
  "platform-distributed-storage",
+ "platform-epoch",
  "platform-p2p-consensus",
  "platform-rpc",
  "platform-storage",

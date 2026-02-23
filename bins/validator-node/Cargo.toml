@@ -19,6 +19,7 @@ platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
 platform-challenge-sdk-wasm = { path = "../../crates/challenge-sdk-wasm" }
 platform-rpc = { path = "../../crates/rpc-server" }
 platform-subnet-manager = { path = "../../crates/subnet-manager" }
+platform-epoch = { path = "../../crates/epoch" }
 wasm-runtime-interface = { path = "../../crates/wasm-runtime-interface" }
 
 # Bittensor
