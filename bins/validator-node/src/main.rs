@@ -66,6 +66,32 @@ fn sanitize_for_log(s: &str) -> String {
         .collect()
 }
 
+/// Helper to mutate ChainState and automatically persist changes.
+/// This ensures we never forget to persist after mutations.
+async fn mutate_and_persist<F, R>(
+    storage: Arc<LocalStorage>,
+    chain_state: Arc<RwLock<platform_core::ChainState>>,
+    operation: &str,
+    f: F,
+) -> R
+where
+    F: FnOnce(&mut platform_core::ChainState) -> R,
+{
+    let result = {
+        let mut cs = chain_state.write();
+        f(&mut cs)
+    };
+
+    // Always persist after mutation
+    if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
+        warn!("Failed to persist state after {}: {}", operation, e);
+    } else {
+        debug!("State persisted after {}", operation);
+    }
+
+    result
+}
+
 // ==================== Shutdown Handler ====================
 
 /// Handles graceful shutdown with state persistence
@@ -1204,8 +1230,11 @@ async fn main() -> Result<()> {
                             } else if update_type == "rename" && !data.is_empty() {
                                 // Handle rename action
                                 if let Ok(new_name) = String::from_utf8(data) {
-                                    let mut cs = chain_state.write();
-                                    if cs.rename_challenge(&challenge_id, new_name.clone()) {
+                                    let name_clone = new_name.clone();
+                                    let renamed = mutate_and_persist(storage.clone(), chain_state.clone(), "rename_local", |cs| {
+                                        cs.rename_challenge(&challenge_id, name_clone)
+                                    }).await;
+                                    if renamed {
                                         info!(
                                             challenge_id = %challenge_id,
                                             new_name = %new_name,
@@ -2279,58 +2308,57 @@ async fn handle_network_event(
                             } // end else for is_valid
                         }
                         "activate" => {
-                            {
-                                let mut cs = chain_state.write();
-                                cs.set_challenge_active(&update.challenge_id, true);
-                            }
+                            let cid = update.challenge_id;
+                            mutate_and_persist(
+                                storage.clone(),
+                                chain_state.clone(),
+                                "activate",
+                                |cs| {
+                                    cs.set_challenge_active(&cid, true);
+                                },
+                            )
+                            .await;
                             state_manager.apply(|state| {
-                                state.set_challenge_active(&update.challenge_id, true);
+                                state.set_challenge_active(&cid, true);
                             });
-                            // Persist state change
-                            if let Err(e) =
-                                persist_core_state_to_storage(storage, chain_state).await
-                            {
-                                warn!("Failed to persist state after activate: {}", e);
-                            }
-                            info!(challenge_id = %update.challenge_id, "Challenge activated");
+                            info!(challenge_id = %cid, "Challenge activated");
                         }
                         "deactivate" => {
-                            {
-                                let mut cs = chain_state.write();
-                                cs.set_challenge_active(&update.challenge_id, false);
-                            }
+                            let cid = update.challenge_id;
+                            mutate_and_persist(
+                                storage.clone(),
+                                chain_state.clone(),
+                                "deactivate",
+                                |cs| {
+                                    cs.set_challenge_active(&cid, false);
+                                },
+                            )
+                            .await;
                             state_manager.apply(|state| {
-                                state.set_challenge_active(&update.challenge_id, false);
+                                state.set_challenge_active(&cid, false);
                             });
-                            // Persist state change
-                            if let Err(e) =
-                                persist_core_state_to_storage(storage, chain_state).await
-                            {
-                                warn!("Failed to persist state after deactivate: {}", e);
-                            }
-                            info!(challenge_id = %update.challenge_id, "Challenge deactivated");
+                            info!(challenge_id = %cid, "Challenge deactivated");
                         }
                         "rename" => {
                             if let Ok(new_name) = String::from_utf8(update.data.clone()) {
-                                let renamed = {
-                                    let mut cs = chain_state.write();
-                                    cs.rename_challenge(&update.challenge_id, new_name.clone())
-                                };
+                                let cid = update.challenge_id;
+                                let name_clone = new_name.clone();
+                                let renamed = mutate_and_persist(
+                                    storage.clone(),
+                                    chain_state.clone(),
+                                    "rename",
+                                    |cs| cs.rename_challenge(&cid, name_clone),
+                                )
+                                .await;
                                 if renamed {
-                                    // Persist state change
-                                    if let Err(e) =
-                                        persist_core_state_to_storage(storage, chain_state).await
-                                    {
-                                        warn!("Failed to persist state after rename: {}", e);
-                                    }
                                     info!(
-                                        challenge_id = %update.challenge_id,
+                                        challenge_id = %cid,
                                         new_name = %new_name,
                                         "Challenge renamed via P2P"
                                     );
                                 } else {
                                     warn!(
-                                        challenge_id = %update.challenge_id,
+                                        challenge_id = %cid,
                                         new_name = %new_name,
                                         "Failed to rename challenge - not found or name conflict"
                                     );
@@ -2341,20 +2369,22 @@ async fn handle_network_event(
                             match bincode::deserialize::<platform_core::SudoAction>(&update.data) {
                                 Ok(action) => {
                                     info!("Applying sudo action from P2P: {:?}", action);
-                                    {
-                                        let mut cs = chain_state.write();
-                                        if let Err(e) = cs.apply_sudo_action(&action) {
-                                            error!("Failed to apply sudo action from P2P: {}", e);
-                                        } else {
-                                            info!("Sudo action applied from P2P successfully");
-                                        }
-                                    }
-                                    // Persist state change
-                                    if let Err(e) =
-                                        persist_core_state_to_storage(storage, chain_state).await
-                                    {
-                                        warn!("Failed to persist state after sudo action: {}", e);
-                                    }
+                                    mutate_and_persist(
+                                        storage.clone(),
+                                        chain_state.clone(),
+                                        "sudo_action",
+                                        |cs| {
+                                            if let Err(e) = cs.apply_sudo_action(&action) {
+                                                error!(
+                                                    "Failed to apply sudo action from P2P: {}",
+                                                    e
+                                                );
+                                            } else {
+                                                info!("Sudo action applied from P2P successfully");
+                                            }
+                                        },
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
                                     error!("Failed to deserialize sudo action from P2P: {}", e);
@@ -2790,27 +2820,37 @@ async fn handle_network_event(
                                     }
                                     platform_p2p_consensus::StateMutationType::SudoAction => {
                                         if let Ok(action) = bincode::deserialize::<platform_core::SudoAction>(&entry.data) {
-                                            let mut cs = chain_state.write();
-                                            if let Err(e) = cs.apply_sudo_action(&action) {
-                                                error!("Failed to apply sudo action via consensus: {}", e);
-                                            }
+                                            mutate_and_persist(storage.clone(), chain_state.clone(), "sudo_consensus", |cs| {
+                                                if let Err(e) = cs.apply_sudo_action(&action) {
+                                                    error!("Failed to apply sudo action via consensus: {}", e);
+                                                }
+                                            }).await;
                                         }
                                     }
                                     platform_p2p_consensus::StateMutationType::ChallengeRename { challenge_id } => {
                                         if let Ok(new_name) = String::from_utf8(entry.data.clone()) {
-                                            let mut cs = chain_state.write();
-                                            cs.rename_challenge(challenge_id, new_name);
+                                            let cid = *challenge_id;
+                                            mutate_and_persist(storage.clone(), chain_state.clone(), "rename_consensus", |cs| {
+                                                cs.rename_challenge(&cid, new_name);
+                                            }).await;
                                         }
                                     }
                                     platform_p2p_consensus::StateMutationType::RouteRegistration { challenge_id } => {
                                         if let Ok(routes) = bincode::deserialize::<Vec<platform_core::ChallengeRouteInfo>>(&entry.data) {
-                                            let mut cs = chain_state.write();
-                                            cs.register_challenge_routes(*challenge_id, routes);
+                                            let cid = *challenge_id;
+                                            mutate_and_persist(storage.clone(), chain_state.clone(), "routes_consensus", |cs| {
+                                                cs.register_challenge_routes(cid, routes);
+                                            }).await;
                                         }
                                     }
                                     platform_p2p_consensus::StateMutationType::ChallengeActivation { challenge_id, active } => {
+                                        let cid = *challenge_id;
+                                        let is_active = *active;
+                                        mutate_and_persist(storage.clone(), chain_state.clone(), "activation_consensus", |cs| {
+                                            cs.set_challenge_active(&cid, is_active);
+                                        }).await;
                                         state_manager.apply(|state| {
-                                            state.set_challenge_active(challenge_id, *active);
+                                            state.set_challenge_active(&cid, is_active);
                                         });
                                     }
                                     platform_p2p_consensus::StateMutationType::EpochTransition { new_epoch } => {
