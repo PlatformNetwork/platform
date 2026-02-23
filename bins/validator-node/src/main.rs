@@ -367,6 +367,18 @@ async fn main() -> Result<()> {
             }),
     );
 
+    // Shared set of valid voter hotkeys for distributed storage consensus
+    let valid_voters: Arc<RwLock<std::collections::HashSet<Hotkey>>> =
+        Arc::new(RwLock::new(std::collections::HashSet::new()));
+
+    // Initialize state root consensus for cross-validator state verification
+    let state_root_consensus = Arc::new(parking_lot::Mutex::new(
+        platform_distributed_storage::state_consensus::StateRootConsensus::new(
+            keypair.hotkey(),
+            validator_set.quorum_size().max(1),
+        ),
+    ));
+
     // Create event channel for network events
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<NetworkEvent>(256);
 
@@ -430,7 +442,13 @@ async fn main() -> Result<()> {
                     match sync_metagraph(&bittensor_client, args.netuid).await {
                         Ok(mg) => {
                             info!("Metagraph synced: {} neurons", mg.n);
-                            update_validator_set_from_metagraph(&mg, &validator_set, &chain_state);
+                            update_validator_set_from_metagraph(
+                                &mg,
+                                &validator_set,
+                                &chain_state,
+                                &valid_voters,
+                                &state_root_consensus,
+                            );
                             info!(
                                 "Validator set: {} active validators",
                                 validator_set.active_count()
@@ -485,7 +503,13 @@ async fn main() -> Result<()> {
                             info!("Metagraph synced: {} neurons", mg.n);
 
                             // Update validator set from metagraph
-                            update_validator_set_from_metagraph(&mg, &validator_set, &chain_state);
+                            update_validator_set_from_metagraph(
+                                &mg,
+                                &validator_set,
+                                &chain_state,
+                                &valid_voters,
+                                &state_root_consensus,
+                            );
                             info!(
                                 "Validator set: {} active validators",
                                 validator_set.active_count()
@@ -554,8 +578,10 @@ async fn main() -> Result<()> {
         enable_fuel: args.wasm_enable_fuel,
         fuel_limit: args.wasm_fuel_limit,
         storage_host_config: wasm_runtime_interface::StorageHostConfig::default(),
-        storage_backend: std::sync::Arc::new(challenge_storage::ChallengeStorageBackend::new(
+        storage_backend: std::sync::Arc::new(challenge_storage::ChallengeStorageBackend::with_p2p(
             Arc::clone(&storage),
+            p2p_cmd_tx.clone(),
+            keypair.clone(),
         )),
         chutes_api_key: None,
         distributed_storage: Some(Arc::clone(&storage)),
@@ -1167,7 +1193,7 @@ async fn main() -> Result<()> {
                     match sync_metagraph(client, netuid).await {
                         Ok(mg) => {
                             info!("Metagraph refreshed: {} neurons", mg.n);
-                            update_validator_set_from_metagraph(&mg, &validator_set, &chain_state);
+                            update_validator_set_from_metagraph(&mg, &validator_set, &chain_state, &valid_voters, &state_root_consensus);
                             if let Some(sc) = subtensor_client.as_mut() {
                                 sc.set_metagraph(mg);
                             }
@@ -1358,6 +1384,10 @@ fn update_validator_set_from_metagraph(
     metagraph: &Metagraph,
     validator_set: &Arc<ValidatorSet>,
     chain_state: &Arc<RwLock<platform_core::ChainState>>,
+    valid_voters: &Arc<RwLock<std::collections::HashSet<Hotkey>>>,
+    state_root_consensus: &Arc<
+        parking_lot::Mutex<platform_distributed_storage::state_consensus::StateRootConsensus>,
+    >,
 ) {
     let mut cs = chain_state.write();
     cs.registered_hotkeys.clear();
@@ -1386,9 +1416,10 @@ fn update_validator_set_from_metagraph(
         }
     }
 
-    // TODO(C3): When ValidatedStorage and StateRootConsensus instances are wired into the main
-    // event loop, they should call `set_valid_voters()` with the validator hotkeys collected here
-    // to enable cryptographic vote verification in distributed storage consensus layers.
+    // Update valid voters for distributed storage consensus layers
+    let voter_hotkeys: std::collections::HashSet<Hotkey> = cs.validators.keys().cloned().collect();
+    *valid_voters.write() = voter_hotkeys.clone();
+    state_root_consensus.lock().set_valid_voters(voter_hotkeys);
 
     cs.update_hash();
 }
