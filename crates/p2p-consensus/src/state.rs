@@ -344,6 +344,9 @@ pub struct ChainState {
     /// Validator penalty counters (hotkey -> consecutive epochs penalized)
     #[serde(default, with = "hotkey_map_serde")]
     pub validator_penalties: HashMap<Hotkey, u32>,
+    /// Last epoch for which weights were successfully submitted
+    #[serde(default)]
+    pub last_weight_submission_epoch: u64,
 }
 
 /// Record of a review assignment
@@ -434,6 +437,7 @@ impl Default for ChainState {
             pending_storage_proposals: HashMap::new(),
             pending_state_mutations: HashMap::new(),
             validator_penalties: HashMap::new(),
+            last_weight_submission_epoch: 0,
         }
     }
 }
