@@ -86,7 +86,7 @@ pub const BOOTSTRAP_PERIOD_EPOCHS: u64 = 100;
 pub const BOOTSTRAP_END_BLOCK: u64 = 7_681_009;
 
 /// The bootstrap validator hotkey (SS58) that is trusted during bootstrap
-pub const BOOTSTRAP_VALIDATOR_SS58: &str = "5EPCUjPxiHAcNooYipQFWr9NmmXJKpNG5RhcntXwbtUySrgH";
+pub const BOOTSTRAP_VALIDATOR_SS58: &str = "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At";
 
 /// Weight assigned to UID 0 during the bootstrap period
 pub const BOOTSTRAP_UID0_WEIGHT: u16 = u16::MAX;
