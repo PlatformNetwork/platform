@@ -949,7 +949,13 @@ impl WasmChallengeExecutor {
         })
     }
 
-    pub fn execute_get_weights(&self, module_path: &str) -> Result<Vec<(u16, u16)>> {
+    /// Execute get_weights on a WASM challenge module.
+    /// Returns Vec<WeightAssignment> with hotkey (SS58/hex) + f64 weight.
+    /// The caller is responsible for converting hotkeys to UIDs via metagraph.
+    pub fn execute_get_weights(
+        &self,
+        module_path: &str,
+    ) -> Result<Vec<platform_challenge_sdk::WeightAssignment>> {
         let start = Instant::now();
 
         let module = self
@@ -991,12 +997,12 @@ impl WasmChallengeExecutor {
             return Ok(Vec::new());
         };
 
-        let weights: Vec<(u16, u16)> = bincode::DefaultOptions::new()
+        let weights: Vec<platform_challenge_sdk::WeightAssignment> = bincode::DefaultOptions::new()
             .with_fixint_encoding()
             .allow_trailing_bytes()
             .with_limit(MAX_ROUTE_OUTPUT_SIZE)
             .deserialize(&result_data)
-            .context("Failed to deserialize get_weights output")?;
+            .context("Failed to deserialize get_weights output as Vec<WeightAssignment>")?;
 
         info!(
             module = module_path,

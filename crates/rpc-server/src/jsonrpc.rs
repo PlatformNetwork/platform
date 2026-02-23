@@ -1217,20 +1217,21 @@ impl RpcHandler {
             }
         }
 
-        // Use resolved_id for the rest of the call
-        let challenge_id = resolved_id;
-
         // Parse headers for authentication
         let headers: std::collections::HashMap<String, String> = params
             .get("headers")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        // Verify authentication from headers if present
+        // Verify authentication using the ORIGINAL challenge_id (not resolved UUID)
+        // because the CLI signs with the name it knows (e.g. "bounty-challenge")
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
         let auth_hotkey =
             crate::auth::verify_route_auth(&headers, &challenge_id, &method, &path, &body_bytes)
                 .ok();
+
+        // Use resolved_id for routing
+        let challenge_id = resolved_id;
 
         let request = RouteRequest {
             method,

@@ -855,6 +855,7 @@ async fn main() -> Result<()> {
                     version_key,
                     &wasm_executor,
                     &keypair,
+                    &chain_state,
                 ).await;
             }
 
@@ -2093,12 +2094,13 @@ async fn handle_block_event(
     event: BlockSyncEvent,
     subtensor: &Option<Arc<Subtensor>>,
     signer: &Option<Arc<BittensorSigner>>,
-    _client: &Option<SubtensorClient>,
+    client: &Option<SubtensorClient>,
     state_manager: &Arc<StateManager>,
     netuid: u16,
     version_key: u64,
     wasm_executor: &Option<Arc<WasmChallengeExecutor>>,
     keypair: &Keypair,
+    chain_state: &Arc<RwLock<platform_core::ChainState>>,
 ) {
     match event {
         BlockSyncEvent::NewBlock { block_number, .. } => {
@@ -2129,39 +2131,98 @@ async fn handle_block_event(
                 epoch, block
             );
 
-            // Collect WASM-computed weights from challenges before finalizing
+            // Collect WASM-computed weights from challenges, convert hotkey->UID,
+            // apply emission_weight, and submit
             if let Some(ref executor) = wasm_executor {
                 let challenges: Vec<String> = state_manager
                     .apply(|state| state.challenges.keys().map(|k| k.to_string()).collect());
                 let local_hotkey = keypair.hotkey();
                 for cid in &challenges {
                     match executor.execute_get_weights(cid) {
-                        Ok(weights) if !weights.is_empty() => {
-                            state_manager.apply(|state| {
-                                if let Err(e) = state.submit_weight_vote(
-                                    local_hotkey.clone(),
-                                    netuid,
-                                    weights.clone(),
-                                ) {
-                                    warn!(
-                                        challenge_id = %cid,
-                                        error = %e,
-                                        "Failed to submit WASM-computed weights"
-                                    );
+                        Ok(assignments) if !assignments.is_empty() => {
+                            // Read emission_weight from chain state
+                            let emission_weight = {
+                                let cs = chain_state.read();
+                                let challenge_uuid = uuid::Uuid::parse_str(cid)
+                                    .ok()
+                                    .map(platform_core::ChallengeId);
+                                challenge_uuid
+                                    .and_then(|id| {
+                                        cs.wasm_challenge_configs
+                                            .get(&id)
+                                            .map(|c| c.config.emission_weight)
+                                            .or_else(|| {
+                                                cs.challenges
+                                                    .get(&id)
+                                                    .map(|c| c.config.emission_weight)
+                                            })
+                                    })
+                                    .unwrap_or(1.0)
+                            };
+
+                            // Convert hotkey -> UID via metagraph
+                            let mut uid_weights: Vec<(u16, u16)> = Vec::new();
+                            let total_weight: f64 = assignments.iter().map(|a| a.weight).sum();
+
+                            if total_weight > 0.0 {
+                                for assignment in &assignments {
+                                    let uid = client
+                                        .as_ref()
+                                        .and_then(|c| c.get_uid_for_hotkey(&assignment.hotkey));
+
+                                    if let Some(uid) = uid {
+                                        let normalized = assignment.weight / total_weight;
+                                        let scaled =
+                                            (normalized * emission_weight * 65535.0).round() as u16;
+                                        if scaled > 0 {
+                                            uid_weights.push((uid, scaled));
+                                        }
+                                    } else {
+                                        debug!(
+                                            hotkey = %assignment.hotkey,
+                                            challenge_id = %cid,
+                                            "Hotkey not found in metagraph, skipping"
+                                        );
+                                    }
                                 }
-                            });
-                            info!(
-                                challenge_id = %cid,
-                                weight_count = weights.len(),
-                                "Integrated WASM-computed weights"
-                            );
+
+                                // Remaining weight goes to UID 0 (burn)
+                                let used: u64 = uid_weights.iter().map(|(_, w)| *w as u64).sum();
+                                let burn = 65535u64.saturating_sub(used);
+                                if burn > 0 {
+                                    uid_weights.insert(0, (0u16, burn as u16));
+                                }
+                            }
+
+                            if !uid_weights.is_empty() {
+                                state_manager.apply(|state| {
+                                    if let Err(e) = state.submit_weight_vote(
+                                        local_hotkey.clone(),
+                                        netuid,
+                                        uid_weights.clone(),
+                                    ) {
+                                        warn!(
+                                            challenge_id = %cid,
+                                            error = %e,
+                                            "Failed to submit WASM-computed weights"
+                                        );
+                                    }
+                                });
+                                info!(
+                                    challenge_id = %cid,
+                                    emission_weight = emission_weight,
+                                    raw_assignments = assignments.len(),
+                                    uid_weights = uid_weights.len(),
+                                    "Integrated WASM weights (hotkey->UID converted, emission scaled)"
+                                );
+                            }
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            debug!(
+                            warn!(
                                 challenge_id = %cid,
                                 error = %e,
-                                "WASM get_weights not available for challenge"
+                                "WASM get_weights failed for challenge"
                             );
                         }
                     }
