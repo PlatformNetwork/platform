@@ -956,7 +956,7 @@ async fn main() -> Result<()> {
     let mut last_weight_submission_epoch: u64 = 0; // Local tracking of weight submissions
     let mut challenge_sync_interval = tokio::time::interval(Duration::from_secs(30)); // Check every 30s
     let mut last_sync_block: u64 = 0;
-    let sync_block_interval: u64 = 30; // Sync every 30 blocks (~3 min)
+    let sync_block_interval: u64 = 100; // Sync every 100 blocks (~20 min)
     let mut storage_stats_interval = tokio::time::interval(Duration::from_secs(300));
     // Track last synced block per challenge for delta sync
     let challenge_last_sync: Arc<
