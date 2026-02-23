@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use bincode::Options;
 use parking_lot::RwLock;
+use platform_challenge_sdk_wasm::{EvaluationInput, EvaluationOutput, WeightEntry};
 use platform_distributed_storage::DistributedStore;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,55 +13,9 @@ use wasm_runtime_interface::{
     StorageHostConfig, TerminalPolicy, TimePolicy, WasmModule, WasmRuntime, WasmRuntimeError,
 };
 
-const MAX_EVALUATION_OUTPUT_SIZE: u64 = 64 * 1024 * 1024;
+const MAX_EVALUATION_OUTPUT_SIZE: usize = 64 * 1024 * 1024;
 const MAX_ROUTE_OUTPUT_SIZE: u64 = 16 * 1024 * 1024;
 const MAX_TASK_OUTPUT_SIZE: u64 = 16 * 1024 * 1024;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EvaluationInput {
-    pub agent_data: Vec<u8>,
-    pub challenge_id: String,
-    pub params: Vec<u8>,
-    #[serde(default)]
-    pub task_definition: Option<Vec<u8>>,
-    #[serde(default)]
-    pub environment_config: Option<Vec<u8>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EvaluationOutput {
-    pub score: i64,
-    pub valid: bool,
-    pub message: String,
-    #[serde(default)]
-    pub metrics: Option<Vec<u8>>,
-    #[serde(default)]
-    pub details: Option<Vec<u8>>,
-}
-
-impl EvaluationOutput {
-    #[allow(dead_code)]
-    pub fn success(score: i64, message: &str) -> Self {
-        Self {
-            score,
-            valid: true,
-            message: String::from(message),
-            metrics: None,
-            details: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn failure(message: &str) -> Self {
-        Self {
-            score: 0,
-            valid: false,
-            message: String::from(message),
-            metrics: None,
-            details: None,
-        }
-    }
-}
 
 pub struct WasmExecutorConfig {
     pub module_dir: PathBuf,
@@ -256,11 +209,15 @@ impl WasmChallengeExecutor {
                 anyhow::anyhow!("Failed to read evaluation output from WASM memory: {}", e)
             })?;
 
-        let output: EvaluationOutput = bincode::DefaultOptions::new()
-            .with_limit(MAX_EVALUATION_OUTPUT_SIZE)
-            .with_fixint_encoding()
-            .allow_trailing_bytes()
-            .deserialize(&output_bytes)
+        if output_bytes.len() > MAX_EVALUATION_OUTPUT_SIZE {
+            return Err(anyhow::anyhow!(
+                "EvaluationOutput size {} exceeds maximum allowed {}",
+                output_bytes.len(),
+                MAX_EVALUATION_OUTPUT_SIZE
+            ));
+        }
+
+        let output: EvaluationOutput = bincode::deserialize(&output_bytes)
             .context("Failed to deserialize EvaluationOutput from WASM module")?;
 
         let fuel_consumed = match (initial_fuel, instance.fuel_remaining()) {
@@ -997,12 +954,16 @@ impl WasmChallengeExecutor {
             return Ok(Vec::new());
         };
 
-        let weights: Vec<platform_challenge_sdk::WeightAssignment> = bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .allow_trailing_bytes()
-            .with_limit(MAX_ROUTE_OUTPUT_SIZE)
-            .deserialize(&result_data)
-            .context("Failed to deserialize get_weights output as Vec<WeightAssignment>")?;
+        let weight_entries: Vec<WeightEntry> = bincode::deserialize(&result_data)
+            .context("Failed to deserialize get_weights output as Vec<WeightEntry>")?;
+
+        let weights: Vec<platform_challenge_sdk::WeightAssignment> = weight_entries
+            .into_iter()
+            .map(|entry| platform_challenge_sdk::WeightAssignment {
+                hotkey: format!("uid:{}", entry.uid),
+                weight: entry.weight as f64 / 65535.0,
+            })
+            .collect();
 
         info!(
             module = module_path,

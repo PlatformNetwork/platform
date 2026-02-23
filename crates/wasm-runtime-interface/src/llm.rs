@@ -9,7 +9,6 @@
 //! - `llm_is_available() -> i32` — Check if LLM inference is available (has API key)
 
 use crate::runtime::{HostFunctionRegistrar, RuntimeState, WasmRuntimeError};
-use bincode::Options;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use tracing::warn;
@@ -217,12 +216,11 @@ fn handle_chat_completion(
         content: String,
     }
 
-    let chat_req: ChatRequest = match bincode::DefaultOptions::new()
-        .with_limit(MAX_CHAT_REQUEST_SIZE)
-        .with_fixint_encoding()
-        .allow_trailing_bytes()
-        .deserialize(&request_bytes)
-    {
+    if request_bytes.len() as u64 > MAX_CHAT_REQUEST_SIZE {
+        return LlmHostStatus::InvalidRequest.to_i32();
+    }
+
+    let chat_req: ChatRequest = match bincode::deserialize(&request_bytes) {
         Ok(r) => r,
         Err(_) => return LlmHostStatus::InvalidRequest.to_i32(),
     };
