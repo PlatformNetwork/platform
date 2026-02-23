@@ -6,13 +6,11 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use wasm_runtime_interface::storage::{StorageBackend, StorageHostError};
 
-#[allow(dead_code)]
 pub struct ChallengeStorageBackend {
     storage: Arc<LocalStorage>,
 }
 
 impl ChallengeStorageBackend {
-    #[allow(dead_code)]
     pub fn new(storage: Arc<LocalStorage>) -> Self {
         Self { storage }
     }

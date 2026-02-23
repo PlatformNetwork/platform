@@ -472,6 +472,9 @@ pub struct StateRootConsensus {
 
     /// Completed consensus results (block_number -> result)
     completed: HashMap<u64, ConsensusResult>,
+
+    /// Set of valid voters (known validators)
+    valid_voters: std::collections::HashSet<Hotkey>,
 }
 
 impl StateRootConsensus {
@@ -494,7 +497,13 @@ impl StateRootConsensus {
             votes: HashMap::new(),
             fraud_proofs: Vec::new(),
             completed: HashMap::new(),
+            valid_voters: std::collections::HashSet::new(),
         }
+    }
+
+    /// Update the set of valid voters (known validators).
+    pub fn set_valid_voters(&mut self, voters: std::collections::HashSet<Hotkey>) {
+        self.valid_voters = voters;
     }
 
     /// Propose a new state root for consensus.
@@ -610,6 +619,45 @@ impl StateRootConsensus {
         let proposal = self.current_proposal.as_ref().ok_or_else(|| {
             StateRootConsensusError::InternalError("No active proposal".to_string())
         })?;
+
+        // Verify voter is a known validator
+        if !self.valid_voters.is_empty() && !self.valid_voters.contains(&vote.voter) {
+            return Err(StateRootConsensusError::InternalError(format!(
+                "Vote from unknown validator: {}",
+                vote.voter.to_hex()
+            )));
+        }
+
+        // Verify vote signature if present
+        if !vote.signature.is_empty() {
+            let vote_hash = vote.compute_hash();
+            let signed_msg = platform_core::SignedMessage {
+                message: vote_hash.to_vec(),
+                signature: vote.signature.clone(),
+                signer: vote.voter.clone(),
+            };
+            match signed_msg.verify() {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(StateRootConsensusError::InternalError(format!(
+                        "Invalid signature from voter: {}",
+                        vote.voter.to_hex()
+                    )));
+                }
+                Err(e) => {
+                    return Err(StateRootConsensusError::InternalError(format!(
+                        "Signature verification error for voter {}: {}",
+                        vote.voter.to_hex(),
+                        e
+                    )));
+                }
+            }
+        } else {
+            warn!(
+                voter = vote.voter.to_hex(),
+                "Vote received without signature"
+            );
+        }
 
         // Verify vote is for current proposal
         if vote.block_number != proposal.block_number {

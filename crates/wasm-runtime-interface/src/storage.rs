@@ -596,11 +596,6 @@ fn handle_storage_set(
         return StorageHostStatus::from(err).to_i32();
     }
 
-    if storage.config.require_consensus && !storage.config.allow_direct_writes {
-        warn!("storage_set: direct writes require consensus or allow_direct_writes");
-        return StorageHostStatus::ConsensusRequired.to_i32();
-    }
-
     let challenge_id = storage.challenge_id.clone();
     let backend = Arc::clone(&storage.backend);
 

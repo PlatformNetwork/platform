@@ -209,6 +209,10 @@ impl Storage {
             .insert(key, data)
             .map_err(|e| MiniChainError::Storage(format!("Failed to save challenge: {}", e)))?;
 
+        self.challenges_tree
+            .flush()
+            .map_err(|e| MiniChainError::Storage(format!("Failed to flush challenge: {}", e)))?;
+
         Ok(())
     }
 

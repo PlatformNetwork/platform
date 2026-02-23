@@ -437,6 +437,8 @@ pub struct DistributedStorage {
     data_tree: Tree,
     /// Index tree for fast lookups
     index_tree: Tree,
+    /// Pending ops persistence tree
+    pending_ops_tree: Tree,
     /// Pending write operations (waiting for consensus)
     pending_ops: RwLock<HashMap<[u8; 32], WriteOp>>,
     /// Current block
@@ -478,11 +480,33 @@ impl DistributedStorage {
             .open_tree("distributed_index")
             .map_err(|e| StorageError::Database(e.to_string()))?;
 
+        let pending_ops_tree = db
+            .open_tree("distributed_pending_ops")
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+
+        // Restore pending ops from disk
+        let mut restored_ops = HashMap::new();
+        for item in pending_ops_tree.iter() {
+            if let Ok((key, value)) = item {
+                if let Ok(op) = bincode::deserialize::<WriteOp>(&value) {
+                    let mut op_id = [0u8; 32];
+                    if key.len() == 32 {
+                        op_id.copy_from_slice(&key);
+                        restored_ops.insert(op_id, op);
+                    }
+                }
+            }
+        }
+        if !restored_ops.is_empty() {
+            tracing::info!(count = restored_ops.len(), "Restored pending ops from disk");
+        }
+
         Ok(Self {
             db: db.clone(),
             data_tree,
             index_tree,
-            pending_ops: RwLock::new(HashMap::new()),
+            pending_ops_tree,
+            pending_ops: RwLock::new(restored_ops),
             current_block: RwLock::new(0),
             total_validators: RwLock::new(1),
             our_validator: our_validator.to_string(),
@@ -575,6 +599,9 @@ impl DistributedStorage {
         }
 
         self.pending_ops.write().insert(op.op_id, op.clone());
+        if let Ok(data) = bincode::serialize(&op) {
+            let _ = self.pending_ops_tree.insert(&op.op_id, data);
+        }
         self.stats.write().write_ops_pending = self.pending_ops.read().len();
 
         Ok(op)
@@ -654,6 +681,9 @@ impl DistributedStorage {
         }
 
         self.pending_ops.write().insert(op.op_id, op.clone());
+        if let Ok(data) = bincode::serialize(&op) {
+            let _ = self.pending_ops_tree.insert(&op.op_id, data);
+        }
         self.stats.write().write_ops_pending = self.pending_ops.read().len();
 
         Ok(op)
@@ -679,6 +709,7 @@ impl DistributedStorage {
             if result {
                 // Consensus reached - remove and commit
                 let op = self.pending_ops.write().remove(op_id);
+                let _ = self.pending_ops_tree.remove(op_id);
                 if let Some(op) = op {
                     if let Err(e) = self.commit_write(op) {
                         tracing::error!("Failed to commit write: {}", e);
@@ -689,6 +720,7 @@ impl DistributedStorage {
             } else {
                 // Rejected
                 self.pending_ops.write().remove(op_id);
+                let _ = self.pending_ops_tree.remove(op_id);
                 self.stats.write().write_ops_rejected += 1;
             }
             self.stats.write().write_ops_pending = self.pending_ops.read().len();
@@ -723,6 +755,10 @@ impl DistributedStorage {
         self.data_tree
             .insert(&key, value)
             .map_err(|e| StorageError::Database(e.to_string()))?;
+
+        self.data_tree
+            .flush()
+            .map_err(|e| StorageError::Database(format!("Failed to flush after commit: {}", e)))?;
 
         // Update indexes
         self.update_indexes(&op.entry.header)?;

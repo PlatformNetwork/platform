@@ -1119,7 +1119,34 @@ impl ConsensusEngine {
         info!(view = new_view.view, "Transitioning to new view");
         *self.current_view.write() = new_view.view;
         *self.view_change_state.write() = None;
-        *self.current_round.write() = None;
+
+        // PBFT safety: restore the highest prepared round from view change messages
+        // The new leader must re-propose this value to preserve safety.
+        let highest_prepared = new_view
+            .view_changes
+            .iter()
+            .filter_map(|vc| {
+                vc.last_prepared_sequence
+                    .zip(vc.prepared_proof.as_ref())
+                    .map(|(seq, proof)| (seq, proof.clone()))
+            })
+            .max_by_key(|(seq, _)| *seq);
+
+        if let Some((sequence, proof)) = highest_prepared {
+            info!(
+                view = new_view.view,
+                sequence, "Restoring prepared round from view change proof"
+            );
+            let mut round = ConsensusRound::new(new_view.view, sequence);
+            round.pre_prepare = Some(proof.pre_prepare);
+            round.phase = ConsensusPhase::PrePrepare;
+            for prepare in proof.prepares {
+                round.prepares.insert(prepare.validator.clone(), prepare);
+            }
+            *self.current_round.write() = Some(round);
+        } else {
+            *self.current_round.write() = None;
+        }
 
         Ok(())
     }

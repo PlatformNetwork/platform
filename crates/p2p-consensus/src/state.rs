@@ -216,6 +216,9 @@ pub struct ChainState {
     /// Pending storage proposals awaiting consensus (proposal_id -> proposal)
     #[serde(default)]
     pub pending_storage_proposals: HashMap<[u8; 32], StorageProposal>,
+    /// Validator penalty counters (hotkey -> consecutive epochs penalized)
+    #[serde(default)]
+    pub validator_penalties: HashMap<Hotkey, u32>,
 }
 
 /// Record of a review assignment
@@ -287,6 +290,7 @@ impl Default for ChainState {
             agent_code_registry: HashMap::new(),
             bootstrap_active: false,
             pending_storage_proposals: HashMap::new(),
+            validator_penalties: HashMap::new(),
         }
     }
 }
@@ -709,7 +713,16 @@ impl ChainState {
         });
 
         if votes.epoch == epoch && !votes.finalized {
-            votes.votes.insert(validator, weights);
+            // Merge with existing vote from same validator instead of overwriting
+            if let Some(existing) = votes.votes.get_mut(&validator) {
+                let mut uid_map: HashMap<u16, u16> = existing.iter().copied().collect();
+                for (uid, weight) in &weights {
+                    uid_map.insert(*uid, *weight);
+                }
+                *existing = uid_map.into_iter().collect();
+            } else {
+                votes.votes.insert(validator, weights);
+            }
             self.update_hash();
             Ok(())
         } else {
@@ -740,7 +753,16 @@ impl ChainState {
         });
 
         if votes.epoch == epoch && !votes.finalized {
-            votes.votes.insert(validator, weights);
+            // Merge with existing vote from same validator instead of overwriting
+            if let Some(existing) = votes.votes.get_mut(&validator) {
+                let mut uid_map: HashMap<u16, u16> = existing.iter().copied().collect();
+                for (uid, weight) in &weights {
+                    uid_map.insert(*uid, *weight);
+                }
+                *existing = uid_map.into_iter().collect();
+            } else {
+                votes.votes.insert(validator, weights);
+            }
             self.update_hash();
             Ok(())
         } else {
@@ -848,6 +870,43 @@ impl ChainState {
         info!(epoch = self.epoch, "Transitioned to new epoch");
     }
 
+    /// Apply penalties to excluded validators and clear penalties for well-behaved ones
+    pub fn apply_penalties(&mut self, excluded: &[Hotkey]) {
+        // Increment penalty for excluded validators
+        for hotkey in excluded {
+            let count = self.validator_penalties.entry(hotkey.clone()).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+
+        // Clear penalties for validators not excluded this epoch
+        let excluded_set: std::collections::HashSet<&Hotkey> = excluded.iter().collect();
+        let mut to_remove = Vec::new();
+        for (hotkey, count) in self.validator_penalties.iter_mut() {
+            if !excluded_set.contains(hotkey) {
+                if *count > 0 {
+                    *count = count.saturating_sub(1);
+                }
+                if *count == 0 {
+                    to_remove.push(hotkey.clone());
+                }
+            }
+        }
+        for hotkey in to_remove {
+            self.validator_penalties.remove(&hotkey);
+        }
+
+        self.update_hash();
+    }
+
+    /// Get validators currently penalized (penalty count >= threshold)
+    pub fn get_penalized_validators(&self, threshold: u32) -> Vec<Hotkey> {
+        self.validator_penalties
+            .iter()
+            .filter(|(_, count)| **count >= threshold)
+            .map(|(hotkey, _)| hotkey.clone())
+            .collect()
+    }
+
     /// Get the current block height (sequence number)
     ///
     /// In this P2P consensus system, the sequence number serves as the
@@ -898,8 +957,17 @@ impl ChainState {
     pub fn update_leaderboard(
         &mut self,
         challenge_id: ChallengeId,
-        entries: Vec<LeaderboardEntry>,
+        mut entries: Vec<LeaderboardEntry>,
     ) {
+        // Sort by score descending and assign consistent ranks
+        entries.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (i, entry) in entries.iter_mut().enumerate() {
+            entry.rank = (i + 1) as u32;
+        }
         self.leaderboard.insert(challenge_id, entries);
         self.increment_sequence();
     }

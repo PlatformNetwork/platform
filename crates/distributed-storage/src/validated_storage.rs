@@ -330,6 +330,7 @@ pub struct ValidatedStorage<S: DistributedStore> {
     local_hotkey: Hotkey,
     proposals: Arc<RwLock<HashMap<[u8; 32], ProposalState>>>,
     committed: Arc<RwLock<HashMap<[u8; 32], ConsensusResult>>>,
+    valid_voters: Arc<RwLock<std::collections::HashSet<Hotkey>>>,
 }
 
 impl<S: DistributedStore + 'static> ValidatedStorage<S> {
@@ -347,6 +348,7 @@ impl<S: DistributedStore + 'static> ValidatedStorage<S> {
             local_hotkey,
             proposals: Arc::new(RwLock::new(HashMap::new())),
             committed: Arc::new(RwLock::new(HashMap::new())),
+            valid_voters: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
     }
 
@@ -357,7 +359,13 @@ impl<S: DistributedStore + 'static> ValidatedStorage<S> {
             local_hotkey,
             proposals: Arc::new(RwLock::new(HashMap::new())),
             committed: Arc::new(RwLock::new(HashMap::new())),
+            valid_voters: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Update the set of valid voters (known validators).
+    pub async fn set_valid_voters(&self, voters: std::collections::HashSet<Hotkey>) {
+        *self.valid_voters.write().await = voters;
     }
 
     pub fn config(&self) -> &ValidatedStorageConfig {
@@ -483,6 +491,38 @@ impl<S: DistributedStore + 'static> ValidatedStorage<S> {
         &self,
         vote: StorageWriteVote,
     ) -> Result<Option<ConsensusResult>, ValidatedStorageError> {
+        // Verify voter is a known validator
+        {
+            let voters = self.valid_voters.read().await;
+            if !voters.is_empty() && !voters.contains(&vote.voter) {
+                return Err(ValidatedStorageError::Storage(format!(
+                    "Vote from unknown validator: {}",
+                    vote.voter.to_hex()
+                )));
+            }
+        }
+
+        // Verify vote signature if present
+        if !vote.signature.is_empty() {
+            let vote_hash = vote.compute_hash();
+            let signed_msg = platform_core::SignedMessage {
+                message: vote_hash.to_vec(),
+                signature: vote.signature.clone(),
+                signer: vote.voter.clone(),
+            };
+            match signed_msg.verify() {
+                Ok(true) => {}
+                _ => {
+                    return Err(ValidatedStorageError::Storage(format!(
+                        "Invalid signature from voter: {}",
+                        vote.voter.to_hex()
+                    )));
+                }
+            }
+        } else {
+            tracing::warn!(voter = %vote.voter.to_hex(), "Vote received without signature");
+        }
+
         let proposal_id = vote.proposal_id;
 
         {

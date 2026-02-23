@@ -299,16 +299,14 @@ async fn challenge_route_handler(
 
     trace!("Challenge route: {} {} {}", challenge_id, method, path);
 
-    // Resolve challenge_id (can be UUID or name like "bounty-challenge")
+    // Resolve challenge_id (can be UUID or name)
     let (resolved_id, challenge_uuid) = {
         let chain = handler.chain_state.read();
 
-        // Try parsing as UUID first
         if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
             let cid = ChallengeId(uuid);
             (challenge_id.clone(), Some(cid))
         } else {
-            // Search by name in wasm_challenge_configs
             let found = chain
                 .wasm_challenge_configs
                 .values()
@@ -317,75 +315,56 @@ async fn challenge_route_handler(
             if let Some(config) = found {
                 (config.challenge_id.0.to_string(), Some(config.challenge_id))
             } else {
-                // Also check legacy challenges by name
-                let legacy = chain.challenges.values().find(|c| c.name == challenge_id);
-                if let Some(c) = legacy {
-                    (c.id.to_string(), Some(c.id))
-                } else {
-                    (challenge_id.clone(), None)
-                }
+                (challenge_id.clone(), None)
             }
         }
     };
 
-    // Check if challenge has registered routes
-    let challenge_routes = {
-        let routes = handler.challenge_routes.read();
-        let result = routes.get(&resolved_id).cloned();
-
-        if result.is_some() {
-            result
-        } else {
-            drop(routes);
-            // Fallback: Try chain_state.challenge_routes (for WASM challenges)
-            let chain = handler.chain_state.read();
-
-            challenge_uuid
-                .as_ref()
-                .and_then(|id| chain.challenge_routes.get(id))
-                .map(|chain_routes| {
-                    use platform_challenge_sdk::HttpMethod;
-                    chain_routes
-                        .iter()
-                        .map(|r| {
-                            let method = match r.method.to_uppercase().as_str() {
-                                "GET" => HttpMethod::Get,
-                                "POST" => HttpMethod::Post,
-                                "PUT" => HttpMethod::Put,
-                                "DELETE" => HttpMethod::Delete,
-                                "PATCH" => HttpMethod::Patch,
-                                _ => HttpMethod::Get,
-                            };
-                            let mut route = platform_challenge_sdk::ChallengeRoute::new(
-                                method,
-                                r.path.clone(),
-                                r.description.clone(),
-                            );
-                            if r.requires_auth {
-                                route = route.with_auth();
-                            }
-                            route
-                        })
-                        .collect::<Vec<_>>()
-                })
-        }
+    // Check if challenge has registered routes in ChainState
+    let challenge_routes: Vec<platform_challenge_sdk::ChallengeRoute> = {
+        let chain = handler.chain_state.read();
+        challenge_uuid
+            .as_ref()
+            .and_then(|id| chain.challenge_routes.get(id))
+            .map(|chain_routes| {
+                use platform_challenge_sdk::HttpMethod;
+                chain_routes
+                    .iter()
+                    .map(|r| {
+                        let method = match r.method.to_uppercase().as_str() {
+                            "GET" => HttpMethod::Get,
+                            "POST" => HttpMethod::Post,
+                            "PUT" => HttpMethod::Put,
+                            "DELETE" => HttpMethod::Delete,
+                            "PATCH" => HttpMethod::Patch,
+                            _ => HttpMethod::Get,
+                        };
+                        let mut route = platform_challenge_sdk::ChallengeRoute::new(
+                            method,
+                            r.path.clone(),
+                            r.description.clone(),
+                        );
+                        if r.requires_auth {
+                            route = route.with_auth();
+                        }
+                        route
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     };
 
-    // Use resolved_id for the rest
     let challenge_id = resolved_id;
 
-    let challenge_routes = match challenge_routes {
-        Some(r) => r,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": "challenge_not_found",
-                    "message": format!("Challenge '{}' not found or has no routes", challenge_id)
-                })),
-            );
-        }
-    };
+    if challenge_routes.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "challenge_not_found",
+                "message": format!("Challenge '{}' not found or has no routes", challenge_id)
+            })),
+        );
+    }
 
     // Find matching route
     let mut matched_route = None;
@@ -424,7 +403,11 @@ async fn challenge_route_handler(
     }
 
     // Verify authentication from headers if present
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body_bytes = if body.is_null() {
+        Vec::new()
+    } else {
+        serde_json::to_vec(&body).unwrap_or_default()
+    };
     let auth_hotkey =
         crate::auth::verify_route_auth(&headers_map, &challenge_id, &method, &path, &body_bytes)
             .ok();

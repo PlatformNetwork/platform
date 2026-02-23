@@ -181,8 +181,6 @@ pub struct RpcHandler {
     pub netuid: u16,
     pub chain_name: String,
     pub peers: Arc<RwLock<Vec<String>>>,
-    /// Registered challenge routes: challenge_id -> routes
-    pub challenge_routes: Arc<RwLock<HashMap<String, Vec<ChallengeRoute>>>>,
     /// Challenge route handler callback
     pub route_handler: Arc<RwLock<Option<ChallengeRouteHandler>>>,
     /// Channel to send signed messages for P2P broadcast
@@ -200,7 +198,6 @@ impl RpcHandler {
             netuid,
             chain_name: format!("MiniChain-{}", netuid),
             peers: Arc::new(RwLock::new(Vec::new())),
-            challenge_routes: Arc::new(RwLock::new(HashMap::new())),
             route_handler: Arc::new(RwLock::new(None)),
             broadcast_tx: Arc::new(RwLock::new(None)),
             keypair: Arc::new(RwLock::new(None)),
@@ -229,64 +226,34 @@ impl RpcHandler {
             .to_string()
     }
 
-    /// Register routes for a challenge
-    pub fn register_challenge_routes(&self, challenge_id: &str, routes: Vec<ChallengeRoute>) {
-        if routes.is_empty() {
-            return;
-        }
-        info!(
-            "Registering {} routes for challenge {}",
-            routes.len(),
-            challenge_id
-        );
-        for route in &routes {
-            debug!(
-                "  {} {}: {}",
-                route.method.as_str(),
-                route.path,
-                route.description
-            );
-        }
-        self.challenge_routes
-            .write()
-            .insert(challenge_id.to_string(), routes);
-    }
-
-    /// Unregister routes for a challenge
-    pub fn unregister_challenge_routes(&self, challenge_id: &str) {
-        self.challenge_routes.write().remove(challenge_id);
-    }
-
     /// Set the route handler callback
     pub fn set_route_handler(&self, handler: ChallengeRouteHandler) {
         *self.route_handler.write() = Some(handler);
     }
 
-    /// Get all registered challenge routes
+    /// Get all registered challenge routes from ChainState
     pub fn get_all_challenge_routes(&self) -> Vec<RegisteredChallengeRoute> {
-        let routes = self.challenge_routes.read();
         let chain = self.chain_state.read();
 
         let mut result = Vec::new();
-        for (challenge_id, challenge_routes) in routes.iter() {
+        for (cid, routes) in &chain.challenge_routes {
             let challenge_name = chain
-                .challenges
-                .values()
-                .find(|c| c.id.to_string() == *challenge_id)
+                .wasm_challenge_configs
+                .get(cid)
                 .map(|c| c.name.clone())
-                .unwrap_or_else(|| challenge_id.clone());
+                .unwrap_or_else(|| cid.to_string());
 
-            for route in challenge_routes {
+            for route in routes {
                 result.push(RegisteredChallengeRoute {
-                    challenge_id: challenge_id.clone(),
+                    challenge_id: cid.to_string(),
                     challenge_name: challenge_name.clone(),
                     route: ChallengeRouteInfo {
-                        method: route.method.as_str().to_string(),
+                        method: route.method.clone(),
                         path: route.path.clone(),
-                        full_path: format!("/challenge/{}{}", challenge_id, route.path),
+                        full_path: format!("/challenge/{}{}", cid, route.path),
                         description: route.description.clone(),
                         requires_auth: route.requires_auth,
-                        rate_limit: route.rate_limit,
+                        rate_limit: 0,
                     },
                 });
             }
@@ -740,7 +707,8 @@ impl RpcHandler {
 
     fn state_get_metadata(&self, id: Value) -> JsonRpcResponse {
         let chain = self.chain_state.read();
-        let routes = self.challenge_routes.read();
+
+        let total_routes: usize = chain.challenge_routes.values().map(|r| r.len()).sum();
 
         JsonRpcResponse::result(
             id,
@@ -772,7 +740,7 @@ impl RpcHandler {
                     "netuid": self.netuid,
                     "minStake": chain.config.min_stake.0,
                 },
-                "challengeRoutes": routes.len(),
+                "challengeRoutes": total_routes,
             }),
         )
     }
@@ -974,48 +942,56 @@ impl RpcHandler {
         };
 
         let chain = self.chain_state.read();
-        let routes = self.challenge_routes.read();
 
-        let challenge = chain
-            .challenges
-            .values()
-            .find(|c| c.id.to_string() == challenge_id || c.name == challenge_id);
+        // Find in wasm_challenge_configs by UUID or name
+        let config = if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
+            let cid = platform_core::ChallengeId(uuid);
+            chain.wasm_challenge_configs.get(&cid)
+        } else {
+            chain
+                .wasm_challenge_configs
+                .values()
+                .find(|c| c.name == challenge_id)
+        };
 
-        match challenge {
+        match config {
             Some(c) => {
-                let challenge_routes: Vec<Value> = routes
-                    .get(&c.id.to_string())
+                let routes: Vec<Value> = chain
+                    .challenge_routes
+                    .get(&c.challenge_id)
                     .map(|rs| {
                         rs.iter()
                             .map(|r| {
                                 json!({
-                                    "method": r.method.as_str(),
+                                    "method": r.method,
                                     "path": r.path,
-                                    "fullPath": format!("/challenge/{}{}", c.id, r.path),
+                                    "fullPath": format!("/challenge/{}{}", c.challenge_id, r.path),
                                     "description": r.description,
                                     "requiresAuth": r.requires_auth,
-                                    "rateLimit": r.rate_limit,
                                 })
                             })
                             .collect()
                     })
                     .unwrap_or_default();
 
+                let weight = chain
+                    .challenge_weights
+                    .get(&c.challenge_id)
+                    .map(|w| w.weight_ratio)
+                    .unwrap_or(0.0);
+
                 JsonRpcResponse::result(
                     id,
                     json!({
-                        "id": c.id.to_string(),
+                        "id": c.challenge_id.to_string(),
                         "name": c.name,
                         "description": c.description,
-                        "codeHash": c.code_hash,
-                        "codeSize": c.wasm_code.len(),
+                        "codeHash": c.module.code_hash,
                         "isActive": c.is_active,
                         "owner": c.owner.to_hex(),
-                        "mechanismId": c.config.mechanism_id,
-                        "emissionWeight": c.config.emission_weight,
-                        "timeoutSecs": c.config.timeout_secs,
-                        "createdAt": c.created_at.to_rfc3339(),
-                        "routes": challenge_routes,
+                        "version": c.module.version,
+                        "emissionWeight": weight,
+                        "routes": routes,
                     }),
                 )
             }
@@ -1033,51 +1009,48 @@ impl RpcHandler {
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing 'id' parameter"),
         };
 
-        let routes = self.challenge_routes.read();
         let chain = self.chain_state.read();
 
-        // Find actual challenge ID (might be name)
-        let actual_id = chain
-            .challenges
-            .values()
-            .find(|c| c.id.to_string() == challenge_id || c.name == challenge_id)
-            .map(|c| c.id.to_string())
-            .unwrap_or_else(|| challenge_id.clone());
+        // Resolve challenge ID (might be name)
+        let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
+            Some(platform_core::ChallengeId(uuid))
+        } else {
+            chain
+                .wasm_challenge_configs
+                .values()
+                .find(|c| c.name == challenge_id)
+                .map(|c| c.challenge_id)
+        };
 
-        match routes.get(&actual_id) {
-            Some(challenge_routes) => {
-                let routes_json: Vec<Value> = challenge_routes
-                    .iter()
+        let cid =
+            resolved.unwrap_or_else(|| platform_core::ChallengeId::from_string(&challenge_id));
+
+        let routes_json: Vec<Value> = chain
+            .challenge_routes
+            .get(&cid)
+            .map(|rs| {
+                rs.iter()
                     .map(|r| {
                         json!({
-                            "method": r.method.as_str(),
+                            "method": r.method,
                             "path": r.path,
-                            "fullPath": format!("/challenge/{}{}", actual_id, r.path),
+                            "fullPath": format!("/challenge/{}{}", cid, r.path),
                             "description": r.description,
                             "requiresAuth": r.requires_auth,
-                            "rateLimit": r.rate_limit,
                         })
                     })
-                    .collect();
+                    .collect()
+            })
+            .unwrap_or_default();
 
-                JsonRpcResponse::result(
-                    id,
-                    json!({
-                        "challengeId": actual_id,
-                        "routesCount": routes_json.len(),
-                        "routes": routes_json,
-                    }),
-                )
-            }
-            None => JsonRpcResponse::result(
-                id,
-                json!({
-                    "challengeId": actual_id,
-                    "routesCount": 0,
-                    "routes": [],
-                }),
-            ),
-        }
+        JsonRpcResponse::result(
+            id,
+            json!({
+                "challengeId": cid.to_string(),
+                "routesCount": routes_json.len(),
+                "routes": routes_json,
+            }),
+        )
     }
 
     fn challenge_list_all_routes(&self, id: Value) -> JsonRpcResponse {
@@ -1191,29 +1164,22 @@ impl RpcHandler {
 
         // Verify the challenge has registered routes
         {
-            let routes = self.challenge_routes.read();
-            let has_routes = routes.contains_key(&resolved_id);
-            drop(routes);
+            let chain = self.chain_state.read();
+            let challenge_uuid = uuid::Uuid::parse_str(&resolved_id)
+                .ok()
+                .map(platform_core::ChallengeId);
+
+            let has_routes = challenge_uuid
+                .as_ref()
+                .map(|cid| chain.challenge_routes.contains_key(cid))
+                .unwrap_or(false);
 
             if !has_routes {
-                // Check chain_state.challenge_routes for WASM challenges
-                let chain = self.chain_state.read();
-                let challenge_uuid = uuid::Uuid::parse_str(&resolved_id)
-                    .ok()
-                    .map(platform_core::ChallengeId);
-
-                let found_in_chain = challenge_uuid
-                    .as_ref()
-                    .map(|id| chain.challenge_routes.contains_key(id))
-                    .unwrap_or(false);
-
-                if !found_in_chain {
-                    return JsonRpcResponse::error(
-                        id,
-                        CHALLENGE_NOT_FOUND,
-                        format!("Challenge '{}' not found or has no routes", challenge_id),
-                    );
-                }
+                return JsonRpcResponse::error(
+                    id,
+                    CHALLENGE_NOT_FOUND,
+                    format!("Challenge '{}' not found or has no routes", challenge_id),
+                );
             }
         }
 
@@ -1234,19 +1200,7 @@ impl RpcHandler {
         let challenge_id = resolved_id;
 
         // Extract path params by matching against registered route definitions
-        let path_params = {
-            let routes = self.challenge_routes.read();
-            let mut extracted = std::collections::HashMap::new();
-            if let Some(challenge_routes) = routes.get(&challenge_id) {
-                for route in challenge_routes {
-                    if let Some(params) = route.matches(&method, &path) {
-                        extracted = params;
-                        break;
-                    }
-                }
-            }
-            extracted
-        };
+        let path_params = std::collections::HashMap::new();
 
         let request = RouteRequest {
             method,
@@ -1452,6 +1406,7 @@ impl RpcHandler {
                     "total": 0,
                     "limit": limit,
                     "offset": offset,
+                    "hint": "Use the challenge route GET /leaderboard for challenge-specific leaderboard data"
                 }),
             ),
             None => JsonRpcResponse::error(
@@ -2413,46 +2368,10 @@ mod tests {
     }
 
     #[test]
-    fn test_register_challenge_routes() {
+    fn test_get_all_challenge_routes_empty() {
         let handler = create_handler();
-        use platform_challenge_sdk::ChallengeRoute;
-
-        let routes = vec![
-            ChallengeRoute::get("/test", "Test route"),
-            ChallengeRoute::post("/submit", "Submit route"),
-        ];
-
-        handler.register_challenge_routes("test-challenge", routes);
-
-        let registered = handler.challenge_routes.read();
-        assert!(registered.contains_key("test-challenge"));
-        assert_eq!(registered.get("test-challenge").unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_unregister_challenge_routes() {
-        let handler = create_handler();
-        use platform_challenge_sdk::ChallengeRoute;
-
-        let routes = vec![ChallengeRoute::get("/test", "Test route")];
-        handler.register_challenge_routes("test-challenge", routes);
-
-        handler.unregister_challenge_routes("test-challenge");
-
-        let registered = handler.challenge_routes.read();
-        assert!(!registered.contains_key("test-challenge"));
-    }
-
-    #[test]
-    fn test_get_all_challenge_routes() {
-        let handler = create_handler();
-        use platform_challenge_sdk::ChallengeRoute;
-
-        let routes = vec![ChallengeRoute::get("/test", "Test route")];
-        handler.register_challenge_routes("test-challenge", routes);
-
         let all_routes = handler.get_all_challenge_routes();
-        assert_eq!(all_routes.len(), 1);
+        assert_eq!(all_routes.len(), 0);
     }
 
     #[test]
@@ -2591,36 +2510,40 @@ mod tests {
         let handler = create_handler();
         use platform_challenge_sdk::ChallengeRoute;
 
-        // Add a challenge
+        // Add a WASM challenge config
         let kp = Keypair::generate();
         let challenge_id = platform_core::ChallengeId::new();
-        let config = platform_core::ChallengeConfig::default();
-        let challenge = platform_core::Challenge {
-            id: challenge_id,
+        let wasm_config = platform_core::WasmChallengeConfig {
+            challenge_id,
             name: "test-challenge".to_string(),
             description: "Test description".to_string(),
-            wasm_code: vec![1, 2, 3],
-            code_hash: "abc123".to_string(),
-            wasm_metadata: platform_core::WasmModuleMetadata::from_code_hash("abc123".to_string()),
             owner: kp.hotkey(),
-            config,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            module: platform_core::WasmModuleMetadata::from_code_hash("abc123".to_string()),
+            config: platform_core::ChallengeConfig::default(),
             is_active: true,
         };
 
-        handler
-            .chain_state
-            .write()
-            .challenges
-            .insert(challenge_id, challenge);
-
-        // Register routes for the challenge
-        let routes = vec![
-            ChallengeRoute::get("/test", "Test route"),
-            ChallengeRoute::post("/submit", "Submit route"),
-        ];
-        handler.register_challenge_routes(&challenge_id.to_string(), routes);
+        {
+            let mut cs = handler.chain_state.write();
+            cs.wasm_challenge_configs.insert(challenge_id, wasm_config);
+            cs.register_challenge_routes(
+                challenge_id,
+                vec![
+                    platform_core::ChallengeRouteInfo {
+                        method: "GET".to_string(),
+                        path: "/test".to_string(),
+                        description: "Test route".to_string(),
+                        requires_auth: false,
+                    },
+                    platform_core::ChallengeRouteInfo {
+                        method: "POST".to_string(),
+                        path: "/submit".to_string(),
+                        description: "Submit route".to_string(),
+                        requires_auth: true,
+                    },
+                ],
+            );
+        }
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -2637,35 +2560,32 @@ mod tests {
     #[test]
     fn test_challenge_get_routes_by_name() {
         let handler = create_handler();
-        use platform_challenge_sdk::ChallengeRoute;
 
-        // Add a challenge
         let kp = Keypair::generate();
         let challenge_id = platform_core::ChallengeId::new();
-        let config = platform_core::ChallengeConfig::default();
-        let challenge = platform_core::Challenge {
-            id: challenge_id,
+        let wasm_config = platform_core::WasmChallengeConfig {
+            challenge_id,
             name: "my-challenge".to_string(),
-            description: "Test description".to_string(),
-            wasm_code: vec![],
-            code_hash: "abc123".to_string(),
-            wasm_metadata: platform_core::WasmModuleMetadata::from_code_hash("abc123".to_string()),
+            description: "".to_string(),
             owner: kp.hotkey(),
-            config,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            module: platform_core::WasmModuleMetadata::from_code_hash("abc123".to_string()),
+            config: platform_core::ChallengeConfig::default(),
             is_active: true,
         };
 
-        handler
-            .chain_state
-            .write()
-            .challenges
-            .insert(challenge_id, challenge);
-
-        // Register routes
-        let routes = vec![ChallengeRoute::get("/status", "Status route")];
-        handler.register_challenge_routes(&challenge_id.to_string(), routes);
+        {
+            let mut cs = handler.chain_state.write();
+            cs.wasm_challenge_configs.insert(challenge_id, wasm_config);
+            cs.register_challenge_routes(
+                challenge_id,
+                vec![platform_core::ChallengeRouteInfo {
+                    method: "GET".to_string(),
+                    path: "/status".to_string(),
+                    description: "Status route".to_string(),
+                    requires_auth: false,
+                }],
+            );
+        }
 
         // Query by name instead of ID
         let req = JsonRpcRequest {
@@ -2678,14 +2598,5 @@ mod tests {
         assert!(resp.result.is_some());
         let result = resp.result.unwrap();
         assert_eq!(result["routesCount"], 1);
-    }
-
-    #[test]
-    fn test_register_empty_routes() {
-        let handler = create_handler();
-        // Registering empty routes should be a no-op
-        handler.register_challenge_routes("test-challenge", vec![]);
-        let routes = handler.challenge_routes.read();
-        assert!(!routes.contains_key("test-challenge"));
     }
 }

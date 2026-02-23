@@ -553,7 +553,9 @@ async fn main() -> Result<()> {
         enable_fuel: args.wasm_enable_fuel,
         fuel_limit: args.wasm_fuel_limit,
         storage_host_config: wasm_runtime_interface::StorageHostConfig::default(),
-        storage_backend: std::sync::Arc::new(wasm_runtime_interface::InMemoryStorageBackend::new()),
+        storage_backend: std::sync::Arc::new(challenge_storage::ChallengeStorageBackend::new(
+            Arc::clone(&storage),
+        )),
         chutes_api_key: None,
         distributed_storage: Some(Arc::clone(&storage)),
     }) {
@@ -1944,20 +1946,34 @@ async fn handle_network_event(
                         state.add_storage_proposal(storage_proposal);
                     });
 
-                    // Auto-vote approve (validator trusts other validators)
-                    // In production, could verify via WASM validate_storage_write
+                    // Validate proposal before voting
+                    let max_key_size = 1024;
+                    let max_value_size = 10 * 1024 * 1024; // 10MB
+                    let approve = !proposal.key.is_empty()
+                        && proposal.key.len() <= max_key_size
+                        && proposal.value.len() <= max_value_size
+                        && proposal.challenge_id.0 != uuid::Uuid::nil()
+                        && !proposal.signature.is_empty();
+
+                    if !approve {
+                        warn!(
+                            proposal_id = %hex::encode(&proposal.proposal_id[..8]),
+                            "Storage proposal failed validation, voting reject"
+                        );
+                    }
+
                     let my_hotkey = keypair.hotkey();
                     let timestamp = chrono::Utc::now().timestamp_millis();
 
-                    // Sign the vote
-                    let vote_data = bincode::serialize(&(&proposal.proposal_id, true, timestamp))
-                        .unwrap_or_default();
+                    let vote_data =
+                        bincode::serialize(&(&proposal.proposal_id, approve, timestamp))
+                            .unwrap_or_default();
                     let signature = keypair.sign_bytes(&vote_data).unwrap_or_default();
 
                     let vote_msg = P2PMessage::StorageVote(StorageVoteMessage {
                         proposal_id: proposal.proposal_id,
                         voter: my_hotkey,
-                        approve: true,
+                        approve,
                         timestamp,
                         signature,
                     });
@@ -2065,6 +2081,35 @@ async fn handle_network_event(
                     validator = %msg.validator_hotkey.to_hex(),
                     "Received agent log proposal"
                 );
+            }
+            P2PMessage::StorageRootSync(msg) => {
+                if !validator_set.is_validator(&msg.validator) {
+                    warn!(validator = %msg.validator.to_hex(), "Storage root sync from unknown validator");
+                } else {
+                    let local_roots: Vec<(platform_core::ChallengeId, [u8; 32])> = state_manager
+                        .apply(|state| {
+                            state
+                                .challenge_storage_roots
+                                .iter()
+                                .map(|(k, v)| (*k, *v))
+                                .collect()
+                        });
+                    let local_map: std::collections::HashMap<_, _> =
+                        local_roots.into_iter().collect();
+                    for (cid, remote_root) in &msg.roots {
+                        if let Some(local_root) = local_map.get(cid) {
+                            if local_root != remote_root {
+                                warn!(
+                                    challenge_id = %cid,
+                                    local = %hex::encode(&local_root[..8]),
+                                    remote = %hex::encode(&remote_root[..8]),
+                                    remote_validator = %msg.validator.to_hex(),
+                                    "Storage root divergence detected"
+                                );
+                            }
+                        }
+                    }
+                }
             }
         },
         NetworkEvent::PeerConnected(peer_id) => {

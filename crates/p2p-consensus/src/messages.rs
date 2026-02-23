@@ -62,6 +62,9 @@ pub enum P2PMessage {
 
     /// Agent log proposal for consensus
     AgentLogProposal(AgentLogProposalMessage),
+
+    /// Storage root hash broadcast for divergence detection
+    StorageRootSync(StorageRootSyncMessage),
 }
 
 impl P2PMessage {
@@ -117,6 +120,7 @@ impl P2PMessage {
             P2PMessage::ReviewDecline(_) => "ReviewDecline",
             P2PMessage::ReviewResult(_) => "ReviewResult",
             P2PMessage::AgentLogProposal(_) => "AgentLogProposal",
+            P2PMessage::StorageRootSync(_) => "StorageRootSync",
         }
     }
 }
@@ -850,4 +854,19 @@ mod tests {
         let bytes = msg.signing_bytes().expect("should get signing bytes");
         assert!(!bytes.is_empty());
     }
+}
+
+/// Storage root hash broadcast for detecting divergent state between validators
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageRootSyncMessage {
+    /// Validator broadcasting the root
+    pub validator: Hotkey,
+    /// Epoch at which the root was computed
+    pub epoch: u64,
+    /// Storage roots per challenge (challenge_id -> merkle root hash)
+    pub roots: Vec<(ChallengeId, [u8; 32])>,
+    /// Timestamp
+    pub timestamp: i64,
+    /// Signature
+    pub signature: Vec<u8>,
 }

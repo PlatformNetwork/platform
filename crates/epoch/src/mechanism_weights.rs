@@ -150,7 +150,7 @@ impl MechanismWeights {
         }
 
         // Remaining weight goes to UID 0 (burn)
-        let burn_weight = MAX_WEIGHT.saturating_sub(used_weight as u16);
+        let burn_weight = MAX_WEIGHT.saturating_sub(used_weight.min(MAX_WEIGHT as u64) as u16);
         if burn_weight > 0 {
             uids.insert(0, BURN_UID);
             weights.insert(0, burn_weight);
