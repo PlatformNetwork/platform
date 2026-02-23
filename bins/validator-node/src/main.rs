@@ -855,7 +855,7 @@ async fn main() -> Result<()> {
                             match exec.execute_get_routes_from_bytes(
                                 &mp,
                                 &wasm_bytes,
-                                &wasm_runtime_interface::NetworkPolicy::default(),
+                                &wasm_runtime_interface::NetworkPolicy::development(),
                                 &wasm_runtime_interface::SandboxPolicy::default(),
                             ) {
                                 Ok((routes_data, _)) => {
@@ -916,6 +916,27 @@ async fn main() -> Result<()> {
                 }
             }
             info!("All WASM modules reloaded");
+
+            // Run sync() on each challenge at startup
+            for (challenge_id, module_path) in &challenges {
+                let mp = if module_path.is_empty() {
+                    challenge_id.to_string()
+                } else {
+                    module_path.clone()
+                };
+                match executor.execute_sync_with_block(&mp, 120, 0) {
+                    Ok(result) => {
+                        info!(
+                            challenge_id = %challenge_id,
+                            total_users = result.total_users,
+                            "Startup sync completed"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(challenge_id = %challenge_id, error = %e, "Startup sync failed");
+                    }
+                }
+            }
         }
     }
 
@@ -1179,7 +1200,7 @@ async fn main() -> Result<()> {
                                                 match executor.execute_get_routes_from_bytes(
                                                     &challenge_id_str_for_routes,
                                                     &wasm_bytes,
-                                                    &wasm_runtime_interface::NetworkPolicy::default(),
+                                                    &wasm_runtime_interface::NetworkPolicy::development(),
                                                     &wasm_runtime_interface::SandboxPolicy::default(),
                                                 ) {
                                                     Ok((routes_data, _)) => {
@@ -1223,7 +1244,7 @@ async fn main() -> Result<()> {
                                             match executor.execute_get_routes_from_bytes(
                                                 &challenge_id_str,
                                                 &stored.data,
-                                                &wasm_runtime_interface::NetworkPolicy::default(),
+                                                &wasm_runtime_interface::NetworkPolicy::development(),
                                                 &wasm_runtime_interface::SandboxPolicy::default(),
                                             ) {
                                                 Ok((routes_data, _)) => {
@@ -2416,7 +2437,7 @@ async fn handle_network_event(
                                                 match executor.execute_get_routes_from_bytes(
                                                     &challenge_id_str_for_routes,
                                                     &wasm_bytes,
-                                                    &wasm_runtime_interface::NetworkPolicy::default(),
+                                                    &wasm_runtime_interface::NetworkPolicy::development(),
                                                     &wasm_runtime_interface::SandboxPolicy::default(),
                                                 ) {
                                                     Ok((routes_data, _)) => {
@@ -3688,7 +3709,7 @@ async fn process_wasm_evaluations(
             continue;
         }
 
-        let network_policy = wasm_runtime_interface::NetworkPolicy::default();
+        let network_policy = wasm_runtime_interface::NetworkPolicy::development();
 
         let input_data = submission_id.as_bytes().to_vec();
         let challenge_id_str = challenge_id.to_string();

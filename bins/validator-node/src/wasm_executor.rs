@@ -880,7 +880,7 @@ impl WasmChallengeExecutor {
         let request_data =
             bincode::serialize(&wasm_request).context("Failed to serialize WasmRouteRequest")?;
 
-        let network_policy = NetworkPolicy::default();
+        let network_policy = NetworkPolicy::development();
         let sandbox_policy = SandboxPolicy::default();
 
         let (response_data, _metrics) = self.execute_handle_route(
@@ -1032,6 +1032,7 @@ impl WasmChallengeExecutor {
             },
             storage_backend: Arc::clone(&self.config.storage_backend),
             consensus_policy: ConsensusPolicy::read_only(),
+            network_policy: NetworkPolicy::development(),
             block_height,
             epoch,
             ..Default::default()
