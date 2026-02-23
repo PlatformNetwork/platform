@@ -1278,14 +1278,51 @@ async fn main() -> Result<()> {
                     challenge_id = %proposal.challenge_id,
                     "Adding local storage proposal to state"
                 );
+                let proposal_id = proposal.proposal_id;
                 state_manager.apply(|state| {
                     state.add_storage_proposal(proposal.clone());
                 });
-                // Also vote for our own proposal
+                // Vote for our own proposal
                 let my_hotkey = keypair.hotkey();
-                state_manager.apply(|state| {
-                    state.vote_storage_proposal(&proposal.proposal_id, my_hotkey, true);
+                let consensus_result = state_manager.apply(|state| {
+                    state.vote_storage_proposal(&proposal_id, my_hotkey, true)
                 });
+
+                // If consensus reached with just our vote (high stake), write immediately
+                if let Some(true) = consensus_result {
+                    let proposal_opt = state_manager.apply(|state| {
+                        state.remove_storage_proposal(&proposal_id)
+                    });
+                    if let Some(p) = proposal_opt {
+                        let storage_key = StorageKey::new(
+                            &p.challenge_id.to_string(),
+                            hex::encode(&p.key),
+                        );
+                        let result = if p.value.is_empty() {
+                            storage.delete(&storage_key).await
+                        } else {
+                            storage.put(storage_key.clone(), p.value.clone(), PutOptions::default()).await.map(|_| true)
+                        };
+                        match result {
+                            Ok(_) => {
+                                let op = if p.value.is_empty() { "deleted" } else { "written" };
+                                info!(
+                                    proposal_id = %hex::encode(&p.proposal_id[..8]),
+                                    challenge_id = %p.challenge_id,
+                                    key_len = p.key.len(),
+                                    "Local proposal consensus reached, data {}", op
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    proposal_id = %hex::encode(&p.proposal_id[..8]),
+                                    error = %e,
+                                    "Failed to write local consensus storage"
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             // Metagraph refresh
