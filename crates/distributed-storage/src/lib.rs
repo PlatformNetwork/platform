@@ -84,9 +84,11 @@
 //! - `weights:{challenge_id}:{epoch}` - Weight aggregations
 //! - `challenges:{challenge_id}` - Challenge metadata
 
+pub mod audit;
 pub mod challenge_store;
 pub mod dht;
 pub mod error;
+pub mod index;
 pub mod local;
 pub mod query;
 pub mod replication;
@@ -118,6 +120,10 @@ pub use submission::{
     AggregatedEvaluations, EvaluationStatus, StoredEvaluation, StoredSubmission, SubmissionStatus,
 };
 pub use weights::{StoredWeights, ValidatorWeightVote, WeightAggregator, WeightHistory};
+
+// Index and audit systems
+pub use audit::{AuditEntry, AuditLog, AuditOperation};
+pub use index::{AtomicCounter, IndexDefinition, IndexEntry, IndexManager, IndexPage};
 
 // Challenge-specific storage
 pub use challenge_store::{

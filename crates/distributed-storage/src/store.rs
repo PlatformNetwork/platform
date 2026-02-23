@@ -103,11 +103,25 @@ pub struct ValueMetadata {
     pub size: usize,
     /// Time-to-live in seconds (0 = never expires)
     pub ttl_seconds: u64,
+    /// Block number when this value was first created
+    #[serde(default)]
+    pub created_block: u64,
+    /// Block number when this value was last updated
+    #[serde(default)]
+    pub updated_block: u64,
+    /// Transaction hash that wrote this value (optional)
+    #[serde(default)]
+    pub tx_hash: Option<[u8; 32]>,
 }
 
 impl ValueMetadata {
     /// Create new metadata for a value
     pub fn new(value: &[u8], origin_node: Option<String>) -> Self {
+        Self::new_with_block(value, origin_node, 0)
+    }
+
+    /// Create new metadata for a value with block tracking
+    pub fn new_with_block(value: &[u8], origin_node: Option<String>, block_number: u64) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         let mut hasher = Sha256::new();
         hasher.update(value);
@@ -120,11 +134,24 @@ impl ValueMetadata {
             value_hash: hasher.finalize().into(),
             size: value.len(),
             ttl_seconds: 0,
+            created_block: block_number,
+            updated_block: block_number,
+            tx_hash: None,
         }
     }
 
     /// Create metadata for an update
     pub fn update(&self, value: &[u8], origin_node: Option<String>) -> Self {
+        self.update_with_block(value, origin_node, self.updated_block)
+    }
+
+    /// Create metadata for an update with block tracking
+    pub fn update_with_block(
+        &self,
+        value: &[u8],
+        origin_node: Option<String>,
+        block_number: u64,
+    ) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         let mut hasher = Sha256::new();
         hasher.update(value);
@@ -137,7 +164,16 @@ impl ValueMetadata {
             value_hash: hasher.finalize().into(),
             size: value.len(),
             ttl_seconds: self.ttl_seconds,
+            created_block: self.created_block,
+            updated_block: block_number,
+            tx_hash: None,
         }
+    }
+
+    /// Set the transaction hash
+    pub fn with_tx_hash(mut self, tx_hash: [u8; 32]) -> Self {
+        self.tx_hash = Some(tx_hash);
+        self
     }
 
     /// Check if the value has expired

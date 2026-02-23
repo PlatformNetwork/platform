@@ -133,6 +133,10 @@ pub struct InstanceConfig {
     pub container_policy: ContainerPolicy,
     /// LLM policy for WASM access to LLM inference.
     pub llm_policy: LlmPolicy,
+    /// Current block height for consensus tracking.
+    pub block_height: u64,
+    /// Current epoch for consensus tracking.
+    pub epoch: u64,
 }
 
 impl Default for InstanceConfig {
@@ -157,6 +161,8 @@ impl Default for InstanceConfig {
             data_backend: Arc::new(NoopDataBackend),
             container_policy: ContainerPolicy::default(),
             llm_policy: LlmPolicy::default(),
+            block_height: 0,
+            epoch: 0,
         }
     }
 }
@@ -341,11 +347,13 @@ impl WasmRuntime {
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
         );
-        let consensus_state = ConsensusState::new(
+        let mut consensus_state = ConsensusState::new(
             instance_config.consensus_policy.clone(),
             instance_config.challenge_id.clone(),
             instance_config.validator_id.clone(),
         );
+        consensus_state.block_height = instance_config.block_height;
+        consensus_state.epoch = instance_config.epoch;
         let terminal_state = TerminalState::new(
             instance_config.terminal_policy.clone(),
             instance_config.challenge_id.clone(),

@@ -52,6 +52,10 @@ pub enum StorageError {
     /// Generic internal error
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Quota exceeded
+    #[error("Quota exceeded: {0}")]
+    QuotaExceeded(String),
 }
 
 impl From<sled::Error> for StorageError {
