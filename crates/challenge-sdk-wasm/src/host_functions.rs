@@ -38,7 +38,7 @@ extern "C" {
 }
 
 pub fn host_http_get(request: &[u8]) -> Result<Vec<u8>, i32> {
-    let mut response_buf = vec![0u8; RESPONSE_BUF_MEDIUM];
+    let mut response_buf = vec![0u8; 1024 * 1024]; // 1MB for large API responses
     let status = unsafe {
         http_get(
             request.as_ptr() as i32,
