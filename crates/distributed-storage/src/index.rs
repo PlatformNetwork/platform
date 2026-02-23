@@ -281,7 +281,10 @@ impl IndexManager {
     }
 }
 
-/// Atomic counter for tracking counts
+/// Storage-backed counter.
+///
+/// NOTE: Not truly atomic under concurrent access -- uses read-modify-write
+/// without CAS. Safe for single-writer scenarios only.
 pub struct AtomicCounter {
     storage: Arc<dyn DistributedStore>,
 }
@@ -306,12 +309,13 @@ impl AtomicCounter {
         Ok(0)
     }
 
-    /// Increment a counter and return the new value
+    /// Increment a counter and return the new value.
+    /// Clamps to 0 on the low end to avoid underflow.
     pub async fn increment(&self, namespace: &str, name: &str, delta: i64) -> StorageResult<i64> {
         let key = StorageKey::new("counter", format!("{}:{}", namespace, name));
 
         let current = self.get(namespace, name).await? as i64;
-        let new_value = current.saturating_add(delta);
+        let new_value = current.saturating_add(delta).max(0);
 
         let data = (new_value as u64).to_le_bytes().to_vec();
         self.storage.put(key, data, PutOptions::default()).await?;

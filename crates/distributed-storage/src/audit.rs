@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::error::{StorageError, StorageResult};
 use crate::store::{DistributedStore, GetOptions, PutOptions, StorageKey};
@@ -113,6 +114,8 @@ pub struct AuditLog {
     storage: Arc<dyn DistributedStore>,
     /// Maximum entries per block (to limit storage size)
     max_entries_per_block: usize,
+    /// Write lock to prevent race conditions on read-modify-write
+    write_lock: Mutex<()>,
 }
 
 impl AuditLog {
@@ -121,11 +124,14 @@ impl AuditLog {
         Self {
             storage,
             max_entries_per_block: 10_000,
+            write_lock: Mutex::new(()),
         }
     }
 
     /// Append an audit entry
     pub async fn append(&self, entry: AuditEntry) -> StorageResult<()> {
+        let _guard = self.write_lock.lock().await;
+
         // Store by block number
         let block_key = StorageKey::new("audit_block", format!("{:016x}", entry.block_number));
 

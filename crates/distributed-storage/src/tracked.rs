@@ -193,6 +193,22 @@ impl TrackedStorage {
         hasher.finalize().into()
     }
 
+    /// Decompress all items in a list result
+    fn decompress_list_result(&self, mut result: ListResult) -> StorageResult<ListResult> {
+        for (_key, value) in &mut result.items {
+            value.data = self.decompress(&value.data)?;
+        }
+        Ok(result)
+    }
+
+    /// Decompress all items in a query result
+    fn decompress_query_result(&self, mut result: QueryResult) -> StorageResult<QueryResult> {
+        for (_key, value) in &mut result.items {
+            value.data = self.decompress(&value.data)?;
+        }
+        Ok(result)
+    }
+
     /// Create an index for a namespace
     pub async fn create_index(
         &self,
@@ -377,9 +393,11 @@ impl DistributedStore for TrackedStorage {
         limit: usize,
         continuation_token: Option<&[u8]>,
     ) -> StorageResult<ListResult> {
-        self.inner
+        let result = self
+            .inner
             .list_prefix(namespace, prefix, limit, continuation_token)
-            .await
+            .await?;
+        self.decompress_list_result(result)
     }
 
     async fn stats(&self) -> StorageResult<StorageStats> {
@@ -392,9 +410,11 @@ impl DistributedStore for TrackedStorage {
         block_id: u64,
         limit: usize,
     ) -> StorageResult<QueryResult> {
-        self.inner
+        let result = self
+            .inner
             .list_before_block(namespace, block_id, limit)
-            .await
+            .await?;
+        self.decompress_query_result(result)
     }
 
     async fn list_after_block(
@@ -403,9 +423,11 @@ impl DistributedStore for TrackedStorage {
         block_id: u64,
         limit: usize,
     ) -> StorageResult<QueryResult> {
-        self.inner
+        let result = self
+            .inner
             .list_after_block(namespace, block_id, limit)
-            .await
+            .await?;
+        self.decompress_query_result(result)
     }
 
     async fn list_range(
@@ -415,9 +437,11 @@ impl DistributedStore for TrackedStorage {
         end_block: u64,
         limit: usize,
     ) -> StorageResult<QueryResult> {
-        self.inner
+        let result = self
+            .inner
             .list_range(namespace, start_block, end_block, limit)
-            .await
+            .await?;
+        self.decompress_query_result(result)
     }
 
     async fn count_by_namespace(&self, namespace: &str) -> StorageResult<u64> {
@@ -425,7 +449,8 @@ impl DistributedStore for TrackedStorage {
     }
 
     async fn query(&self, query: QueryBuilder) -> StorageResult<QueryResult> {
-        self.inner.query(query).await
+        let result = self.inner.query(query).await?;
+        self.decompress_query_result(result)
     }
 
     async fn put_with_block(
@@ -480,5 +505,100 @@ mod tests {
         // Same data should produce same hash
         let hash2 = TrackedStorage::hash_data(data);
         assert_eq!(hash, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_put_get_roundtrip_with_compression() {
+        let config = TrackedStorageConfig {
+            compression: CompressionMode::Lz4,
+            compression_threshold: 10,
+            enable_audit: true,
+            enable_indexing: true,
+            ..Default::default()
+        };
+
+        let storage = crate::local::LocalStorage::in_memory("test".to_string()).unwrap();
+        let tracked = TrackedStorage::new(Arc::new(storage), config);
+        tracked.set_block(100);
+
+        // Write large data (will be compressed)
+        let key = StorageKey::new("test", "large-value");
+        let data = vec![42u8; 500]; // 500 bytes of 42s
+        tracked
+            .put(key.clone(), data.clone(), PutOptions::default())
+            .await
+            .unwrap();
+
+        // Read back - should be decompressed
+        let result = tracked
+            .get(&key, GetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.data, data);
+
+        // Verify stats
+        let stats = tracked.tracked_stats().await;
+        assert_eq!(stats.total_writes, 1);
+        assert_eq!(stats.total_reads, 1);
+        assert!(stats.compression_ratio < 1.0); // Data was compressed
+    }
+
+    #[tokio::test]
+    async fn test_list_prefix_decompresses() {
+        let config = TrackedStorageConfig {
+            compression: CompressionMode::Lz4,
+            compression_threshold: 10,
+            enable_audit: false,
+            enable_indexing: false,
+            ..Default::default()
+        };
+
+        let storage = crate::local::LocalStorage::in_memory("test".to_string()).unwrap();
+        let tracked = TrackedStorage::new(Arc::new(storage), config);
+
+        // Write multiple values
+        for i in 0..3 {
+            let key = StorageKey::new("ns", format!("key-{}", i));
+            let data = vec![i as u8; 500]; // Will be compressed
+            tracked.put(key, data, PutOptions::default()).await.unwrap();
+        }
+
+        // List prefix should return decompressed data
+        let result = tracked.list_prefix("ns", None, 10, None).await.unwrap();
+        assert_eq!(result.items.len(), 3);
+        for (i, (_key, value)) in result.items.iter().enumerate() {
+            assert_eq!(value.data.len(), 500);
+            assert_eq!(value.data[0], i as u8);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_backward_compatibility_uncompressed() {
+        let inner = crate::local::LocalStorage::in_memory("test".to_string()).unwrap();
+        let inner_arc = Arc::new(inner);
+
+        // Write directly to inner (uncompressed, simulating old data)
+        let key = StorageKey::new("test", "old-data");
+        let data = b"this is old uncompressed data that was stored before compression".to_vec();
+        inner_arc
+            .put(key.clone(), data.clone(), PutOptions::default())
+            .await
+            .unwrap();
+
+        // Now wrap with TrackedStorage and read
+        let config = TrackedStorageConfig {
+            compression: CompressionMode::Lz4,
+            compression_threshold: 10,
+            ..Default::default()
+        };
+        let tracked = TrackedStorage::new(inner_arc, config);
+
+        let result = tracked
+            .get(&key, GetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.data, data); // Should read old data unchanged
     }
 }
