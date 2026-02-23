@@ -194,12 +194,20 @@ impl WasmChallengeExecutor {
                 _ => anyhow::anyhow!("WASM evaluate call failed: {}", e),
             })?;
 
-        let out_len = (result >> 32) as i32;
-        let out_ptr = result as i32;
+        let out_len = ((result >> 32) & 0xFFFF_FFFF) as u32;
+        let out_ptr = (result & 0xFFFF_FFFF) as u32;
 
         if out_ptr == 0 && out_len == 0 {
             return Err(anyhow::anyhow!(
                 "WASM evaluate returned null pointer, deserialization failed inside module"
+            ));
+        }
+
+        if out_len as usize > MAX_EVALUATION_OUTPUT_SIZE {
+            return Err(anyhow::anyhow!(
+                "EvaluationOutput size {} exceeds maximum allowed {}",
+                out_len,
+                MAX_EVALUATION_OUTPUT_SIZE
             ));
         }
 
@@ -208,14 +216,6 @@ impl WasmChallengeExecutor {
             .map_err(|e| {
                 anyhow::anyhow!("Failed to read evaluation output from WASM memory: {}", e)
             })?;
-
-        if output_bytes.len() > MAX_EVALUATION_OUTPUT_SIZE {
-            return Err(anyhow::anyhow!(
-                "EvaluationOutput size {} exceeds maximum allowed {}",
-                output_bytes.len(),
-                MAX_EVALUATION_OUTPUT_SIZE
-            ));
-        }
 
         let output: EvaluationOutput = bincode::deserialize(&output_bytes)
             .context("Failed to deserialize EvaluationOutput from WASM module")?;
@@ -368,12 +368,15 @@ impl WasmChallengeExecutor {
         }
 
         let mem_size = instance.memory().data_size(instance.store());
-        let offset = mem_size.saturating_sub(input_data.len() + 1024);
-        if offset == 0 {
+        let required = input_data.len() + 1024;
+        if mem_size < required + 4096 {
             return Err(anyhow::anyhow!(
-                "WASM module has insufficient memory for input data"
+                "WASM module has insufficient memory for input data ({} < {})",
+                mem_size,
+                required + 4096
             ));
         }
+        let offset = mem_size - required;
         Ok(offset as i32)
     }
 
