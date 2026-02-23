@@ -2665,11 +2665,25 @@ async fn handle_network_event(
                     // Validate proposal before voting
                     let max_key_size = 1024;
                     let max_value_size = 10 * 1024 * 1024; // 10MB
-                    let approve = !proposal.key.is_empty()
-                        && proposal.key.len() <= max_key_size
-                        && proposal.value.len() <= max_value_size
-                        && proposal.challenge_id.0 != uuid::Uuid::nil()
-                        && !proposal.signature.is_empty();
+                    let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
+                    let is_bootstrap_validator = proposal.proposer.to_ss58()
+                        == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
+
+                    // During bootstrap, only accept storage proposals from bootstrap validator
+                    let approve = if in_bootstrap && !is_bootstrap_validator {
+                        debug!(
+                            proposal_id = %hex::encode(&proposal.proposal_id[..8]),
+                            proposer = %proposal.proposer.to_ss58(),
+                            "Bootstrap: rejecting storage proposal from non-bootstrap validator"
+                        );
+                        false
+                    } else {
+                        !proposal.key.is_empty()
+                            && proposal.key.len() <= max_key_size
+                            && proposal.value.len() <= max_value_size
+                            && proposal.challenge_id.0 != uuid::Uuid::nil()
+                            && !proposal.signature.is_empty()
+                    };
 
                     if !approve {
                         warn!(
