@@ -472,7 +472,7 @@ async fn main() -> Result<()> {
 
     // Create command channel for P2P network
     let (p2p_cmd_tx, p2p_cmd_rx) =
-        tokio::sync::mpsc::channel::<platform_p2p_consensus::P2PCommand>(256);
+        tokio::sync::mpsc::channel::<platform_p2p_consensus::P2PCommand>(4096);
 
     // Spawn P2P network task
     let network_clone = network.clone();
@@ -1390,55 +1390,64 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Local storage proposals (from our own WASM executions)
-            Some(proposal) = local_proposal_rx.recv() => {
-                debug!(
-                    proposal_id = %hex::encode(&proposal.proposal_id[..8]),
-                    challenge_id = %proposal.challenge_id,
-                    "Adding local storage proposal to state"
-                );
-                let proposal_id = proposal.proposal_id;
-                state_manager.apply(|state| {
-                    state.add_storage_proposal(proposal.clone());
-                });
-                // Vote for our own proposal
-                let my_hotkey = keypair.hotkey();
-                let consensus_result = state_manager.apply(|state| {
-                    state.vote_storage_proposal(&proposal_id, my_hotkey, true)
-                });
+            // Local storage proposals (from our own WASM executions) - batch drain
+            Some(first_proposal) = local_proposal_rx.recv() => {
+                let mut batch = vec![first_proposal];
+                while let Ok(p) = local_proposal_rx.try_recv() {
+                    batch.push(p);
+                }
+                let batch_size = batch.len();
+                if batch_size > 1 {
+                    debug!("Processing batch of {} local proposals", batch_size);
+                }
 
-                // If consensus reached with just our vote (high stake), write immediately
-                if let Some(true) = consensus_result {
-                    let proposal_opt = state_manager.apply(|state| {
-                        state.remove_storage_proposal(&proposal_id)
+                // Vote for all proposals and collect those that reached consensus
+                let my_hotkey = keypair.hotkey();
+                let mut to_write = Vec::new();
+                for proposal in batch {
+                    let proposal_id = proposal.proposal_id;
+                    state_manager.apply(|state| {
+                        state.add_storage_proposal(proposal);
                     });
-                    if let Some(p) = proposal_opt {
-                        let storage_key = StorageKey::new(
-                            &p.challenge_id.to_string(),
-                            hex::encode(&p.key),
-                        );
-                        let result = if p.value.is_empty() {
-                            storage.delete(&storage_key).await
-                        } else {
-                            storage.put(storage_key.clone(), p.value.clone(), put_options_with_block(&state_manager)).await.map(|_| true)
-                        };
-                        match result {
-                            Ok(_) => {
-                                let op = if p.value.is_empty() { "deleted" } else { "written" };
-                                info!(
-                                    proposal_id = %hex::encode(&p.proposal_id[..8]),
-                                    challenge_id = %p.challenge_id,
-                                    key_len = p.key.len(),
-                                    "Local proposal consensus reached, data {}", op
-                                );
-                            }
-                            Err(e) => {
-                                error!(
-                                    proposal_id = %hex::encode(&p.proposal_id[..8]),
-                                    error = %e,
-                                    "Failed to write local consensus storage"
-                                );
-                            }
+                    let consensus_result = state_manager.apply(|state| {
+                        state.vote_storage_proposal(&proposal_id, my_hotkey.clone(), true)
+                    });
+                    if let Some(true) = consensus_result {
+                        if let Some(p) = state_manager.apply(|state| {
+                            state.remove_storage_proposal(&proposal_id)
+                        }) {
+                            to_write.push(p);
+                        }
+                    }
+                }
+
+                // Write all consensus-reached proposals
+                for p in to_write {
+                    let storage_key = StorageKey::new(
+                        &p.challenge_id.to_string(),
+                        hex::encode(&p.key),
+                    );
+                    let result = if p.value.is_empty() {
+                        storage.delete(&storage_key).await
+                    } else {
+                        storage.put(storage_key.clone(), p.value.clone(), put_options_with_block(&state_manager)).await.map(|_| true)
+                    };
+                    match result {
+                        Ok(_) => {
+                            let op = if p.value.is_empty() { "deleted" } else { "written" };
+                            info!(
+                                proposal_id = %hex::encode(&p.proposal_id[..8]),
+                                challenge_id = %p.challenge_id,
+                                key_len = p.key.len(),
+                                "Local proposal consensus reached, data {}", op
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                proposal_id = %hex::encode(&p.proposal_id[..8]),
+                                error = %e,
+                                "Failed to write local consensus storage"
+                            );
                         }
                     }
                 }
