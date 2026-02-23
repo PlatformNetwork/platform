@@ -1766,6 +1766,72 @@ async fn handle_network_event(
                     data_type = %req.data_type,
                     "Received data request"
                 );
+
+                if !validator_set.is_validator(&req.requester) {
+                    warn!(requester = %req.requester.to_hex(), "Data request from unknown validator");
+                } else if req.data_type == "challenge_storage" {
+                    // Respond with storage data for the requested challenge
+                    let challenge_id_str = req.challenge_id.to_string();
+
+                    // List all keys in this challenge's namespace using list_prefix
+                    let list_result = storage
+                        .list_prefix(&challenge_id_str, None, 10000, None)
+                        .await;
+
+                    match list_result {
+                        Ok(list_result) => {
+                            // Collect all key-value pairs for this challenge
+                            let mut storage_entries: Vec<(String, Vec<u8>)> = Vec::new();
+                            for (key, stored) in list_result.items {
+                                // Store key as hex-encoded string (matches our key format)
+                                let key_str = String::from_utf8(key.key.clone())
+                                    .unwrap_or_else(|_| hex::encode(&key.key));
+                                storage_entries.push((key_str, stored.data));
+                            }
+
+                            let data = bincode::serialize(&storage_entries).unwrap_or_default();
+                            let timestamp = chrono::Utc::now().timestamp_millis();
+                            let request_id = req.request_id.clone();
+                            let challenge_id = req.challenge_id;
+                            let sign_data = bincode::serialize(&(&request_id, &data, timestamp))
+                                .unwrap_or_default();
+                            let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                            let response = P2PMessage::DataResponse(
+                                platform_p2p_consensus::DataResponseMessage {
+                                    request_id: request_id.clone(),
+                                    responder: keypair.hotkey(),
+                                    challenge_id,
+                                    data_type: "challenge_storage".to_string(),
+                                    data,
+                                    timestamp,
+                                    signature,
+                                },
+                            );
+
+                            if let Err(e) = p2p_cmd_tx
+                                .send(platform_p2p_consensus::P2PCommand::Broadcast(response))
+                                .await
+                            {
+                                warn!(error = %e, "Failed to send storage data response");
+                            } else {
+                                info!(
+                                    request_id = %request_id,
+                                    challenge_id = %challenge_id,
+                                    entries = storage_entries.len(),
+                                    "Sent challenge storage data response"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                challenge_id = %req.challenge_id,
+                                error = %e,
+                                "Failed to list storage entries for data request"
+                            );
+                        }
+                    }
+                }
             }
             P2PMessage::DataResponse(resp) => {
                 debug!(
@@ -1775,6 +1841,61 @@ async fn handle_network_event(
                     data_bytes = resp.data.len(),
                     "Received data response"
                 );
+
+                if !validator_set.is_validator(&resp.responder) {
+                    warn!(responder = %resp.responder.to_hex(), "Data response from unknown validator");
+                } else if resp.data_type == "challenge_storage" {
+                    // Merge storage data from peer
+                    match bincode::deserialize::<Vec<(String, Vec<u8>)>>(&resp.data) {
+                        Ok(entries) => {
+                            let challenge_id_str = resp.challenge_id.to_string();
+                            let mut imported = 0;
+
+                            for (key, value) in entries {
+                                let storage_key = StorageKey::new(&challenge_id_str, key);
+                                // Only import if we don't have this key
+                                match storage
+                                    .get(
+                                        &storage_key,
+                                        platform_distributed_storage::GetOptions::default(),
+                                    )
+                                    .await
+                                {
+                                    Ok(None) => {
+                                        if let Err(e) = storage
+                                            .put(storage_key, value, PutOptions::default())
+                                            .await
+                                        {
+                                            warn!(error = %e, "Failed to import storage entry");
+                                        } else {
+                                            imported += 1;
+                                        }
+                                    }
+                                    Ok(Some(_)) => {
+                                        // Already have this key, skip
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "Failed to check existing storage entry");
+                                    }
+                                }
+                            }
+
+                            if imported > 0 {
+                                info!(
+                                    challenge_id = %resp.challenge_id,
+                                    imported = imported,
+                                    "Imported storage entries from peer"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                "Failed to deserialize challenge storage data response"
+                            );
+                        }
+                    }
+                }
             }
             P2PMessage::TaskProgress(progress) => {
                 debug!(
@@ -1926,7 +2047,7 @@ async fn handle_network_event(
 
                                         // Persist core state immediately so challenge survives restart
                                         if let Err(e) =
-                                            persist_core_state_to_storage(storage, &chain_state)
+                                            persist_core_state_to_storage(storage, chain_state)
                                                 .await
                                         {
                                             warn!("Failed to persist core state after P2P challenge registration: {}", e);
@@ -2169,9 +2290,11 @@ async fn handle_network_event(
                             .apply(|state| state.remove_storage_proposal(&vote.proposal_id));
 
                         if let Some(proposal) = proposal_opt {
+                            // Use same key format as ChallengeStorageBackend:
+                            // namespace = challenge_id.to_string(), key = hex::encode(key_bytes)
                             let storage_key = StorageKey::new(
-                                &format!("challenge:{}", proposal.challenge_id),
-                                &proposal.key,
+                                &proposal.challenge_id.to_string(),
+                                hex::encode(&proposal.key),
                             );
 
                             match storage
@@ -2267,15 +2390,46 @@ async fn handle_network_event(
                     let local_map: std::collections::HashMap<_, _> =
                         local_roots.into_iter().collect();
                     for (cid, remote_root) in &msg.roots {
-                        if let Some(local_root) = local_map.get(cid) {
-                            if local_root != remote_root {
-                                warn!(
-                                    challenge_id = %cid,
-                                    local = %hex::encode(&local_root[..8]),
-                                    remote = %hex::encode(&remote_root[..8]),
-                                    remote_validator = %msg.validator.to_hex(),
-                                    "Storage root divergence detected"
-                                );
+                        let needs_sync = match local_map.get(cid) {
+                            Some(local_root) => local_root != remote_root,
+                            None => true, // We don't have this challenge's storage at all
+                        };
+
+                        if needs_sync {
+                            info!(
+                                challenge_id = %cid,
+                                remote_validator = %msg.validator.to_hex(),
+                                "Storage divergence detected, requesting challenge data"
+                            );
+
+                            // Request storage data for this challenge
+                            let request_id = format!(
+                                "storage_sync_{}_{}",
+                                cid,
+                                chrono::Utc::now().timestamp_millis()
+                            );
+                            let timestamp = chrono::Utc::now().timestamp_millis();
+                            let sign_data =
+                                bincode::serialize(&(&request_id, timestamp)).unwrap_or_default();
+                            let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                            let req = P2PMessage::DataRequest(
+                                platform_p2p_consensus::DataRequestMessage {
+                                    request_id,
+                                    requester: keypair.hotkey(),
+                                    challenge_id: *cid,
+                                    data_type: "challenge_storage".to_string(),
+                                    data_key: "all".to_string(),
+                                    timestamp,
+                                    signature,
+                                },
+                            );
+
+                            if let Err(e) = p2p_cmd_tx
+                                .send(platform_p2p_consensus::P2PCommand::Broadcast(req))
+                                .await
+                            {
+                                warn!(error = %e, "Failed to send storage sync request");
                             }
                         }
                     }
@@ -2452,7 +2606,7 @@ async fn handle_network_event(
 
                                 // Persist immediately after consensus-approved mutation
                                 if let Err(e) =
-                                    persist_core_state_to_storage(storage, &chain_state).await
+                                    persist_core_state_to_storage(storage, chain_state).await
                                 {
                                     warn!(
                                         "Failed to persist core state after consensus mutation: {}",
@@ -2533,7 +2687,7 @@ async fn handle_network_event(
 
                                 // Persist merged state
                                 if let Err(e) =
-                                    persist_core_state_to_storage(storage, &chain_state).await
+                                    persist_core_state_to_storage(storage, chain_state).await
                                 {
                                     warn!("Failed to persist merged core state: {}", e);
                                 }

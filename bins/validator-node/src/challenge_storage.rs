@@ -37,9 +37,16 @@ impl ChallengeStorageBackend {
     }
 }
 
+/// Build a standardized storage key for challenge data.
+/// Format: namespace = challenge_id, key = hex-encoded key bytes.
+/// This MUST match the format used in consensus writes (main.rs StorageVote handler).
+fn build_challenge_storage_key(challenge_id: &str, key: &[u8]) -> DStorageKey {
+    DStorageKey::new(challenge_id, hex::encode(key))
+}
+
 impl StorageBackend for ChallengeStorageBackend {
     fn get(&self, challenge_id: &str, key: &[u8]) -> Result<Option<Vec<u8>>, StorageHostError> {
-        let storage_key = DStorageKey::new(challenge_id, hex::encode(key));
+        let storage_key = build_challenge_storage_key(challenge_id, key);
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(self.storage.get(&storage_key, DGetOptions::default()))
@@ -54,23 +61,18 @@ impl StorageBackend for ChallengeStorageBackend {
         key: &[u8],
         value: &[u8],
     ) -> Result<[u8; 32], StorageHostError> {
-        let storage_key = DStorageKey::new(challenge_id, hex::encode(key));
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.storage.put(
-                storage_key,
-                value.to_vec(),
-                DPutOptions::default(),
-            ))
-        })
-        .map_err(|e| StorageHostError::StorageError(e.to_string()))?;
-
+        // Compute proposal ID from content
         let mut hasher = Sha256::new();
         hasher.update(challenge_id.as_bytes());
         hasher.update(key);
         hasher.update(value);
         let proposal_id: [u8; 32] = hasher.finalize().into();
 
-        // Broadcast via P2P if configured
+        // DO NOT write locally here - data is only written after P2P consensus is reached.
+        // All validators (including the proposer) write in the StorageVote handler when
+        // 2f+1 votes approve. This ensures consistency across all nodes.
+
+        // Broadcast via P2P for consensus
         if let (Some(tx), Some(kp)) = (&self.p2p_tx, &self.keypair) {
             let challenge_uuid = uuid::Uuid::parse_str(challenge_id).unwrap_or_else(|_| {
                 // Derive a deterministic UUID from the challenge_id string
@@ -97,13 +99,24 @@ impl StorageBackend for ChallengeStorageBackend {
 
             // Fire and forget - don't block WASM execution on P2P
             let _ = tx.try_send(P2PCommand::Broadcast(msg));
+        } else {
+            // No P2P configured - write locally for single-node/test mode
+            let storage_key = build_challenge_storage_key(challenge_id, key);
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.storage.put(
+                    storage_key,
+                    value.to_vec(),
+                    DPutOptions::default(),
+                ))
+            })
+            .map_err(|e| StorageHostError::StorageError(e.to_string()))?;
         }
 
         Ok(proposal_id)
     }
 
     fn delete(&self, challenge_id: &str, key: &[u8]) -> Result<bool, StorageHostError> {
-        let storage_key = DStorageKey::new(challenge_id, hex::encode(key));
+        let storage_key = build_challenge_storage_key(challenge_id, key);
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.storage.delete(&storage_key))
         })
@@ -115,7 +128,7 @@ impl StorageBackend for ChallengeStorageBackend {
         challenge_id: &str,
         key: &[u8],
     ) -> Result<Option<Vec<u8>>, StorageHostError> {
-        let storage_key = DStorageKey::new(challenge_id, hex::encode(key));
+        let storage_key = build_challenge_storage_key(challenge_id, key);
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(self.storage.get(&storage_key, DGetOptions::default()))
