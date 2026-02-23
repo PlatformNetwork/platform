@@ -184,37 +184,43 @@ impl NetworkState {
             Policy::limited(validated.limits.max_redirects as usize)
         };
 
-        let http_client = Client::builder()
-            .timeout(Duration::from_millis(validated.limits.timeout_ms))
-            .redirect(redirect_policy)
-            .build()
-            .map_err(|err| NetworkStateError::HttpClient(err.to_string()))?;
+        // Create HTTP client and DNS resolver in a dedicated thread to avoid
+        // "Cannot start a runtime from within a runtime" panic. Both
+        // reqwest::blocking::Client and trust-dns Resolver internally call
+        // block_on, which panics inside an existing tokio runtime.
+        let timeout_ms = validated.limits.timeout_ms;
+        let dns_cache_ttl = validated.dns_policy.cache_ttl_secs;
+        let (http_client, dns_resolver) = std::thread::spawn(move || {
+            let client = Client::builder()
+                .timeout(Duration::from_millis(timeout_ms))
+                .redirect(redirect_policy)
+                .build()
+                .map_err(|err| NetworkStateError::HttpClient(err.to_string()))?;
 
-        let mut resolver_opts = ResolverOpts::default();
-        resolver_opts.timeout = Duration::from_millis(validated.limits.timeout_ms);
-        resolver_opts.attempts = 1;
-        resolver_opts.cache_size = 0;
-        resolver_opts.use_hosts_file = false;
-        resolver_opts.num_concurrent_reqs = 1;
+            let mut resolver_opts = ResolverOpts::default();
+            resolver_opts.timeout = Duration::from_millis(timeout_ms);
+            resolver_opts.attempts = 1;
+            resolver_opts.cache_size = 0;
+            resolver_opts.use_hosts_file = false;
+            resolver_opts.num_concurrent_reqs = 1;
 
-        if validated.dns_policy.cache_ttl_secs > 0 {
-            let ttl = Duration::from_secs(validated.dns_policy.cache_ttl_secs);
-            resolver_opts.positive_min_ttl = Some(ttl);
-            resolver_opts.positive_max_ttl = Some(ttl);
-            resolver_opts.negative_min_ttl = Some(ttl);
-            resolver_opts.negative_max_ttl = Some(ttl);
-        }
+            if dns_cache_ttl > 0 {
+                let ttl = Duration::from_secs(dns_cache_ttl);
+                resolver_opts.positive_min_ttl = Some(ttl);
+                resolver_opts.positive_max_ttl = Some(ttl);
+                resolver_opts.negative_min_ttl = Some(ttl);
+                resolver_opts.negative_max_ttl = Some(ttl);
+            }
 
-        // Create DNS resolver in a dedicated thread to avoid
-        // "Cannot start a runtime from within a runtime" panic when
-        // trust-dns internally calls block_on during initialization.
-        let dns_resolver =
-            std::thread::spawn(move || Resolver::new(ResolverConfig::default(), resolver_opts))
-                .join()
-                .map_err(|_| {
-                    NetworkStateError::DnsResolver("DNS resolver thread panicked".to_string())
-                })?
+            let resolver = Resolver::new(ResolverConfig::default(), resolver_opts)
                 .map_err(|err| NetworkStateError::DnsResolver(err.to_string()))?;
+
+            Ok::<_, NetworkStateError>((client, resolver))
+        })
+        .join()
+        .map_err(|_| {
+            NetworkStateError::HttpClient("HTTP/DNS init thread panicked".to_string())
+        })??;
 
         Ok(Self {
             policy: validated,

@@ -63,4 +63,5 @@ services:
 
 volumes:
   validator-data:
-    driver: local
+    external: true
+    name: platform_validator-data
