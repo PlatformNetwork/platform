@@ -1233,10 +1233,25 @@ impl RpcHandler {
         // Use resolved_id for routing
         let challenge_id = resolved_id;
 
+        // Extract path params by matching against registered route definitions
+        let path_params = {
+            let routes = self.challenge_routes.read();
+            let mut extracted = std::collections::HashMap::new();
+            if let Some(challenge_routes) = routes.get(&challenge_id) {
+                for route in challenge_routes {
+                    if let Some(params) = route.matches(&method, &path) {
+                        extracted = params;
+                        break;
+                    }
+                }
+            }
+            extracted
+        };
+
         let request = RouteRequest {
             method,
             path,
-            params: std::collections::HashMap::new(),
+            params: path_params,
             query,
             headers,
             body,
