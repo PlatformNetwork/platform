@@ -428,6 +428,12 @@ async fn challenge_route_handler(
         } else {
             None
         }
+    })
+    // Fallback: try Bearer session token
+    .or_else(|| {
+        let token = crate::auth::extract_bearer_token(&headers_map)?;
+        let info = crate::auth::verify_bearer_token(&token).ok()?;
+        Some(info.hotkey_hex)
     });
 
     // Enforce auth on routes that require it

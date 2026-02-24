@@ -197,6 +197,73 @@ fn canonicalize_json_value(value: &serde_json::Value) -> String {
     }
 }
 
+/// Parse and verify a Bearer session token.
+///
+/// Token format: `{hotkey_hex}:{expiry_ms}:{nonce}:{signature_hex}`
+/// Signed message: `session:{hotkey_ss58}:{expiry_ms}:{nonce}`
+///
+/// Returns the hotkey hex string if the token is valid.
+/// Does NOT check revocation (that requires a WASM call to the auth challenge).
+pub fn verify_bearer_token(token: &str) -> Result<BearerTokenInfo, AuthError> {
+    let parts: Vec<&str> = token.splitn(4, ':').collect();
+    if parts.len() != 4 {
+        return Err(AuthError::InvalidSignature);
+    }
+
+    let hotkey_hex = parts[0];
+    let expiry_str = parts[1];
+    let nonce = parts[2];
+    let signature_hex = parts[3];
+
+    // Parse hotkey
+    let hotkey = Hotkey::from_hex(hotkey_hex).ok_or(AuthError::InvalidHotkey)?;
+
+    // Parse expiry
+    let expiry: i64 = expiry_str.parse().map_err(|_| AuthError::InvalidNonce)?;
+
+    // Check expiry
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if now_ms > expiry {
+        return Err(AuthError::MessageExpired);
+    }
+
+    // Verify signature
+    let hotkey_ss58 = hotkey.to_ss58();
+    let message = format!("session:{}:{}:{}", hotkey_ss58, expiry, nonce);
+
+    match verify_validator_signature(hotkey_hex, &message, signature_hex)? {
+        true => Ok(BearerTokenInfo {
+            hotkey_hex: hotkey_hex.to_string(),
+            expiry,
+            nonce: nonce.to_string(),
+        }),
+        false => Err(AuthError::VerificationFailed),
+    }
+}
+
+/// Parsed and verified bearer token info.
+pub struct BearerTokenInfo {
+    pub hotkey_hex: String,
+    pub expiry: i64,
+    pub nonce: String,
+}
+
+/// Extract Bearer token from Authorization header.
+pub fn extract_bearer_token(headers: &HashMap<String, String>) -> Option<String> {
+    let headers_lower: HashMap<String, String> = headers
+        .iter()
+        .map(|(k, v)| (k.to_lowercase(), v.clone()))
+        .collect();
+
+    headers_lower
+        .get("authorization")
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
+        .map(|t| t.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
