@@ -927,6 +927,8 @@ impl RpcHandler {
                     "owner": c.owner.to_hex(),
                     "version": c.module.version,
                     "routesCount": routes_count,
+                    "mechanismId": c.config.mechanism_id,
+                    "emissionWeight": c.config.emission_weight,
                 })
             })
             .collect();
@@ -983,7 +985,7 @@ impl RpcHandler {
                     .challenge_weights
                     .get(&c.challenge_id)
                     .map(|w| w.weight_ratio)
-                    .unwrap_or(0.0);
+                    .unwrap_or(c.config.emission_weight);
 
                 JsonRpcResponse::result(
                     id,
