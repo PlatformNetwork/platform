@@ -119,8 +119,16 @@ pub fn verify_route_auth(
         return Err(AuthError::MessageExpired);
     }
 
-    // Hash the body for signature verification
-    let body_hash = hex::encode(Sha256::digest(body));
+    // Hash the body for signature verification.
+    // Canonicalize JSON body (sort keys) so key order doesn't matter.
+    let body_hash = {
+        let canonical = if let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) {
+            canonicalize_json_value(&val).into_bytes()
+        } else {
+            body.to_vec()
+        };
+        hex::encode(Sha256::digest(&canonical))
+    };
 
     // Build the signed message
     let message = format!(
@@ -149,11 +157,44 @@ pub fn create_route_auth_message(
     body: &[u8],
     nonce: &str,
 ) -> String {
-    let body_hash = hex::encode(Sha256::digest(body));
+    let body_hash = {
+        let canonical = if let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) {
+            canonicalize_json_value(&val).into_bytes()
+        } else {
+            body.to_vec()
+        };
+        hex::encode(Sha256::digest(&canonical))
+    };
     format!(
         "challenge:{}:{}:{}:{}:{}",
         challenge_id, method, path, body_hash, nonce
     )
+}
+
+/// Recursively sort JSON object keys for deterministic hashing.
+fn canonicalize_json_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<_> = map.iter().collect();
+            pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+            let inner: Vec<String> = pairs
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        canonicalize_json_value(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        serde_json::Value::Array(arr) => {
+            let inner: Vec<String> = arr.iter().map(canonicalize_json_value).collect();
+            format!("[{}]", inner.join(","))
+        }
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+    }
 }
 
 #[cfg(test)]
