@@ -1571,15 +1571,21 @@ async fn main() -> Result<()> {
                                 if assignments.is_empty() { continue; }
                                 let total: f64 = assignments.iter().map(|a| a.weight).sum();
                                 if total <= 0.0 { continue; }
-                                let mut uids = Vec::new();
-                                let mut vals = Vec::new();
+                                // Merge duplicate UIDs
+                                let mut uid_map: std::collections::BTreeMap<u16, f64> = std::collections::BTreeMap::new();
                                 let mut assigned = 0.0f64;
                                 for a in &assignments {
                                     if let Some(uid) = subtensor_client.as_ref().and_then(|c| c.get_uid_for_hotkey(&a.hotkey)) {
                                         let scaled = (a.weight / total) * ew;
-                                        let v = (scaled * 65535.0).round() as u16;
-                                        if v > 0 { uids.push(uid); vals.push(v); assigned += scaled; }
+                                        *uid_map.entry(uid).or_insert(0.0) += scaled;
+                                        assigned += scaled;
                                     }
+                                }
+                                let mut uids = Vec::new();
+                                let mut vals = Vec::new();
+                                for (uid, w) in &uid_map {
+                                    let v = (w * 65535.0).round() as u16;
+                                    if v > 0 { uids.push(*uid); vals.push(v); }
                                 }
                                 let burn = 1.0 - assigned;
                                 if burn > 0.001 {
@@ -3703,8 +3709,9 @@ async fn handle_block_event(
                             Ok(assignments) if !assignments.is_empty() => {
                                 let total_weight: f64 = assignments.iter().map(|a| a.weight).sum();
 
-                                let mut uids: Vec<u16> = Vec::new();
-                                let mut vals: Vec<u16> = Vec::new();
+                                // Use a map to merge duplicate UIDs (same hotkey appearing multiple times)
+                                let mut uid_weight_map: std::collections::BTreeMap<u16, f64> =
+                                    std::collections::BTreeMap::new();
                                 let mut assigned_weight: f64 = 0.0;
 
                                 if total_weight > 0.0 {
@@ -3716,18 +3723,24 @@ async fn handle_block_event(
                                         if let Some(uid) = uid {
                                             let normalized = assignment.weight / total_weight;
                                             let scaled = normalized * emission_weight;
-                                            let weight_u16 = (scaled * 65535.0).round() as u16;
-                                            if weight_u16 > 0 {
-                                                uids.push(uid);
-                                                vals.push(weight_u16);
-                                                assigned_weight += scaled;
-                                            }
+                                            *uid_weight_map.entry(uid).or_insert(0.0) += scaled;
+                                            assigned_weight += scaled;
                                         } else {
                                             warn!(
                                                 "Hotkey {} not found in metagraph, weight goes to burn",
                                                 &assignment.hotkey[..std::cmp::min(16, assignment.hotkey.len())]
                                             );
                                         }
+                                    }
+                                }
+
+                                let mut uids: Vec<u16> = Vec::new();
+                                let mut vals: Vec<u16> = Vec::new();
+                                for (uid, w) in &uid_weight_map {
+                                    let weight_u16 = (w * 65535.0).round() as u16;
+                                    if weight_u16 > 0 {
+                                        uids.push(*uid);
+                                        vals.push(weight_u16);
                                     }
                                 }
 
