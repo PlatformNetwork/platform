@@ -972,26 +972,7 @@ async fn main() -> Result<()> {
     let mut wasm_eval_interval = tokio::time::interval(Duration::from_secs(5));
     let mut stale_job_interval = tokio::time::interval(Duration::from_secs(120));
     let mut weight_check_interval = tokio::time::interval(Duration::from_secs(30));
-    // Initialize to current epoch if we may have already submitted this epoch
-    // (e.g., after a restart mid-epoch). This prevents 1010 errors from subtensor
-    // rejecting duplicate commits. We'll submit on the NEXT epoch boundary.
-    let mut last_weight_submission_epoch: u64 = if let Some(ref st) = subtensor {
-        match st.get_current_block().await {
-            Ok(block) => {
-                let tempo = 360u64;
-                let netuid_plus_one = (netuid as u64).saturating_add(1);
-                let epoch = block.saturating_add(netuid_plus_one) / (tempo + 1);
-                info!("Initializing last_weight_submission_epoch to current epoch {} (block {}) to avoid duplicate commits after restart", epoch, block);
-                epoch
-            }
-            Err(e) => {
-                warn!("Could not fetch current block for epoch init: {}", e);
-                0
-            }
-        }
-    } else {
-        0
-    };
+    let mut last_weight_submission_epoch: u64 = 0;
     let startup_rpc_precompute_delay = tokio::time::sleep(Duration::from_secs(70));
     tokio::pin!(startup_rpc_precompute_delay);
     let mut startup_rpc_precomputed = false;
@@ -1637,12 +1618,37 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Startup weight timer disabled: we init last_weight_submission_epoch to current
-            // epoch to avoid 1010 duplicate commit errors after restart. Weights will be
-            // submitted on the next epoch boundary via CommitWindowOpen from block_sync.
+            // Submit weights on-chain 90s after boot (after RPC pre-compute at 70s).
             _ = &mut startup_weight_delay, if !startup_weights_submitted => {
                 startup_weights_submitted = true;
-                info!("Startup weight timer fired (no-op): weights will submit at next epoch boundary");
+                let current_block = state_manager.apply(|state| state.bittensor_block);
+                if current_block == 0 {
+                    warn!("Startup weight submission skipped: blockchain not yet synced");
+                } else if subtensor.is_none() || subtensor_signer.is_none() {
+                    warn!("Startup weight submission skipped: subtensor not connected");
+                } else if wasm_executor.is_none() {
+                    warn!("Startup weight submission skipped: WASM executor not ready");
+                } else {
+                    let has_challenges = {
+                        let cs = chain_state.read();
+                        cs.wasm_challenge_configs.iter().any(|(_, cfg)| cfg.is_active)
+                    };
+                    if !has_challenges {
+                        warn!("Startup weight submission skipped: no active challenges loaded");
+                    } else {
+                        let tempo = 360u64;
+                        let netuid_plus_one = (netuid as u64).saturating_add(1);
+                        let epoch = current_block.saturating_add(netuid_plus_one) / (tempo + 1);
+                        info!("Startup weight submission: epoch {} block {} (90s after boot)", epoch, current_block);
+                        handle_block_event(
+                            BlockSyncEvent::CommitWindowOpen { epoch, block: current_block },
+                            &subtensor, &subtensor_signer, &subtensor_client,
+                            &state_manager, netuid, version_key, &wasm_executor,
+                            &keypair, &chain_state, &storage,
+                            &mut last_weight_submission_epoch,
+                        ).await;
+                    }
+                }
             }
 
             // Periodic checkpoint
@@ -1678,7 +1684,7 @@ async fn main() -> Result<()> {
                         let current_epoch = current_block / 360;
                         for challenge_id in challenges {
                             let challenge_id_str = challenge_id.to_string();
-                            let module_path = format!("{}.wasm", challenge_id_str);
+                            let module_path = challenge_id_str.clone();
 
                             if let Some(ref executor) = wasm_executor {
                                 match executor.execute_sync_with_block(&module_path, current_block, current_epoch) {
@@ -3362,7 +3368,7 @@ async fn handle_network_event(
             }
             P2PMessage::ChallengeSyncProposal(proposal) => {
                 let challenge_id_str = proposal.challenge_id.to_string();
-                let module_path = format!("{}.wasm", challenge_id_str);
+                let module_path = challenge_id_str.clone();
 
                 // Compute our own sync hash to compare
                 let our_hash = if let Some(ref executor) = wasm_executor_ref {
@@ -4021,7 +4027,7 @@ async fn process_wasm_evaluations(
     }
 
     for (submission_id, challenge_id, _agent_hash) in pending {
-        let module_filename = format!("{}.wasm", challenge_id);
+        let module_filename = challenge_id.to_string();
 
         if !executor.module_exists(&module_filename) {
             debug!(
