@@ -73,6 +73,15 @@ enum Commands {
         #[arg(short, long)]
         weight: f64,
     },
+    /// Set a challenge's mechanism ID
+    SetMechanism {
+        /// Challenge ID (UUID or name)
+        #[arg(short = 'c', long)]
+        challenge_id: String,
+        /// Mechanism ID
+        #[arg(short, long)]
+        mechanism_id: u8,
+    },
     /// Emergency pause the network
     Pause {
         /// Reason for the pause
@@ -519,6 +528,19 @@ async fn main() -> Result<()> {
                 "SetEmission": {
                     "challenge_id": cid.0.to_string(),
                     "emission_weight": weight
+                }
+            });
+            sudo_cli.send_sudo_action(action).await?;
+        }
+        Some(Commands::SetMechanism {
+            challenge_id,
+            mechanism_id,
+        }) => {
+            let cid = ChallengeId::from_string(&challenge_id);
+            let action = serde_json::json!({
+                "SetMechanism": {
+                    "challenge_id": cid.0.to_string(),
+                    "mechanism_id": mechanism_id
                 }
             });
             sudo_cli.send_sudo_action(action).await?;

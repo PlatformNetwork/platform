@@ -288,6 +288,12 @@ pub enum SudoAction {
         emission_weight: f64,
     },
 
+    /// Set a challenge's mechanism ID
+    SetMechanism {
+        challenge_id: ChallengeId,
+        mechanism_id: u8,
+    },
+
     // === Version Management ===
     /// Set required validator version (triggers auto-update)
     SetRequiredVersion {

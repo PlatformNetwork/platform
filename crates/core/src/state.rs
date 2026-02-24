@@ -366,6 +366,26 @@ impl ChainState {
                     )));
                 }
             }
+            SudoAction::SetMechanism {
+                challenge_id,
+                mechanism_id,
+            } => {
+                tracing::info!(
+                    challenge_id = %challenge_id,
+                    mechanism_id = mechanism_id,
+                    "Sudo: setting challenge mechanism ID"
+                );
+                if let Some(wasm_config) = self.wasm_challenge_configs.get_mut(challenge_id) {
+                    wasm_config.config.mechanism_id = *mechanism_id;
+                } else if let Some(challenge) = self.challenges.get_mut(challenge_id) {
+                    challenge.config.mechanism_id = *mechanism_id;
+                } else {
+                    return Err(crate::MiniChainError::Consensus(format!(
+                        "Challenge {} not found",
+                        challenge_id
+                    )));
+                }
+            }
             SudoAction::SetRequiredVersion {
                 min_version,
                 recommended_version,

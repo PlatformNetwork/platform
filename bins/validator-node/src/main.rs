@@ -830,6 +830,25 @@ async fn main() -> Result<()> {
         info!("RPC server started on {}", args.rpc_addr);
     }
 
+    // Migrate: ensure all challenges use mechanism_id=0 (main mechanism)
+    {
+        let mut cs = chain_state.write();
+        let mut migrated = 0u32;
+        for (_id, cfg) in cs.wasm_challenge_configs.iter_mut() {
+            if cfg.config.mechanism_id != 0 {
+                info!(
+                    "Migrating challenge {} mechanism_id {} -> 0",
+                    cfg.name, cfg.config.mechanism_id
+                );
+                cfg.config.mechanism_id = 0;
+                migrated += 1;
+            }
+        }
+        if migrated > 0 {
+            info!("Migrated {} challenges to mechanism_id=0", migrated);
+        }
+    }
+
     // Reload WASM modules from persisted challenges on startup
     if let Some(ref executor) = wasm_executor {
         let challenges: Vec<(platform_core::ChallengeId, String)> = {
