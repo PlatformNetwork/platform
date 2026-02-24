@@ -725,6 +725,7 @@ async fn main() -> Result<()> {
     let bans = Arc::new(RwLock::new(BanList::new()));
 
     // Start RPC server (enabled by default)
+    let mut rpc_handler_opt: Option<Arc<platform_rpc::RpcHandler>> = None;
     if !args.no_rpc {
         let rpc_addr: std::net::SocketAddr =
             args.rpc_addr.parse().expect("Invalid RPC address format");
@@ -821,6 +822,8 @@ async fn main() -> Result<()> {
             rpc_server.rpc_handler().set_route_handler(handler);
         }
 
+        rpc_handler_opt = Some(rpc_server.rpc_handler());
+
         tokio::spawn(async move {
             if let Err(e) = rpc_server.run().await {
                 error!("RPC server error: {}", e);
@@ -828,25 +831,6 @@ async fn main() -> Result<()> {
         });
 
         info!("RPC server started on {}", args.rpc_addr);
-    }
-
-    // Migrate: ensure all challenges use mechanism_id=0 (main mechanism)
-    {
-        let mut cs = chain_state.write();
-        let mut migrated = 0u32;
-        for (_id, cfg) in cs.wasm_challenge_configs.iter_mut() {
-            if cfg.config.mechanism_id != 0 {
-                info!(
-                    "Migrating challenge {} mechanism_id {} -> 0",
-                    cfg.name, cfg.config.mechanism_id
-                );
-                cfg.config.mechanism_id = 0;
-                migrated += 1;
-            }
-        }
-        if migrated > 0 {
-            info!("Migrated {} challenges to mechanism_id=0", migrated);
-        }
     }
 
     // Reload WASM modules from persisted challenges on startup
@@ -1024,6 +1008,7 @@ async fn main() -> Result<()> {
                     &challenge_last_sync,
                     &shared_llm_validators_json,
                     &shared_registered_hotkeys_json,
+                    &rpc_handler_opt,
                 ).await;
             }
 
@@ -1994,6 +1979,7 @@ async fn handle_network_event(
     challenge_last_sync: &Arc<RwLock<std::collections::HashMap<platform_core::ChallengeId, u64>>>,
     shared_llm_validators_json: &Arc<parking_lot::RwLock<Vec<u8>>>,
     shared_registered_hotkeys_json: &Arc<parking_lot::RwLock<Vec<u8>>>,
+    rpc_handler: &Option<Arc<platform_rpc::RpcHandler>>,
 ) {
     match event {
         NetworkEvent::Message { source, message } => match message {
@@ -3620,9 +3606,15 @@ async fn handle_network_event(
         },
         NetworkEvent::PeerConnected(peer_id) => {
             info!("Peer connected: {}", peer_id);
+            if let Some(handler) = rpc_handler {
+                handler.add_peer(peer_id.to_string());
+            }
         }
         NetworkEvent::PeerDisconnected(peer_id) => {
             info!("Peer disconnected: {}", peer_id);
+            if let Some(handler) = rpc_handler {
+                handler.remove_peer(&peer_id.to_string());
+            }
         }
         NetworkEvent::PeerIdentified {
             peer_id,
@@ -3630,12 +3622,12 @@ async fn handle_network_event(
             addresses,
         } => {
             info!(
-                "Peer identified: {} with {} addresses",
-                peer_id,
-                addresses.len()
+                peer_id = %peer_id,
+                address_count = addresses.len(),
+                "Peer identified"
             );
-            if let Some(hk) = hotkey {
-                debug!("  Hotkey: {:?}", hk);
+            if hotkey.is_some() {
+                debug!(peer_id = %peer_id, "Peer hotkey verified");
             }
         }
     }
