@@ -231,22 +231,12 @@ impl BlockSync {
                 *current_epoch.write().await = epoch_info.epoch_number;
                 *current_phase.write().await = epoch_info.phase;
 
-                // On first block after startup, trigger immediate weight submission
-                // so the validator doesn't have to wait for the next epoch boundary.
                 if !*first_block_seen {
                     *first_block_seen = true;
-                    if epoch_info.commit_reveal_enabled {
-                        info!(
-                            "First block after startup: triggering immediate weight submission (epoch={}, block={})",
-                            epoch_info.epoch_number, block_number
-                        );
-                        let _ = event_tx
-                            .send(BlockSyncEvent::CommitWindowOpen {
-                                epoch: epoch_info.epoch_number,
-                                block: block_number,
-                            })
-                            .await;
-                    }
+                    info!(
+                        "First block seen after startup: epoch={}, block={}. Weights will submit at next epoch boundary.",
+                        epoch_info.epoch_number, block_number
+                    );
                 }
 
                 if let Err(e) = event_tx
@@ -463,13 +453,11 @@ mod tests {
             EpochPhase::CommitWindow
         ));
 
-        // First event: CommitWindowOpen (triggered on first block after startup)
+        // First event: NewBlock (first_block_seen no longer emits CommitWindowOpen)
         let first = rx.recv().await.unwrap();
-        assert!(matches!(first, BlockSyncEvent::CommitWindowOpen { .. }));
+        assert!(matches!(first, BlockSyncEvent::NewBlock { .. }));
         let second = rx.recv().await.unwrap();
-        assert!(matches!(second, BlockSyncEvent::NewBlock { .. }));
-        let third = rx.recv().await.unwrap();
-        assert!(matches!(third, BlockSyncEvent::Reconnected));
+        assert!(matches!(second, BlockSyncEvent::Reconnected));
         assert!(!was_disconnected);
     }
 

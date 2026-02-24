@@ -1637,37 +1637,12 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Submit weights on-chain 90s after boot (after RPC pre-compute at 70s).
+            // Startup weight timer disabled: we init last_weight_submission_epoch to current
+            // epoch to avoid 1010 duplicate commit errors after restart. Weights will be
+            // submitted on the next epoch boundary via CommitWindowOpen from block_sync.
             _ = &mut startup_weight_delay, if !startup_weights_submitted => {
                 startup_weights_submitted = true;
-                let current_block = state_manager.apply(|state| state.bittensor_block);
-                if current_block == 0 {
-                    warn!("Startup weight submission skipped: blockchain not yet synced");
-                } else if subtensor.is_none() || subtensor_signer.is_none() {
-                    warn!("Startup weight submission skipped: subtensor not connected");
-                } else if wasm_executor.is_none() {
-                    warn!("Startup weight submission skipped: WASM executor not ready");
-                } else {
-                    let has_challenges = {
-                        let cs = chain_state.read();
-                        cs.wasm_challenge_configs.iter().any(|(_, cfg)| cfg.is_active)
-                    };
-                    if !has_challenges {
-                        warn!("Startup weight submission skipped: no active challenges loaded");
-                    } else {
-                        let tempo = 360u64;
-                        let netuid_plus_one = (netuid as u64).saturating_add(1);
-                        let epoch = current_block.saturating_add(netuid_plus_one) / (tempo + 1);
-                        info!("Startup weight submission: epoch {} block {} (90s after boot)", epoch, current_block);
-                        handle_block_event(
-                            BlockSyncEvent::CommitWindowOpen { epoch, block: current_block },
-                            &subtensor, &subtensor_signer, &subtensor_client,
-                            &state_manager, netuid, version_key, &wasm_executor,
-                            &keypair, &chain_state, &storage,
-                            &mut last_weight_submission_epoch,
-                        ).await;
-                    }
-                }
+                info!("Startup weight timer fired (no-op): weights will submit at next epoch boundary");
             }
 
             // Periodic checkpoint
