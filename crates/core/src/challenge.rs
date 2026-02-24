@@ -118,7 +118,7 @@ pub struct ChallengeConfig {
 impl Default for ChallengeConfig {
     fn default() -> Self {
         Self {
-            mechanism_id: 1, // Default to mechanism 1
+            mechanism_id: 0, // Default to mechanism 0 (main mechanism)
             timeout_secs: 300,
             max_memory_mb: 512,
             max_cpu_secs: 60,
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn test_challenge_config_default() {
         let config = ChallengeConfig::default();
-        assert_eq!(config.mechanism_id, 1);
+        assert_eq!(config.mechanism_id, 0);
         assert_eq!(config.timeout_secs, 300);
         assert_eq!(config.max_memory_mb, 512);
         assert_eq!(config.max_cpu_secs, 60);

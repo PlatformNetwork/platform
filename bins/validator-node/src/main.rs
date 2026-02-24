@@ -3929,10 +3929,10 @@ async fn handle_block_event(
                         }
                         Err(e) => {
                             let err_str = format!("{}", e);
-                            if err_str.contains("Priority is too low") {
+                            if err_str.contains("Priority is too low") || err_str.contains("1010") {
                                 warn!(
-                                    "Mechanism {}: transaction already in mempool (Priority too low) - treating as submitted",
-                                    mechanism_id
+                                    "Mechanism {}: transaction rejected ({}) - marking epoch as submitted to avoid retry loop",
+                                    mechanism_id, err_str
                                 );
                                 *last_weight_submission_epoch = epoch;
                             } else {
