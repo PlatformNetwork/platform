@@ -37,7 +37,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Bittensor (with CRv4 timelock encryption support and new Subtensor API)
 # Updated to d2ca7c2: fix epoch calculation to match subtensor formula
-bittensor-rs = { git = "https://github.com/CortexLM/bittensor-rs", rev = "d2ca7c2" }
+bittensor-rs = { git = "https://github.com/CortexLM/bittensor-rs", rev = "c33a811" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["full", "sync", "macros", "rt-multi-thread"] }
