@@ -1610,7 +1610,7 @@ async fn main() -> Result<()> {
                                     let v = (w * 65535.0).round() as u16;
                                     if v > 0 { uids.push(*uid); vals.push(v); }
                                 }
-                                let burn = 1.0 - assigned;
+                                let burn = ew - assigned;
                                 if burn > 0.001 {
                                     let bv = (burn * 65535.0).round() as u16;
                                     if let Some(pos) = uids.iter().position(|&u| u == 0) {
@@ -3749,8 +3749,9 @@ async fn handle_block_event(
                                     }
                                 }
 
-                                // Remaining weight goes to burn (UID 0)
-                                let burn_weight = 1.0 - assigned_weight;
+                                // Burn only the unresolved portion within this challenge's emission share.
+                                // Previously: 1.0 - assigned_weight (wrong: burned OTHER challenges' share)
+                                let burn_weight = emission_weight - assigned_weight;
                                 if burn_weight > 0.001 {
                                     let burn_u16 = (burn_weight * 65535.0).round() as u16;
                                     if let Some(pos) = uids.iter().position(|&u| u == 0) {
