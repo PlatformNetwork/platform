@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "bittensor-rs"
 version = "0.1.0"
-source = "git+https://github.com/CortexLM/bittensor-rs?rev=9cf5991#9cf59914468a30abb5d594381cc2c0944d4b0c61"
+source = "git+https://github.com/CortexLM/bittensor-rs?rev=d2ca7c2#d2ca7c2f9a710576a161c3155b8524791c90ab90"
 dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",

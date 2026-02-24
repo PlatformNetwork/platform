@@ -3566,8 +3566,7 @@ async fn handle_block_event(
                             .iter()
                             .filter(|(_, cfg)| cfg.is_active)
                             .map(|(id, cfg)| {
-                                let mechanism_id =
-                                    cs.mechanism_configs.keys().next().copied().unwrap_or(0u8);
+                                let mechanism_id = cfg.config.mechanism_id;
                                 let emission_weight = cfg.config.emission_weight;
                                 (id.to_string(), mechanism_id, emission_weight)
                             })
@@ -3575,10 +3574,16 @@ async fn handle_block_event(
                     };
 
                     let block_height = state_manager.apply(|state| state.bittensor_block);
-                    let epoch = block_height / 360;
 
                     for (cid, mechanism_id, emission_weight) in &challenges {
                         let emission_weight = emission_weight.clamp(0.0, 1.0);
+                        if emission_weight < 0.001 {
+                            debug!(
+                                "Skipping challenge {} (emission_weight={:.4}, effectively zero)",
+                                cid, emission_weight
+                            );
+                            continue;
+                        }
                         match executor.execute_get_weights_with_block(cid, block_height, epoch) {
                             Ok(assignments) if !assignments.is_empty() => {
                                 let total_weight: f64 = assignments.iter().map(|a| a.weight).sum();
