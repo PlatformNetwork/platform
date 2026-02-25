@@ -90,6 +90,8 @@ pub struct LocalStorage {
     node_id: String,
     /// Cache for namespace entry counts
     namespace_counts: RwLock<HashMap<String, u64>>,
+    /// Dirty flag for batched flushing
+    dirty: std::sync::atomic::AtomicBool,
 }
 
 impl LocalStorage {
@@ -107,6 +109,7 @@ impl LocalStorage {
             block_index_tree,
             node_id,
             namespace_counts: RwLock::new(HashMap::new()),
+            dirty: std::sync::atomic::AtomicBool::new(false),
         };
 
         // Initialize namespace counts
@@ -129,6 +132,7 @@ impl LocalStorage {
             block_index_tree,
             node_id,
             namespace_counts: RwLock::new(HashMap::new()),
+            dirty: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -273,7 +277,7 @@ impl LocalStorage {
         if let Some(mut entry) = self.get_entry(key)? {
             entry.replication.mark_replicated(node_id);
             self.put_entry(key, &entry)?;
-            self.flush_async().await?;
+            self.mark_dirty();
         }
         Ok(())
     }
@@ -317,8 +321,15 @@ impl LocalStorage {
         Ok(self.get_entry(key)?.map(|e| e.replication))
     }
 
+    /// Mark storage as having unflushed writes
+    fn mark_dirty(&self) {
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Flush all changes to disk synchronously (blocking)
     pub fn flush(&self) -> StorageResult<()> {
+        self.dirty
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.db.flush()?;
         Ok(())
     }
@@ -326,10 +337,20 @@ impl LocalStorage {
     /// Flush all changes to disk asynchronously using spawn_blocking
     pub async fn flush_async(&self) -> StorageResult<()> {
         let db = Arc::clone(&self.db);
+        self.dirty
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         tokio::task::spawn_blocking(move || db.flush())
             .await
             .map_err(|e| StorageError::Database(format!("flush task panicked: {}", e)))?
             .map_err(StorageError::from)?;
+        Ok(())
+    }
+
+    /// Flush only if there are pending writes
+    pub async fn flush_if_dirty(&self) -> StorageResult<()> {
+        if self.dirty.load(std::sync::atomic::Ordering::Relaxed) {
+            self.flush_async().await?;
+        }
         Ok(())
     }
 
@@ -637,7 +658,7 @@ impl DistributedStore for LocalStorage {
         };
 
         self.put_entry(&key, &entry)?;
-        self.flush_async().await?;
+        self.mark_dirty();
 
         debug!(
             "LocalStorage::put completed key={} version={}",
@@ -650,7 +671,7 @@ impl DistributedStore for LocalStorage {
     async fn delete(&self, key: &StorageKey) -> StorageResult<bool> {
         trace!("LocalStorage::delete key={}", key);
         let deleted = self.delete_entry(key)?;
-        self.flush_async().await?;
+        self.mark_dirty();
         Ok(deleted)
     }
 
@@ -945,7 +966,7 @@ impl DistributedStore for LocalStorage {
         options: PutOptions,
     ) -> StorageResult<ValueMetadata> {
         let metadata = self.put_entry_with_block_internal(&key, value, block_id, &options)?;
-        self.flush_async().await?;
+        self.mark_dirty();
         Ok(metadata)
     }
 }
