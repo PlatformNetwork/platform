@@ -465,7 +465,7 @@ async fn main() -> Result<()> {
     ));
 
     // Create event channel for network events
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<NetworkEvent>(256);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<NetworkEvent>(4096);
 
     // Initialize P2P network
     let network = Arc::new(P2PNetwork::new(

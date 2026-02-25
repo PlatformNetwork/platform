@@ -1034,8 +1034,8 @@ impl WasmChallengeExecutor {
             challenge_id: module_path.to_string(),
             validator_id: "validator".to_string(),
             storage_host_config: StorageHostConfig {
-                allow_direct_writes: true,
-                require_consensus: false,
+                allow_direct_writes: false,
+                require_consensus: true,
                 ..self.config.storage_host_config.clone()
             },
             storage_backend: Arc::clone(&self.config.storage_backend),

@@ -105,8 +105,20 @@ impl StorageBackend for ChallengeStorageBackend {
                 signature,
             });
 
-            // Fire and forget - don't block WASM execution on P2P
-            tracing::info!(
+            // Write locally first so WASM can read-your-own-writes during sync
+            let storage_key = build_challenge_storage_key(challenge_id, key);
+            if let Err(e) = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.storage.put(
+                    storage_key,
+                    value.to_vec(),
+                    DPutOptions::default(),
+                ))
+            }) {
+                tracing::warn!(error = %e, "Failed to write locally before P2P broadcast");
+            }
+
+            // Broadcast via P2P so other validators also apply the write
+            tracing::debug!(
                 proposal_id = %hex::encode(&proposal_id[..8]),
                 challenge_id = %challenge_id,
                 key_len = key.len(),
@@ -115,7 +127,7 @@ impl StorageBackend for ChallengeStorageBackend {
             );
             let _ = tx.try_send(P2PCommand::Broadcast(msg));
 
-            // Also add the proposal to our local state (we don't receive our own broadcasts)
+            // Also add the proposal to our local state for vote tracking
             if let Some(local_tx) = &self.local_proposal_tx {
                 let local_proposal = StorageProposal {
                     proposal_id,
