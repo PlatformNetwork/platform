@@ -1025,6 +1025,23 @@ async fn main() -> Result<()> {
                     None => std::future::pending().await,
                 }
             } => {
+                // Force metagraph refresh before weight submission to avoid stale hotkey->UID mappings
+                if matches!(event, BlockSyncEvent::CommitWindowOpen { .. }) {
+                    if let Some(bittensor_client) = bittensor_client_for_metagraph.as_ref() {
+                        match sync_metagraph(bittensor_client, netuid).await {
+                            Ok(mg) => {
+                                info!("Pre-commit metagraph refresh: {} neurons", mg.n);
+                                update_validator_set_from_metagraph(&mg, &validator_set, &chain_state, &valid_voters, &state_root_consensus, &state_manager);
+                                if let Some(sc) = subtensor_client.as_mut() {
+                                    sc.set_metagraph(mg);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Pre-commit metagraph refresh failed: {}. Using cached metagraph.", e);
+                            }
+                        }
+                    }
+                }
                 handle_block_event(
                     event,
                     &subtensor,

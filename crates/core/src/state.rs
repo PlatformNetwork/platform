@@ -298,28 +298,62 @@ impl ChainState {
     }
 
     /// Update the state hash
+    ///
+    /// Hashes actual content (not just counts) so divergent state is detectable.
     pub fn update_hash(&mut self) {
+        #[derive(Serialize)]
+        struct ChallengeHashEntry {
+            id: String,
+            emission_weight: u64, // f64 as bits for deterministic hashing
+            mechanism_id: u8,
+            is_active: bool,
+        }
+
         #[derive(Serialize)]
         struct HashInput<'a> {
             block_height: BlockHeight,
             sudo_key: &'a Hotkey,
-            validator_count: usize,
-            challenge_count: usize,
-            wasm_challenge_count: usize,
-            pending_jobs: usize,
             mutation_sequence: u64,
-            route_count: usize,
+            validators: Vec<String>,
+            challenge_ids: Vec<String>,
+            wasm_challenges: Vec<ChallengeHashEntry>,
+            mechanism_configs: Vec<(u8, String)>,
         }
+
+        let mut validators: Vec<String> = self.validators.keys().map(|h| h.to_ss58()).collect();
+        validators.sort();
+
+        let mut challenge_ids: Vec<String> =
+            self.challenges.keys().map(|c| c.to_string()).collect();
+        challenge_ids.sort();
+
+        let mut wasm_challenges: Vec<ChallengeHashEntry> = self
+            .wasm_challenge_configs
+            .iter()
+            .map(|(id, cfg)| ChallengeHashEntry {
+                id: id.to_string(),
+                emission_weight: cfg.config.emission_weight.to_bits(),
+                mechanism_id: cfg.config.mechanism_id,
+                is_active: cfg.is_active,
+            })
+            .collect();
+        wasm_challenges.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let mut mechanism_configs: Vec<(u8, String)> = self
+            .mechanism_configs
+            .iter()
+            .map(|(k, v)| (*k, format!("{:?}", v)))
+            .collect();
+        mechanism_configs.sort_by_key(|(k, _)| *k);
 
         let input = HashInput {
             block_height: self.block_height,
             sudo_key: &self.sudo_key,
-            validator_count: self.validators.len(),
-            challenge_count: self.challenges.len(),
-            wasm_challenge_count: self.wasm_challenge_configs.len(),
-            pending_jobs: self.pending_jobs.len(),
             mutation_sequence: self.mutation_sequence,
-            route_count: self.challenge_routes.len(),
+            validators,
+            challenge_ids,
+            wasm_challenges,
+            mechanism_configs,
         };
 
         self.state_hash = hash_data(&input).unwrap_or([0u8; 32]);
@@ -640,17 +674,29 @@ impl ChainState {
             return false;
         }
 
+        // Merge WASM challenge configs: update existing entries too (not just insert)
+        // so that sudo actions (SetEmission, SetMechanism) propagate correctly.
         for (id, config) in &peer_state.wasm_challenge_configs {
-            self.wasm_challenge_configs
-                .entry(*id)
-                .or_insert_with(|| config.clone());
+            self.wasm_challenge_configs.insert(*id, config.clone());
         }
 
         for (id, routes) in &peer_state.challenge_routes {
-            self.challenge_routes
-                .entry(*id)
-                .or_insert_with(|| routes.clone());
+            self.challenge_routes.insert(*id, routes.clone());
         }
+
+        // Merge mechanism configs
+        for (mid, mconfig) in &peer_state.mechanism_configs {
+            self.mechanism_configs.insert(*mid, mconfig.clone());
+        }
+
+        // Merge challenge weight allocations
+        for (id, alloc) in &peer_state.challenge_weights {
+            self.challenge_weights.insert(*id, alloc.clone());
+        }
+
+        // Sync paused state from higher-sequence peer
+        self.paused = peer_state.paused;
+        self.pause_reason = peer_state.pause_reason.clone();
 
         self.mutation_sequence = peer_state.mutation_sequence;
         self.update_hash();

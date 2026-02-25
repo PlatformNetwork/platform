@@ -465,24 +465,37 @@ impl ChainState {
     pub fn update_hash(&mut self) {
         self.last_updated = chrono::Utc::now().timestamp_millis();
 
-        // Create a deterministic hash input
+        // Hash actual content (not just counts) so divergent state is detectable
         #[derive(Serialize)]
         struct HashInput {
             sequence: SequenceNumber,
             epoch: u64,
-            validator_count: usize,
-            challenge_count: usize,
-            pending_count: usize,
             netuid: u16,
+            validators: Vec<(String, u64)>,
+            challenges: Vec<String>,
+            pending_ids: Vec<String>,
         }
+
+        let mut validators: Vec<(String, u64)> = self
+            .validators
+            .iter()
+            .map(|(h, s)| (h.to_ss58(), *s))
+            .collect();
+        validators.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut challenges: Vec<String> = self.challenges.keys().map(|c| c.to_string()).collect();
+        challenges.sort();
+
+        let mut pending_ids: Vec<String> = self.pending_evaluations.keys().cloned().collect();
+        pending_ids.sort();
 
         let input = HashInput {
             sequence: self.sequence,
             epoch: self.epoch,
-            validator_count: self.validators.len(),
-            challenge_count: self.challenges.len(),
-            pending_count: self.pending_evaluations.len(),
             netuid: self.netuid,
+            validators,
+            challenges,
+            pending_ids,
         };
 
         self.state_hash = hash_data(&input).unwrap_or([0u8; 32]);

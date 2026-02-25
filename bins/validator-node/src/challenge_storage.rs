@@ -105,19 +105,11 @@ impl StorageBackend for ChallengeStorageBackend {
                 signature,
             });
 
-            // Write locally first so WASM can read-your-own-writes during sync
-            let storage_key = build_challenge_storage_key(challenge_id, key);
-            if let Err(e) = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.storage.put(
-                    storage_key,
-                    value.to_vec(),
-                    DPutOptions::default(),
-                ))
-            }) {
-                tracing::warn!(error = %e, "Failed to write locally before P2P broadcast");
-            }
+            // DO NOT write locally before consensus - this causes state divergence.
+            // The proposer's get_weights would read uncommitted data that other validators
+            // don't have yet. All nodes (including proposer) write only after P2P consensus.
 
-            // Broadcast via P2P so other validators also apply the write
+            // Broadcast via P2P so all validators apply the write after consensus
             tracing::debug!(
                 proposal_id = %hex::encode(&proposal_id[..8]),
                 challenge_id = %challenge_id,
