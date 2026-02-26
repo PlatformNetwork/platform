@@ -1594,6 +1594,8 @@ async fn main() -> Result<()> {
                 state_manager.apply(|state| state.cleanup_old_state_mutations(300_000));
                 // Clean up old storage proposals (5 min timeout)
                 state_manager.apply(|state| state.cleanup_old_proposals(300_000));
+                // Prune stale task progress, reviews, leaderboard, completed evaluations (1 hour)
+                state_manager.apply(|state| state.cleanup_stale_data(3_600_000));
             }
 
             // Weight submission is handled entirely by CommitWindowOpen in handle_block_event.
@@ -1836,35 +1838,45 @@ async fn main() -> Result<()> {
             _ = &mut shutdown_signal => {
                 info!("Received shutdown signal, persisting state...");
 
-                // Persist core state (wasm_challenge_configs, routes, validators)
-                if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
-                    error!("Failed to persist core state on shutdown: {}", e);
-                } else {
-                    info!("Core state persisted on shutdown");
-                }
+                let shutdown_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    async {
+                        // Persist core state (wasm_challenge_configs, routes, validators)
+                        if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
+                            error!("Failed to persist core state on shutdown: {}", e);
+                        } else {
+                            info!("Core state persisted on shutdown");
+                        }
 
-                // Persist P2P consensus state
-                if let Err(e) = persist_state_to_storage(&storage, &state_manager).await {
-                    error!("Failed to persist P2P state on shutdown: {}", e);
-                } else {
-                    info!("P2P state persisted on shutdown");
-                }
+                        // Persist P2P consensus state
+                        if let Err(e) = persist_state_to_storage(&storage, &state_manager).await {
+                            error!("Failed to persist P2P state on shutdown: {}", e);
+                        } else {
+                            info!("P2P state persisted on shutdown");
+                        }
 
-                // Flush storage to disk to ensure all writes are durable
-                if let Err(e) = local_storage.flush_if_dirty().await {
-                    error!("Failed to flush storage on shutdown: {}", e);
-                } else {
-                    info!("Storage flushed to disk on shutdown");
-                }
+                        // Flush storage to disk to ensure all writes are durable
+                        if let Err(e) = local_storage.flush_if_dirty().await {
+                            error!("Failed to flush storage on shutdown: {}", e);
+                        } else {
+                            info!("Storage flushed to disk on shutdown");
+                        }
 
-                // Create checkpoint
-                if let Some(handler) = shutdown_handler.as_mut() {
-                    if let Err(e) = handler.create_checkpoint() {
-                        error!("Failed to create shutdown checkpoint: {}", e);
-                    } else {
-                        info!("Shutdown checkpoint saved successfully");
+                        // Create checkpoint
+                        if let Some(handler) = shutdown_handler.as_mut() {
+                            if let Err(e) = handler.create_checkpoint() {
+                                error!("Failed to create shutdown checkpoint: {}", e);
+                            } else {
+                                info!("Shutdown checkpoint saved successfully");
+                            }
+                        }
                     }
+                ).await;
+
+                if shutdown_result.is_err() {
+                    error!("Shutdown timed out after 30s, forcing exit");
                 }
+
                 info!("Shutting down...");
                 break;
             }
@@ -2216,6 +2228,14 @@ async fn handle_network_event(
                 }
             }
             P2PMessage::Submission(sub) => {
+                // Verify miner is a registered hotkey
+                if !chain_state.read().registered_hotkeys.contains(&sub.miner) {
+                    warn!(
+                        miner = %sub.miner.to_ss58(),
+                        "Submission from unregistered miner, ignoring"
+                    );
+                    return;
+                }
                 info!(
                     submission_id = %sub.submission_id,
                     challenge_id = %sub.challenge_id,
@@ -2251,17 +2271,22 @@ async fn handle_network_event(
                 }
             }
             P2PMessage::Evaluation(eval) => {
+                let validator_hotkey = eval.validator.clone();
+                let vinfo = validator_set.get_validator(&validator_hotkey);
+                if vinfo.is_none() {
+                    warn!(
+                        validator = %validator_hotkey.to_ss58(),
+                        "Evaluation from non-validator, ignoring"
+                    );
+                    return;
+                }
+                let stake = vinfo.map(|v| v.stake).unwrap_or(0);
                 info!(
                     submission_id = %eval.submission_id,
                     validator = %eval.validator.to_ss58(),
                     score = eval.score,
                     "Received evaluation from peer validator"
                 );
-                let validator_hotkey = eval.validator.clone();
-                let stake = validator_set
-                    .get_validator(&validator_hotkey)
-                    .map(|v| v.stake)
-                    .unwrap_or(0);
                 let validator_eval = platform_p2p_consensus::ValidatorEvaluation {
                     score: eval.score,
                     stake,
@@ -2391,6 +2416,7 @@ async fn handle_network_event(
                                 platform_p2p_consensus::DataResponseMessage {
                                     request_id: request_id.clone(),
                                     responder: keypair.hotkey(),
+                                    target: Some(req.requester.clone()),
                                     challenge_id,
                                     data_type: "challenge_storage".to_string(),
                                     data,
@@ -2424,6 +2450,12 @@ async fn handle_network_event(
                 }
             }
             P2PMessage::DataResponse(resp) => {
+                if let Some(ref target) = resp.target {
+                    if *target != keypair.hotkey() {
+                        return;
+                    }
+                }
+
                 debug!(
                     request_id = %resp.request_id,
                     responder = %resp.responder.to_ss58(),
@@ -3434,9 +3466,38 @@ async fn handle_network_event(
                 if !validator_set.is_validator(&resp.responder) {
                     warn!(responder = %resp.responder.to_ss58(), "Core state response from unknown validator");
                 } else {
+                    // Verify application-level signature before trusting the data
+                    let sign_data = bincode::serialize(&(
+                        &resp.state_hash,
+                        resp.mutation_sequence,
+                        resp.timestamp,
+                    ))
+                    .unwrap_or_default();
+                    let signed_msg = platform_core::SignedMessage {
+                        message: sign_data,
+                        signature: resp.signature.clone(),
+                        signer: resp.responder.clone(),
+                    };
+                    if !signed_msg.verify().unwrap_or(false) {
+                        warn!(
+                            responder = %resp.responder.to_ss58(),
+                            "Invalid signature on CoreStateResponse, ignoring"
+                        );
+                        return;
+                    }
+
                     // Deserialize and merge
                     match serde_json::from_slice::<platform_core::ChainState>(&resp.state_data) {
                         Ok(peer_state) => {
+                            // Verify state_hash matches the actual content
+                            if peer_state.state_hash != resp.state_hash {
+                                warn!(
+                                    responder = %resp.responder.to_ss58(),
+                                    "CoreStateResponse state_hash mismatch, ignoring"
+                                );
+                                return;
+                            }
+
                             let mut cs = chain_state.write();
                             if cs.merge_from(&peer_state) {
                                 info!(
@@ -3603,6 +3664,7 @@ async fn handle_network_event(
                                 platform_p2p_consensus::StorageSyncResponseMessage {
                                     challenge_id: req.challenge_id,
                                     responder: keypair.hotkey(),
+                                    target: Some(req.requester.clone()),
                                     data_hash,
                                     entries,
                                     total_entries: total,
@@ -3636,6 +3698,12 @@ async fn handle_network_event(
                 }
             }
             P2PMessage::StorageSyncResponse(resp) => {
+                if let Some(ref target) = resp.target {
+                    if *target != keypair.hotkey() {
+                        return;
+                    }
+                }
+
                 if !validator_set.is_validator(&resp.responder) {
                     warn!(responder = %resp.responder.to_ss58(), "Storage sync response from non-validator");
                 } else if resp.entries.is_empty() {

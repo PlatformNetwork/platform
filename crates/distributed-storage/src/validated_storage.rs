@@ -684,15 +684,13 @@ impl<S: DistributedStore + 'static> ValidatedStorage<S> {
         {
             let mut committed = self.committed.write().await;
             committed.insert(*proposal_id, result.clone());
-            // Evict old committed results to bound memory (keep last 1000)
+            // Evict oldest committed results to bound memory (keep last 1000)
             if committed.len() > 1000 {
-                let oldest: Vec<[u8; 32]> = committed
-                    .iter()
-                    .take(committed.len() - 1000)
-                    .map(|(id, _)| *id)
-                    .collect();
-                for id in oldest {
-                    committed.remove(&id);
+                let mut by_time: Vec<([u8; 32], i64)> =
+                    committed.iter().map(|(id, r)| (*id, r.timestamp)).collect();
+                by_time.sort_by_key(|(_, ts)| *ts);
+                for (id, _) in by_time.iter().take(committed.len() - 1000) {
+                    committed.remove(id);
                 }
             }
         }

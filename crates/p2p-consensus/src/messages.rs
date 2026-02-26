@@ -526,6 +526,9 @@ pub struct DataResponseMessage {
     pub request_id: String,
     /// Validator providing the data
     pub responder: Hotkey,
+    /// Target requester (only this validator should process the response)
+    #[serde(default)]
+    pub target: Option<Hotkey>,
     /// Challenge the data belongs to
     pub challenge_id: ChallengeId,
     /// Type of data being returned
@@ -1090,6 +1093,9 @@ pub struct StorageSyncResponseMessage {
     pub challenge_id: ChallengeId,
     /// Responding validator
     pub responder: Hotkey,
+    /// Target requester (only this validator should process the response)
+    #[serde(default)]
+    pub target: Option<Hotkey>,
     /// Hash of all data in this response
     pub data_hash: [u8; 32],
     /// Key-value entries

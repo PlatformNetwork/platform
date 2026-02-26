@@ -718,7 +718,15 @@ impl ConsensusEngine {
             // Store decision
             let seq = round.sequence;
             drop(round_guard);
-            self.decisions.write().insert(seq, decision.clone());
+            {
+                let mut decisions = self.decisions.write();
+                decisions.insert(seq, decision.clone());
+                // Prune old decisions to bound memory (keep last 1000)
+                if decisions.len() > 1000 {
+                    let cutoff = seq.saturating_sub(1000);
+                    decisions.retain(|s, _| *s > cutoff);
+                }
+            }
 
             // Increment sequence
             *self.next_sequence.write() += 1;

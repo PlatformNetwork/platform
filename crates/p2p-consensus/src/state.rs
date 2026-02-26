@@ -1317,6 +1317,57 @@ impl ChainState {
         removed
     }
 
+    /// Prune stale data from unbounded collections.
+    /// Call periodically (e.g., alongside cleanup_stale_jobs).
+    pub fn cleanup_stale_data(&mut self, max_age_ms: i64) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut changed = false;
+
+        // Prune old task progress entries
+        let before = self.task_progress.len();
+        self.task_progress
+            .retain(|_, r| now - r.updated_at < max_age_ms);
+        if self.task_progress.len() != before {
+            changed = true;
+        }
+
+        // Prune old review assignments (keep only recent)
+        let before = self.review_assignments.len();
+        self.review_assignments
+            .retain(|_, reviews| reviews.iter().any(|r| now - r.created_at < max_age_ms));
+        if self.review_assignments.len() != before {
+            changed = true;
+        }
+
+        // Cap leaderboard entries per challenge to top 1000
+        for entries in self.leaderboard.values_mut() {
+            if entries.len() > 1000 {
+                entries.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                entries.truncate(1000);
+                changed = true;
+            }
+        }
+
+        // Prune completed_evaluations to last 10 epochs
+        if self.completed_evaluations.len() > 10 {
+            let cutoff = self.epoch.saturating_sub(10);
+            let before = self.completed_evaluations.len();
+            self.completed_evaluations
+                .retain(|epoch, _| *epoch > cutoff);
+            if self.completed_evaluations.len() != before {
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.increment_sequence();
+        }
+    }
+
     pub fn assign_review(&mut self, record: ReviewRecord) {
         self.review_assignments
             .entry(record.submission_id.clone())
@@ -1439,11 +1490,12 @@ impl ChainState {
                         max = MAX_VALIDATED_AGENT_LOGS,
                         "Validated agent logs at capacity; pruning oldest entries"
                     );
-                    let keys_to_remove: Vec<String> = self
-                        .validated_agent_logs
-                        .keys()
+                    let mut all_keys: Vec<String> =
+                        self.validated_agent_logs.keys().cloned().collect();
+                    all_keys.sort();
+                    let keys_to_remove: Vec<String> = all_keys
+                        .into_iter()
                         .take(self.validated_agent_logs.len() / 10)
-                        .cloned()
                         .collect();
                     for key in keys_to_remove {
                         self.validated_agent_logs.remove(&key);
