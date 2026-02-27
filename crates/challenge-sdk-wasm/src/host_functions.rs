@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 const RESPONSE_BUF_SMALL: usize = 4096;
-const RESPONSE_BUF_MEDIUM: usize = 64 * 1024;
+const RESPONSE_BUF_MEDIUM: usize = 5 * 1024 * 1024;
 const RESPONSE_BUF_LARGE: usize = 4 * 1024 * 1024;
 
 #[link(wasm_import_module = "platform_network")]

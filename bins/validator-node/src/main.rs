@@ -389,10 +389,7 @@ async fn main() -> Result<()> {
         enable_indexing: false,
         ..Default::default()
     };
-    let tracked_storage = TrackedStorage::new(
-        Arc::clone(&local_storage) as Arc<dyn platform_distributed_storage::DistributedStore>,
-        tracked_config,
-    );
+    let tracked_storage = TrackedStorage::new(Arc::clone(&local_storage) as Arc<dyn platform_distributed_storage::DistributedStore>, tracked_config);
     let storage = Arc::new(tracked_storage);
     info!("Distributed storage initialized with compression (audit/indexing disabled)");
 
@@ -3922,7 +3919,14 @@ async fn handle_network_event(
                     }
                 }
 
-                if !validator_set.is_validator(&resp.responder) {
+                let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
+                let we_are_bootstrap = keypair.hotkey().to_ss58() == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
+                if in_bootstrap && we_are_bootstrap && resp.responder.to_ss58() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58 {
+                    debug!(
+                        responder = %resp.responder.to_ss58(),
+                        "Bootstrap validator ignoring delta sync from non-bootstrap peer"
+                    );
+                } else if !validator_set.is_validator(&resp.responder) {
                     warn!(responder = %resp.responder.to_ss58(), "Storage sync response from non-validator");
                 } else if resp.entries.is_empty() {
                     debug!(
@@ -4017,6 +4021,7 @@ async fn handle_network_event(
                     let mut skipped = 0u64;
                     let mut max_block = 0u64;
                     let opts = put_options_with_block(state_manager);
+                    let from_bootstrap = resp.responder.to_ss58() == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
 
                     for entry in &resp.entries {
                         // Reject entries with unreasonable version numbers
@@ -4034,26 +4039,33 @@ async fn handle_network_event(
 
                         let key = StorageKey::new(&entry.namespace, hex::encode(&entry.key));
 
-                        // Only apply if peer version is newer
-                        match storage
-                            .get(&key, platform_distributed_storage::GetOptions::default())
-                            .await
-                        {
-                            Ok(Some(existing)) if existing.metadata.version >= entry.version => {
-                                skipped += 1;
+                        // During bootstrap, always accept data from the bootstrap validator
+                        // (it is the source of truth). Otherwise, only apply if newer.
+                        let should_apply = if in_bootstrap && from_bootstrap {
+                            true
+                        } else {
+                            match storage
+                                .get(&key, platform_distributed_storage::GetOptions::default())
+                                .await
+                            {
+                                Ok(Some(existing)) if existing.metadata.version >= entry.version => false,
+                                _ => true,
                             }
-                            _ => {
-                                if let Err(e) =
-                                    storage.put(key, entry.value.clone(), opts.clone()).await
-                                {
-                                    warn!(error = %e, "Failed to apply synced entry");
-                                } else {
-                                    applied += 1;
-                                    if entry.updated_block > max_block {
-                                        max_block = entry.updated_block;
-                                    }
+                        };
+
+                        if should_apply {
+                            if let Err(e) =
+                                storage.put(key, entry.value.clone(), opts.clone()).await
+                            {
+                                warn!(error = %e, "Failed to apply synced entry");
+                            } else {
+                                applied += 1;
+                                if entry.updated_block > max_block {
+                                    max_block = entry.updated_block;
                                 }
                             }
+                        } else {
+                            skipped += 1;
                         }
                     }
 
@@ -5072,8 +5084,7 @@ fn compact_storage_if_needed(db_path: &std::path::Path) -> anyhow::Result<()> {
                 if let Some(ns_end) = key.iter().position(|&b| b == b':') {
                     let ns = &key[..ns_end];
                     let key_part = &key[ns_end + 1..];
-                    let index_key =
-                        format!("{}:{}", String::from_utf8_lossy(ns), hex::encode(key_part));
+                    let index_key = format!("{}:{}", String::from_utf8_lossy(ns), hex::encode(key_part));
                     index_tree.remove(index_key.as_bytes())?;
                 }
                 pruned_count += 1;
