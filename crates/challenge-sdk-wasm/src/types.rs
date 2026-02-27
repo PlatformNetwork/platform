@@ -213,6 +213,39 @@ pub struct WasmSyncResult {
     pub sync_timestamp: i64,
 }
 
+/// Evaluation data from a single validator for aggregation.
+///
+/// Passed to [`Challenge::aggregate`] so the WASM module can combine
+/// evaluations from all validators into a final leaderboard and weights.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ValidatorEvaluationData {
+    pub validator_hotkey: String,
+    pub validator_stake: u64,
+    pub submission_id: String,
+    pub miner_hotkey: String,
+    pub score: f64,
+    pub metrics: Vec<u8>,
+    pub timestamp: i64,
+}
+
+/// Input for the multi-validator aggregation function.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregationInput {
+    pub challenge_id: String,
+    pub epoch: u64,
+    pub block_height: u64,
+    pub evaluations: Vec<ValidatorEvaluationData>,
+    pub current_leaderboard: Vec<u8>,
+}
+
+/// Output of the aggregation function.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregationOutput {
+    pub leaderboard: Vec<u8>,
+    pub weights: Vec<WeightEntry>,
+    pub leaderboard_hash: [u8; 32],
+}
+
 /// Bitflags indicating which WASM functions should be deduplicated.
 ///
 /// When a flag is set, the runtime will skip concurrent calls to that function

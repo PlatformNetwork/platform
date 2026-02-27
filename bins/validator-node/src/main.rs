@@ -1667,6 +1667,20 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
+                        // During bootstrap, non-bootstrap validators fetch from bootstrap RPC
+                        let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
+                        let precomputed = if in_bootstrap && keypair.ss58_address() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58 {
+                            match fetch_remote_weights().await {
+                                Ok(remote) if !remote.is_empty() => {
+                                    info!("Bootstrap RPC pre-compute: using {} entries from bootstrap validator", remote.len());
+                                    remote
+                                }
+                                _ => precomputed,
+                            }
+                        } else {
+                            precomputed
+                        };
+
                         if !precomputed.is_empty() {
                             info!("RPC pre-compute: {} mechanism entries available via subnet_getWeights (70s after boot)", precomputed.len());
                             let mut cs = chain_state.write();
@@ -1716,14 +1730,27 @@ async fn main() -> Result<()> {
                         let tempo = 360u64;
                         let netuid_plus_one = (netuid as u64).saturating_add(1);
                         let epoch = current_block.saturating_add(netuid_plus_one) / (tempo + 1);
-                        info!("Startup weight submission: epoch {} block {} (90s after boot)", epoch, current_block);
-                        handle_block_event(
-                            BlockSyncEvent::CommitWindowOpen { epoch, block: current_block },
-                            &subtensor, &subtensor_signer, &subtensor_client,
-                            &state_manager, netuid, version_key, &wasm_executor,
-                            &keypair, &chain_state, &storage,
-                            &mut last_weight_submission_epoch,
-                        ).await;
+                        // Only submit if we're actually in the commit window phase.
+                        // The commit window is the first block of each epoch.
+                        let epoch_start = epoch.saturating_mul(tempo + 1).saturating_sub(netuid_plus_one);
+                        let blocks_into_epoch = current_block.saturating_sub(epoch_start);
+                        // Commit window is typically ~1 block at the start of each epoch.
+                        // If we're past it, wait for the next real CommitWindowOpen event.
+                        if blocks_into_epoch > 5 {
+                            info!(
+                                "Startup weight submission skipped: block {} is {} blocks into epoch {} (past commit window), will wait for next epoch",
+                                current_block, blocks_into_epoch, epoch
+                            );
+                        } else {
+                            info!("Startup weight submission: epoch {} block {} (90s after boot)", epoch, current_block);
+                            handle_block_event(
+                                BlockSyncEvent::CommitWindowOpen { epoch, block: current_block },
+                                &subtensor, &subtensor_signer, &subtensor_client,
+                                &state_manager, netuid, version_key, &wasm_executor,
+                                &keypair, &chain_state, &storage,
+                                &mut last_weight_submission_epoch,
+                            ).await;
+                        }
                     }
                 }
             }
@@ -2314,7 +2341,25 @@ async fn handle_network_event(
                             "Peer evaluation recorded in state"
                         );
                     }
+
+                    // Try to finalize if enough validators have evaluated
+                    try_finalize_evaluation(state, &eval.submission_id);
                 });
+
+                // Sync evaluation data to core ChainState for RPC access
+                {
+                    let challenge_key = eval.challenge_id.to_string();
+                    let mut cs = chain_state.write();
+                    let entries = cs.validator_evaluations.entry(challenge_key).or_default();
+                    entries.push((
+                        eval.submission_id.clone(),
+                        String::new(),
+                        eval.validator.to_ss58(),
+                        stake,
+                        eval.score,
+                        eval.timestamp,
+                    ));
+                }
             }
             P2PMessage::StateRequest(req) => {
                 debug!(
@@ -2331,6 +2376,16 @@ async fn handle_network_event(
                 );
             }
             P2PMessage::WeightVote(wv) => {
+                let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
+                if in_bootstrap
+                    && wv.validator.to_ss58() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58
+                {
+                    debug!(
+                        validator = %wv.validator.to_ss58(),
+                        "Bootstrap: ignoring weight vote from non-bootstrap validator"
+                    );
+                    return;
+                }
                 debug!(
                     validator = %wv.validator.to_ss58(),
                     epoch = wv.epoch,
@@ -2556,21 +2611,84 @@ async fn handle_network_event(
                 );
             }
             P2PMessage::LeaderboardRequest(req) => {
-                debug!(
-                    requester = %req.requester.to_ss58(),
-                    challenge_id = %req.challenge_id,
-                    limit = req.limit,
-                    offset = req.offset,
-                    "Received leaderboard request"
-                );
+                if !validator_set.is_validator(&req.requester) {
+                    warn!(requester = %req.requester.to_ss58(), "Leaderboard request from non-validator");
+                } else {
+                    debug!(
+                        requester = %req.requester.to_ss58(),
+                        challenge_id = %req.challenge_id,
+                        limit = req.limit,
+                        offset = req.offset,
+                        "Received leaderboard request"
+                    );
+
+                    // Respond with our leaderboard data
+                    let entries =
+                        state_manager.read(|state| state.get_leaderboard(&req.challenge_id));
+                    let total_count = entries.len() as u32;
+                    let serialized = bincode::serialize(&entries).unwrap_or_default();
+                    let timestamp = chrono::Utc::now().timestamp_millis();
+                    let sign_data =
+                        bincode::serialize(&(&req.challenge_id, total_count, timestamp))
+                            .unwrap_or_default();
+                    let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                    let resp = P2PMessage::LeaderboardResponse(
+                        platform_p2p_consensus::LeaderboardResponseMessage {
+                            responder: keypair.hotkey(),
+                            challenge_id: req.challenge_id,
+                            entries: serialized,
+                            total_count,
+                            timestamp,
+                            signature,
+                        },
+                    );
+                    if let Err(e) = p2p_cmd_tx
+                        .send(platform_p2p_consensus::P2PCommand::Broadcast(resp))
+                        .await
+                    {
+                        warn!(error = %e, "Failed to send leaderboard response");
+                    }
+                }
             }
             P2PMessage::LeaderboardResponse(resp) => {
-                debug!(
-                    responder = %resp.responder.to_ss58(),
-                    challenge_id = %resp.challenge_id,
-                    total_count = resp.total_count,
-                    "Received leaderboard response"
-                );
+                if !validator_set.is_validator(&resp.responder) {
+                    warn!(responder = %resp.responder.to_ss58(), "Leaderboard response from non-validator");
+                } else {
+                    debug!(
+                        responder = %resp.responder.to_ss58(),
+                        challenge_id = %resp.challenge_id,
+                        total_count = resp.total_count,
+                        "Received leaderboard response"
+                    );
+
+                    // Merge remote leaderboard entries into our state
+                    if let Ok(remote_entries) = bincode::deserialize::<
+                        Vec<platform_p2p_consensus::LeaderboardEntry>,
+                    >(&resp.entries)
+                    {
+                        if !remote_entries.is_empty() {
+                            state_manager.apply(|state| {
+                                let mut local = state.get_leaderboard(&resp.challenge_id);
+                                for remote in &remote_entries {
+                                    if let Some(existing) =
+                                        local.iter_mut().find(|e| e.miner == remote.miner)
+                                    {
+                                        // Update if remote has newer data
+                                        if remote.last_submission_at > existing.last_submission_at {
+                                            existing.score = remote.score;
+                                            existing.submission_count = remote.submission_count;
+                                            existing.last_submission_at = remote.last_submission_at;
+                                        }
+                                    } else {
+                                        local.push(remote.clone());
+                                    }
+                                }
+                                state.update_leaderboard(resp.challenge_id, local);
+                            });
+                        }
+                    }
+                }
             }
             P2PMessage::ChallengeUpdate(update) => {
                 let updater_ss58 = update.updater.to_ss58();
@@ -2923,10 +3041,18 @@ async fn handle_network_event(
                         );
                         false
                     } else {
+                        // Validate challenge_id corresponds to a registered challenge
+                        let challenge_known = {
+                            let cs = chain_state.read();
+                            cs.wasm_challenge_configs
+                                .contains_key(&proposal.challenge_id)
+                                || cs.challenges.contains_key(&proposal.challenge_id)
+                        };
                         !proposal.key.is_empty()
                             && proposal.key.len() <= max_key_size
                             && proposal.value.len() <= max_value_size
                             && proposal.challenge_id.0 != uuid::Uuid::nil()
+                            && challenge_known
                             && !proposal.signature.is_empty()
                     };
 
@@ -3599,100 +3725,121 @@ async fn handle_network_event(
                 if !validator_set.is_validator(&req.requester) {
                     warn!(requester = %req.requester.to_ss58(), "Storage sync request from non-validator");
                 } else {
-                    let challenge_ns = req.challenge_id.to_string();
-                    let since = req.since_block;
-                    info!(
-                        challenge_id = %req.challenge_id,
-                        requester = %req.requester.to_ss58(),
-                        since_block = since,
-                        "Responding to storage sync request (delta)"
-                    );
-
-                    // Collect items: if since_block > 0, delta only
-                    let items_result: Result<
-                        Vec<(
-                            platform_distributed_storage::StorageKey,
-                            platform_distributed_storage::StoredValue,
-                        )>,
-                        _,
-                    > = if since > 0 {
-                        storage
-                            .list_after_block(&challenge_ns, since, 10_000)
-                            .await
-                            .map(|qr| qr.items)
-                    } else {
-                        storage
-                            .list_prefix(&challenge_ns, None, 10_000, None)
-                            .await
-                            .map(|lr| lr.items)
+                    let sig_valid = {
+                        let sign_data = bincode::serialize(&(
+                            &req.challenge_id,
+                            &req.current_hash,
+                            req.timestamp,
+                        ))
+                        .unwrap_or_default();
+                        let signed_msg = platform_core::SignedMessage {
+                            message: sign_data,
+                            signature: req.signature.clone(),
+                            signer: req.requester.clone(),
+                        };
+                        matches!(signed_msg.verify(), Ok(true))
                     };
+                    if !sig_valid {
+                        warn!(
+                            requester = %req.requester.to_ss58(),
+                            "Storage sync request signature verification failed"
+                        );
+                    } else {
+                        let challenge_ns = req.challenge_id.to_string();
+                        let since = req.since_block;
+                        info!(
+                            challenge_id = %req.challenge_id,
+                            requester = %req.requester.to_ss58(),
+                            since_block = since,
+                            "Responding to storage sync request (delta)"
+                        );
 
-                    match items_result {
-                        Ok(items) => {
-                            let entries: Vec<platform_p2p_consensus::StorageSyncEntry> = items
-                                .iter()
-                                .map(|(key, value)| platform_p2p_consensus::StorageSyncEntry {
-                                    namespace: key.namespace.clone(),
-                                    key: key.key.clone(),
-                                    value: value.data.clone(),
-                                    version: value.metadata.version,
-                                    updated_block: value.metadata.updated_block,
-                                })
-                                .collect();
-
-                            let total = entries.len() as u64;
-
-                            // Compute hash of all entries for verification
-                            let mut hasher = sha2::Sha256::new();
-                            for e in &entries {
-                                sha2::Digest::update(&mut hasher, &e.key);
-                                sha2::Digest::update(&mut hasher, &e.value);
-                            }
-                            let data_hash: [u8; 32] = hasher.finalize().into();
-
-                            let timestamp = chrono::Utc::now().timestamp_millis();
-                            let sign_data = bincode::serialize(&(
-                                &req.challenge_id,
-                                &data_hash,
-                                total,
-                                timestamp,
-                            ))
-                            .unwrap_or_default();
-                            let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
-
-                            let resp = P2PMessage::StorageSyncResponse(
-                                platform_p2p_consensus::StorageSyncResponseMessage {
-                                    challenge_id: req.challenge_id,
-                                    responder: keypair.hotkey(),
-                                    target: Some(req.requester.clone()),
-                                    data_hash,
-                                    entries,
-                                    total_entries: total,
-                                    timestamp,
-                                    signature,
-                                },
-                            );
-
-                            if let Err(e) = p2p_cmd_tx
-                                .send(platform_p2p_consensus::P2PCommand::Broadcast(resp))
+                        // Collect items: if since_block > 0, delta only
+                        let items_result: Result<
+                            Vec<(
+                                platform_distributed_storage::StorageKey,
+                                platform_distributed_storage::StoredValue,
+                            )>,
+                            _,
+                        > = if since > 0 {
+                            storage
+                                .list_after_block(&challenge_ns, since, 10_000)
                                 .await
-                            {
-                                warn!(error = %e, "Failed to send storage sync response");
-                            } else {
-                                info!(
+                                .map(|qr| qr.items)
+                        } else {
+                            storage
+                                .list_prefix(&challenge_ns, None, 10_000, None)
+                                .await
+                                .map(|lr| lr.items)
+                        };
+
+                        match items_result {
+                            Ok(items) => {
+                                let entries: Vec<platform_p2p_consensus::StorageSyncEntry> = items
+                                    .iter()
+                                    .map(|(key, value)| platform_p2p_consensus::StorageSyncEntry {
+                                        namespace: key.namespace.clone(),
+                                        key: key.key.clone(),
+                                        value: value.data.clone(),
+                                        version: value.metadata.version,
+                                        updated_block: value.metadata.updated_block,
+                                    })
+                                    .collect();
+
+                                let total = entries.len() as u64;
+
+                                // Compute hash of all entries for verification
+                                let mut hasher = sha2::Sha256::new();
+                                for e in &entries {
+                                    sha2::Digest::update(&mut hasher, &e.key);
+                                    sha2::Digest::update(&mut hasher, &e.value);
+                                }
+                                let data_hash: [u8; 32] = hasher.finalize().into();
+
+                                let timestamp = chrono::Utc::now().timestamp_millis();
+                                let sign_data = bincode::serialize(&(
+                                    &req.challenge_id,
+                                    &data_hash,
+                                    total,
+                                    timestamp,
+                                ))
+                                .unwrap_or_default();
+                                let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
+
+                                let resp = P2PMessage::StorageSyncResponse(
+                                    platform_p2p_consensus::StorageSyncResponseMessage {
+                                        challenge_id: req.challenge_id,
+                                        responder: keypair.hotkey(),
+                                        target: Some(req.requester.clone()),
+                                        data_hash,
+                                        entries,
+                                        total_entries: total,
+                                        timestamp,
+                                        signature,
+                                    },
+                                );
+
+                                if let Err(e) = p2p_cmd_tx
+                                    .send(platform_p2p_consensus::P2PCommand::Broadcast(resp))
+                                    .await
+                                {
+                                    warn!(error = %e, "Failed to send storage sync response");
+                                } else {
+                                    info!(
+                                        challenge_id = %req.challenge_id,
+                                        entries = total,
+                                        since_block = since,
+                                        "Storage sync delta response sent"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
                                     challenge_id = %req.challenge_id,
-                                    entries = total,
-                                    since_block = since,
-                                    "Storage sync delta response sent"
+                                    error = %e,
+                                    "Failed to read storage for sync response"
                                 );
                             }
-                        }
-                        Err(e) => {
-                            warn!(
-                                challenge_id = %req.challenge_id,
-                                error = %e,
-                                "Failed to read storage for sync response"
-                            );
                         }
                     }
                 }
@@ -3712,6 +3859,82 @@ async fn handle_network_event(
                         "Empty storage sync response, nothing to apply"
                     );
                 } else {
+                    // Security: during bootstrap, only accept sync data from
+                    // the bootstrap validator to prevent a small validator
+                    // from injecting fake issue records.
+                    let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
+                    let is_bootstrap_validator = resp.responder.to_ss58()
+                        == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
+                    if in_bootstrap && !is_bootstrap_validator {
+                        warn!(
+                            responder = %resp.responder.to_ss58(),
+                            "Bootstrap: rejecting storage sync from non-bootstrap validator"
+                        );
+                        return;
+                    }
+
+                    // Validate that the challenge_id is a registered challenge
+                    let challenge_known = {
+                        let cs = chain_state.read();
+                        cs.wasm_challenge_configs.contains_key(&resp.challenge_id)
+                            || cs.challenges.contains_key(&resp.challenge_id)
+                    };
+                    if !challenge_known {
+                        warn!(
+                            challenge_id = %resp.challenge_id,
+                            "Rejecting storage sync for unknown challenge"
+                        );
+                        return;
+                    }
+
+                    // Verify data_hash integrity (must match sender's hash computation)
+                    {
+                        let mut hasher = sha2::Sha256::new();
+                        for entry in &resp.entries {
+                            sha2::Digest::update(&mut hasher, &entry.key);
+                            sha2::Digest::update(&mut hasher, &entry.value);
+                        }
+                        let computed_hash: [u8; 32] = hasher.finalize().into();
+                        if computed_hash != resp.data_hash {
+                            warn!(
+                                responder = %resp.responder.to_ss58(),
+                                expected = %hex::encode(&resp.data_hash[..8]),
+                                actual = %hex::encode(&computed_hash[..8]),
+                                "Storage sync data_hash mismatch, rejecting"
+                            );
+                            return;
+                        }
+                    }
+
+                    // Verify signature over the data (must match sender's signing format)
+                    {
+                        let sign_data = bincode::serialize(&(
+                            &resp.challenge_id,
+                            &resp.data_hash,
+                            resp.total_entries,
+                            resp.timestamp,
+                        ))
+                        .unwrap_or_default();
+                        let signed_msg = platform_core::SignedMessage {
+                            message: sign_data,
+                            signature: resp.signature.clone(),
+                            signer: resp.responder.clone(),
+                        };
+                        match signed_msg.verify() {
+                            Ok(true) => {}
+                            _ => {
+                                warn!(
+                                    responder = %resp.responder.to_ss58(),
+                                    "Storage sync response signature verification failed"
+                                );
+                                return;
+                            }
+                        }
+                    }
+
+                    // Cap accepted version to prevent u64::MAX attacks
+                    let max_version = state_manager.apply(|s| s.bittensor_block) + 10_000;
+
                     info!(
                         challenge_id = %resp.challenge_id,
                         responder = %resp.responder.to_ss58(),
@@ -3725,6 +3948,19 @@ async fn handle_network_event(
                     let opts = put_options_with_block(state_manager);
 
                     for entry in &resp.entries {
+                        // Reject entries with unreasonable version numbers
+                        if entry.version > max_version {
+                            skipped += 1;
+                            continue;
+                        }
+
+                        // Validate namespace matches the challenge_id
+                        let expected_ns = resp.challenge_id.to_string();
+                        if entry.namespace != expected_ns {
+                            skipped += 1;
+                            continue;
+                        }
+
                         let key = StorageKey::new(&entry.namespace, hex::encode(&entry.key));
 
                         // Only apply if peer version is newer
@@ -3746,6 +3982,46 @@ async fn handle_network_event(
                                         max_block = entry.updated_block;
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Update last_sync_block for this challenge
+                    if max_block > 0 {
+                        challenge_last_sync
+                            .write()
+                            .insert(resp.challenge_id, max_block);
+                    }
+
+                    // Recompute and update the storage root for this challenge
+                    // to prevent perpetual re-sync requests due to stale roots.
+                    if applied > 0 {
+                        let challenge_ns = resp.challenge_id.to_string();
+                        match storage.list_prefix(&challenge_ns, None, 10_000, None).await {
+                            Ok(result) => {
+                                use sha2::{Digest, Sha256};
+                                let mut hasher = Sha256::new();
+                                for (key, value) in &result.items {
+                                    hasher.update(key.key.as_slice());
+                                    hasher.update(value.data.as_slice());
+                                }
+                                let new_root: [u8; 32] = hasher.finalize().into();
+                                state_manager.apply(|state| {
+                                    state
+                                        .update_challenge_storage_root(resp.challenge_id, new_root);
+                                });
+                                debug!(
+                                    challenge_id = %resp.challenge_id,
+                                    root = %hex::encode(&new_root[..8]),
+                                    entries = result.items.len(),
+                                    "Updated challenge storage root after sync"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    "Failed to recompute storage root after sync"
+                                );
                             }
                         }
                     }
@@ -3830,6 +4106,145 @@ async fn handle_block_event(
                 old_epoch, new_epoch, block
             );
 
+            // Run multi-validator aggregation before transitioning the epoch.
+            // This collects all validator evaluations and calls WASM aggregate()
+            // to produce a deterministic leaderboard + weights.
+            if let Some(ref executor) = wasm_executor {
+                let challenges: Vec<(platform_core::ChallengeId, String)> = {
+                    let cs = chain_state.read();
+                    cs.wasm_challenge_configs
+                        .iter()
+                        .filter(|(_, cfg)| cfg.is_active)
+                        .map(|(id, cfg)| (*id, cfg.module.module_path.clone()))
+                        .collect()
+                };
+
+                for (challenge_id, module_path) in &challenges {
+                    let evals = state_manager
+                        .read(|state| state.get_all_evaluations_for_challenge(challenge_id));
+
+                    if evals.is_empty() {
+                        continue;
+                    }
+
+                    let agg_evals: Vec<platform_challenge_sdk_wasm::ValidatorEvaluationData> =
+                        evals
+                            .iter()
+                            .map(|(sub_id, miner, validator, stake, score, ts)| {
+                                platform_challenge_sdk_wasm::ValidatorEvaluationData {
+                                    validator_hotkey: validator.to_ss58(),
+                                    validator_stake: *stake,
+                                    submission_id: sub_id.clone(),
+                                    miner_hotkey: miner.to_ss58(),
+                                    score: *score,
+                                    metrics: Vec::new(),
+                                    timestamp: *ts,
+                                }
+                            })
+                            .collect();
+
+                    let current_leaderboard = state_manager.read(|state| {
+                        bincode::serialize(&state.get_leaderboard(challenge_id)).unwrap_or_default()
+                    });
+
+                    // Clone evaluation data before input is moved into spawn_blocking
+                    let evals_for_lb = agg_evals.clone();
+
+                    let input = platform_challenge_sdk_wasm::AggregationInput {
+                        challenge_id: challenge_id.to_string(),
+                        epoch: old_epoch,
+                        block_height: block,
+                        evaluations: agg_evals,
+                        current_leaderboard,
+                    };
+
+                    let executor_clone = Arc::clone(executor);
+                    let mp = module_path.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        executor_clone.execute_aggregate(&mp, &input)
+                    })
+                    .await
+                    {
+                        Ok(Ok(output)) => {
+                            info!(
+                                challenge_id = %challenge_id,
+                                weight_count = output.weights.len(),
+                                leaderboard_hash = %hex::encode(&output.leaderboard_hash[..8]),
+                                "Aggregation completed for epoch {}", old_epoch
+                            );
+
+                            // Build P2P LeaderboardEntries from the evaluations
+                            // (group by miner, stake-weighted average score).
+                            {
+                                use std::collections::HashMap as StdMap;
+                                let mut miner_data: StdMap<String, (f64, u64, u32, i64)> =
+                                    StdMap::new();
+                                for eval in &evals_for_lb {
+                                    let e = miner_data
+                                        .entry(eval.miner_hotkey.clone())
+                                        .or_insert((0.0, 0, 0, 0));
+                                    let s = if eval.validator_stake == 0 {
+                                        1u64
+                                    } else {
+                                        eval.validator_stake
+                                    };
+                                    e.0 += eval.score * s as f64;
+                                    e.1 += s;
+                                    e.2 += 1;
+                                    if eval.timestamp > e.3 {
+                                        e.3 = eval.timestamp;
+                                    }
+                                }
+                                let mut lb_entries: Vec<platform_p2p_consensus::LeaderboardEntry> =
+                                    miner_data
+                                        .into_iter()
+                                        .map(|(hotkey, (wsum, tstake, count, last_ts))| {
+                                            let avg = if tstake > 0 {
+                                                wsum / tstake as f64
+                                            } else {
+                                                0.0
+                                            };
+                                            platform_p2p_consensus::LeaderboardEntry {
+                                                miner: Hotkey::from_ss58(&hotkey)
+                                                    .unwrap_or(Hotkey([0u8; 32])),
+                                                score: avg,
+                                                submission_count: count,
+                                                last_submission_at: last_ts,
+                                                rank: 0,
+                                            }
+                                        })
+                                        .collect();
+                                lb_entries.sort_by(|a, b| {
+                                    b.score
+                                        .partial_cmp(&a.score)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                for (i, e) in lb_entries.iter_mut().enumerate() {
+                                    e.rank = (i + 1) as u32;
+                                }
+                                state_manager.apply(|state| {
+                                    state.update_leaderboard(*challenge_id, lb_entries);
+                                });
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            debug!(
+                                challenge_id = %challenge_id,
+                                error = %e,
+                                "WASM aggregate not implemented or failed, using default finalization"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                challenge_id = %challenge_id,
+                                error = %e,
+                                "Aggregation task panicked"
+                            );
+                        }
+                    }
+                }
+            }
+
             // Transition state to next epoch
             state_manager.apply(|state| {
                 state.next_epoch();
@@ -3849,9 +4264,38 @@ async fn handle_block_event(
                 return;
             }
 
+            let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
+
             // Single submission path: collect WASM weights, convert hotkey->UID,
             // apply emission_weight, and submit directly via Subtensor.
             if let (Some(st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {
+                // Check rate limit before submitting to avoid CommittingWeightsTooFast
+                if let Some(sc) = client.as_ref() {
+                    let our_ss58 = _keypair.ss58_address();
+                    let our_uid: u16 = sc
+                        .metagraph()
+                        .as_ref()
+                        .and_then(|mg| {
+                            mg.neurons
+                                .values()
+                                .find(|n| n.hotkey.to_string() == our_ss58)
+                                .map(|n| n.uid as u16)
+                        })
+                        .unwrap_or(0);
+                    match st.can_set_weights(netuid, our_uid).await {
+                        Ok(false) => {
+                            warn!(
+                                "Rate limit: cannot set weights yet (uid={}), skipping epoch {}",
+                                our_uid, epoch
+                            );
+                            return;
+                        }
+                        Err(e) => {
+                            warn!("Failed to check rate limit: {}, proceeding anyway", e);
+                        }
+                        Ok(true) => {}
+                    }
+                }
                 let mut mechanism_weights: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
 
                 if let Some(ref executor) = wasm_executor {
@@ -4036,8 +4480,41 @@ async fn handle_block_event(
                         }
                     };
 
-                // No remote fallback -- each validator must compute weights
-                // independently from consensus storage to ensure vTrust convergence.
+                // During bootstrap, non-bootstrap validators MUST use the bootstrap
+                // validator's weights to guarantee all validators submit identical
+                // weights on-chain. Only the bootstrap validator computes weights
+                // from WASM; everyone else fetches them via RPC.
+                let weights_to_submit = if in_bootstrap {
+                    let our_ss58 = _keypair.ss58_address();
+                    if our_ss58 == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58 {
+                        info!("Bootstrap validator: using locally computed weights");
+                        weights_to_submit
+                    } else {
+                        info!("Bootstrap: fetching weights from bootstrap validator RPC");
+                        match fetch_remote_weights().await {
+                            Ok(remote) if !remote.is_empty() => {
+                                info!(
+                                    "Bootstrap: using {} mechanism entries from bootstrap validator",
+                                    remote.len()
+                                );
+                                remote
+                            }
+                            Ok(_) => {
+                                warn!("Bootstrap: remote weights empty, falling back to local");
+                                weights_to_submit
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Bootstrap: failed to fetch remote weights ({}), falling back to local",
+                                    e
+                                );
+                                weights_to_submit
+                            }
+                        }
+                    }
+                } else {
+                    weights_to_submit
+                };
 
                 // Store computed weights in chain state for the subnet_getWeights RPC
                 {
@@ -4207,9 +4684,17 @@ async fn process_wasm_evaluations(
                     "WASM evaluation succeeded"
                 );
                 let normalized = (output.score as f64) / i64::MAX as f64;
+                // Pass WASM evaluation metrics (e.g. claimed/rejected counts)
+                // through the secondary_metrics field as ("raw_metrics_b64", len).
+                // The raw bytes are also stored for aggregate().
+                let mut secondary = vec![];
+                let raw_metrics = output.metrics.clone().unwrap_or_default();
+                if !raw_metrics.is_empty() {
+                    secondary.push(("raw_metrics_len".into(), raw_metrics.len() as f64));
+                }
                 let em = EvaluationMetrics {
                     primary_score: normalized,
-                    secondary_metrics: vec![],
+                    secondary_metrics: secondary,
                     execution_time_ms: metrics.execution_time_ms as u64,
                     memory_usage_bytes: Some(metrics.memory_used_bytes),
                     timed_out: false,
@@ -4315,6 +4800,9 @@ async fn process_wasm_evaluations(
                     "WASM evaluation recorded in state"
                 );
             }
+
+            // Try to finalize if enough validators have evaluated
+            try_finalize_evaluation(state, &submission_id);
         });
 
         let eval_msg = P2PMessage::Evaluation(EvaluationMessage {
@@ -4338,6 +4826,71 @@ async fn process_wasm_evaluations(
         }
     }
 }
+
+/// Try to finalize an evaluation if enough validators have submitted scores.
+/// Requires > 50% of total stake to have evaluated.
+/// On finalization, updates the challenge leaderboard.
+fn try_finalize_evaluation(state: &mut platform_p2p_consensus::ChainState, submission_id: &str) {
+    let record = match state.pending_evaluations.get(submission_id) {
+        Some(r) if !r.finalized => r,
+        _ => return,
+    };
+
+    // Calculate stake that has evaluated vs total stake
+    let total_stake: u64 = state.validators.values().sum();
+    if total_stake == 0 {
+        return;
+    }
+
+    let evaluated_stake: u64 = record
+        .evaluations
+        .keys()
+        .filter_map(|v| state.validators.get(v).copied())
+        .sum();
+
+    // Require > 50% of stake to finalize
+    if evaluated_stake * 2 <= total_stake {
+        return;
+    }
+
+    let challenge_id = record.challenge_id;
+    let miner = record.miner.clone();
+
+    match state.finalize_evaluation(submission_id) {
+        Ok(score) => {
+            info!(
+                submission_id = %submission_id,
+                score = score,
+                "Evaluation finalized"
+            );
+
+            // Update leaderboard for this challenge
+            let mut entries = state.get_leaderboard(&challenge_id);
+            if let Some(entry) = entries.iter_mut().find(|e| e.miner == miner) {
+                entry.score = score;
+                entry.submission_count += 1;
+                entry.last_submission_at = chrono::Utc::now().timestamp_millis();
+            } else {
+                entries.push(platform_p2p_consensus::LeaderboardEntry {
+                    miner,
+                    score,
+                    submission_count: 1,
+                    last_submission_at: chrono::Utc::now().timestamp_millis(),
+                    rank: 0,
+                });
+            }
+            state.update_leaderboard(challenge_id, entries);
+        }
+        Err(e) => {
+            warn!(
+                submission_id = %submission_id,
+                error = %e,
+                "Failed to finalize evaluation"
+            );
+        }
+    }
+}
+
 /// Fetch pre-computed weights from the primary validator's RPC endpoint.
 /// Returns Vec<(mechanism_id, uids, weights)> ready for submission.
 async fn fetch_remote_weights() -> anyhow::Result<Vec<(u8, Vec<u16>, Vec<u16>)>> {

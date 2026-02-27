@@ -164,6 +164,7 @@ impl ChainStateV1 {
             mutation_sequence: 0,
             llm_capable_validators: HashSet::new(),
             last_computed_weights: Vec::new(),
+            validator_evaluations: HashMap::new(),
         }
     }
 }
@@ -220,6 +221,7 @@ impl ChainStateV2 {
             mutation_sequence: 0,
             llm_capable_validators: HashSet::new(),
             last_computed_weights: Vec::new(),
+            validator_evaluations: HashMap::new(),
         }
     }
 }

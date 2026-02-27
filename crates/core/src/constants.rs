@@ -83,7 +83,7 @@ pub const MIN_VALIDATOR_STAKE_TAO: u64 = 10_000;
 pub const BOOTSTRAP_PERIOD_EPOCHS: u64 = 100;
 
 /// Bittensor block number until which the bootstrap validator dominates
-pub const BOOTSTRAP_END_BLOCK: u64 = 7_681_009;
+pub const BOOTSTRAP_END_BLOCK: u64 = 7_700_000;
 
 /// The bootstrap validator hotkey (SS58) that is trusted during bootstrap
 pub const BOOTSTRAP_VALIDATOR_SS58: &str = "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At";

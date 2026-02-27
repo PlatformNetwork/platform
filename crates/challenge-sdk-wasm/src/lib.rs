@@ -11,6 +11,7 @@ pub use llm_types::{LlmMessage, LlmRequest, LlmResponse, LlmUsage};
 pub use types::{
     score_f64_scaled, SandboxExecRequest, SandboxExecResponse, TaskDefinition, TaskResult,
 };
+pub use types::{AggregationInput, AggregationOutput, ValidatorEvaluationData};
 pub use types::{ContainerRunRequest, ContainerRunResponse};
 pub use types::{
     DedupFlags, WasmRouteDefinition, WasmRouteRequest, WasmRouteResponse, WasmSyncResult,
@@ -70,6 +71,15 @@ pub trait Challenge {
     /// Called by validators at regular intervals for consensus-based state sync.
     /// The default implementation returns an empty vector.
     fn sync(&self) -> alloc::vec::Vec<u8> {
+        alloc::vec::Vec::new()
+    }
+
+    /// Aggregate evaluations from ALL validators and produce a final
+    /// leaderboard and weights. The `input` parameter is a bincode-encoded
+    /// [`AggregationInput`] containing every validator's evaluation data.
+    /// Returns a bincode-encoded [`AggregationOutput`].
+    /// The default implementation returns an empty vector (no aggregation).
+    fn aggregate(&self, _input: &[u8]) -> alloc::vec::Vec<u8> {
         alloc::vec::Vec::new()
     }
 
@@ -333,6 +343,27 @@ macro_rules! register_challenge {
         #[no_mangle]
         pub extern "C" fn sync() -> i64 {
             let output = <$ty as $crate::Challenge>::sync(&_CHALLENGE);
+            if output.is_empty() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            let ptr = $crate::alloc_impl::sdk_alloc(output.len());
+            if ptr.is_null() {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(output.as_ptr(), ptr, output.len());
+            }
+            $crate::pack_ptr_len(ptr as i32, output.len() as i32)
+        }
+
+        #[no_mangle]
+        pub extern "C" fn aggregate(input_ptr: i32, input_len: i32) -> i64 {
+            if input_ptr <= 0 || input_len <= 0 {
+                return $crate::pack_ptr_len(0, 0);
+            }
+            let input =
+                unsafe { core::slice::from_raw_parts(input_ptr as *const u8, input_len as usize) };
+            let output = <$ty as $crate::Challenge>::aggregate(&_CHALLENGE, input);
             if output.is_empty() {
                 return $crate::pack_ptr_len(0, 0);
             }

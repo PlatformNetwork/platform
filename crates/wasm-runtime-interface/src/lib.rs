@@ -282,7 +282,7 @@ impl DnsPolicy {
     pub fn development() -> Self {
         Self {
             enabled: true,
-            max_lookups: 32,
+            max_lookups: 512,
             cache_ttl_secs: 10,
             block_private_ranges: false,
             ..Default::default()
@@ -351,7 +351,7 @@ impl RequestLimits {
             max_response_bytes: 2 * 1024 * 1024,
             max_header_bytes: 64 * 1024,
             timeout_ms: 15_000,
-            max_requests: 32,
+            max_requests: 512,
             max_redirects: 4,
         }
     }

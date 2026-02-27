@@ -215,6 +215,11 @@ pub struct ChainState {
     /// Updated at each commit window, served via `subnet_getWeights` RPC.
     #[serde(skip)]
     pub last_computed_weights: Vec<(u8, Vec<u16>, Vec<u16>)>,
+
+    /// Validator evaluation data for the current epoch, synced from P2P state.
+    /// Key: challenge_id string -> Vec<(submission_id, miner_ss58, validator_ss58, stake, score, timestamp)>
+    #[serde(skip)]
+    pub validator_evaluations: HashMap<String, Vec<(String, String, String, u64, f64, i64)>>,
 }
 
 /// Route information for a challenge
@@ -253,6 +258,7 @@ impl Default for ChainState {
             mutation_sequence: 0,
             llm_capable_validators: std::collections::HashSet::new(),
             last_computed_weights: Vec::new(),
+            validator_evaluations: HashMap::new(),
         }
     }
 }
@@ -281,6 +287,7 @@ impl ChainState {
             mutation_sequence: 0,
             llm_capable_validators: std::collections::HashSet::new(),
             last_computed_weights: Vec::new(),
+            validator_evaluations: HashMap::new(),
         };
         state.update_hash();
         state

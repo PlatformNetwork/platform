@@ -874,11 +874,18 @@ impl WasmChallengeExecutor {
             .load_module(module_path)
             .context("Failed to load WASM module")?;
 
+        // Pass real wall-clock time so WASM routes (e.g. /sudo/sync_github)
+        // can compute correct 24 h window for GitHub API queries.
+        let real_now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
         let instance_config = InstanceConfig {
             network_policy: network_policy.clone(),
             sandbox_policy: sandbox_policy.clone(),
             exec_policy: ExecPolicy::default(),
-            time_policy: TimePolicy::default(),
+            time_policy: TimePolicy::deterministic(real_now_ms),
             audit_logger: None,
             memory_export: "memory".to_string(),
             challenge_id: module_path.to_string(),
@@ -1047,8 +1054,11 @@ impl WasmChallengeExecutor {
         block_height: u64,
         epoch: u64,
     ) -> Result<Vec<platform_challenge_sdk::WeightAssignment>> {
-        // Ensure get_weights reads only consensus-confirmed data, not pending sync writes
-        self.config.storage_backend.clear_pending_writes();
+        // Ensure get_weights reads only consensus-confirmed data, not pending sync writes.
+        // Scope to this challenge only to avoid clearing other challenges' in-flight writes.
+        self.config
+            .storage_backend
+            .clear_pending_writes_for_challenge(module_path);
         let start = Instant::now();
 
         let module = self
@@ -1169,6 +1179,13 @@ impl WasmChallengeExecutor {
             }
         };
 
+        // Pass real wall-clock time so WASM can compute a correct 24 h window
+        // for GitHub API &since= queries.
+        let real_now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
         let instance_config = InstanceConfig {
             challenge_id: module_path.to_string(),
             validator_id: "validator".to_string(),
@@ -1180,6 +1197,7 @@ impl WasmChallengeExecutor {
             storage_backend: Arc::clone(&self.config.storage_backend),
             consensus_policy: ConsensusPolicy::read_only(),
             network_policy: NetworkPolicy::development(),
+            time_policy: TimePolicy::deterministic(real_now_ms),
             block_height,
             epoch,
             ..Default::default()
@@ -1223,11 +1241,93 @@ impl WasmChallengeExecutor {
             "WASM sync completed"
         );
 
-        // Clear the pending writes cache so subsequent reads (e.g., get_weights)
-        // only see consensus-confirmed data, not transient sync writes.
-        self.config.storage_backend.clear_pending_writes();
+        // Clear the pending writes cache for this challenge so subsequent reads
+        // (e.g., get_weights) only see consensus-confirmed data.
+        self.config
+            .storage_backend
+            .clear_pending_writes_for_challenge(module_path);
 
         Ok(sync_result)
+    }
+
+    /// Execute the aggregate function on a WASM challenge module.
+    /// Takes evaluations from all validators and returns a final
+    /// leaderboard + weights that all validators will use.
+    pub fn execute_aggregate(
+        &self,
+        module_path: &str,
+        input: &platform_challenge_sdk_wasm::AggregationInput,
+    ) -> Result<platform_challenge_sdk_wasm::AggregationOutput> {
+        let start = Instant::now();
+
+        let module = self
+            .load_module(module_path)
+            .context("Failed to load WASM module")?;
+
+        let serialized =
+            bincode::serialize(input).context("Failed to serialize AggregationInput")?;
+
+        let instance_config = InstanceConfig {
+            challenge_id: module_path.to_string(),
+            validator_id: "validator".to_string(),
+            storage_host_config: StorageHostConfig {
+                allow_direct_writes: false,
+                require_consensus: true,
+                ..self.config.storage_host_config.clone()
+            },
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            consensus_policy: ConsensusPolicy::read_only(),
+            block_height: input.block_height,
+            epoch: input.epoch,
+            ..Default::default()
+        };
+
+        let mut instance = self
+            .runtime
+            .instantiate(&module, instance_config, None)
+            .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
+
+        let ptr = self.allocate_input(&mut instance, &serialized)?;
+        instance
+            .write_memory(ptr as usize, &serialized)
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to write aggregate input to WASM memory: {}", e)
+            })?;
+
+        let result = instance
+            .call_i32_i32_return_i64("aggregate", ptr, serialized.len() as i32)
+            .map_err(|e| anyhow::anyhow!("WASM aggregate call failed: {}", e))?;
+
+        let out_len = (result >> 32) as i32;
+        let out_ptr = (result & 0xFFFF_FFFF) as i32;
+
+        if out_ptr <= 0 || out_len <= 0 {
+            return Ok(platform_challenge_sdk_wasm::AggregationOutput {
+                leaderboard: Vec::new(),
+                weights: Vec::new(),
+                leaderboard_hash: [0u8; 32],
+            });
+        }
+
+        let result_data = instance
+            .read_memory(out_ptr as usize, out_len as usize)
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to read WASM memory for aggregate output: {}", e)
+            })?;
+
+        let output: platform_challenge_sdk_wasm::AggregationOutput =
+            bincode::deserialize(&result_data)
+                .context("Failed to deserialize AggregationOutput")?;
+
+        info!(
+            module = module_path,
+            leaderboard_size = output.leaderboard.len(),
+            weight_count = output.weights.len(),
+            execution_time_ms = start.elapsed().as_millis() as u64,
+            "WASM aggregate completed"
+        );
+
+        Ok(output)
     }
 
     #[allow(dead_code)]

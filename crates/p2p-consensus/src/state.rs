@@ -1016,6 +1016,17 @@ impl ChainState {
             return Err(StateError::InvalidSignature(validator.to_hex()));
         }
 
+        // During bootstrap, only accept weight votes from the bootstrap validator
+        if self.is_in_bootstrap_period()
+            && validator.to_ss58() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58
+        {
+            warn!(
+                validator = %validator.to_ss58(),
+                "Bootstrap: rejecting weight vote from non-bootstrap validator"
+            );
+            return Ok(());
+        }
+
         let votes = self.weight_votes.get_or_insert_with(|| WeightVotes {
             epoch,
             netuid: self.netuid,
@@ -1047,6 +1058,17 @@ impl ChainState {
         netuid: u16,
         weights: Vec<(u16, u16)>,
     ) -> Result<(), StateError> {
+        // During bootstrap, only accept weight votes from the bootstrap validator
+        if self.is_in_bootstrap_period()
+            && validator.to_ss58() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58
+        {
+            warn!(
+                validator = %validator.to_ss58(),
+                "Bootstrap: rejecting local weight vote from non-bootstrap validator"
+            );
+            return Ok(());
+        }
+
         let epoch = self.epoch;
         let votes = self.weight_votes.get_or_insert_with(|| WeightVotes {
             epoch,
@@ -1284,6 +1306,55 @@ impl ChainState {
             .get(challenge_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Get all evaluations for a specific challenge across all pending + completed submissions.
+    /// Returns (submission_id, miner_hotkey, validator_hotkey, validator_stake, score, timestamp).
+    pub fn get_all_evaluations_for_challenge(
+        &self,
+        challenge_id: &ChallengeId,
+    ) -> Vec<(String, Hotkey, Hotkey, u64, f64, i64)> {
+        let mut results = Vec::new();
+
+        // Collect from pending evaluations
+        for (sub_id, record) in &self.pending_evaluations {
+            if &record.challenge_id != challenge_id {
+                continue;
+            }
+            for (validator, eval) in &record.evaluations {
+                let stake = self.validators.get(validator).copied().unwrap_or(0);
+                results.push((
+                    sub_id.clone(),
+                    record.miner.clone(),
+                    validator.clone(),
+                    stake,
+                    eval.score,
+                    eval.timestamp,
+                ));
+            }
+        }
+
+        // Collect from completed evaluations (current epoch)
+        if let Some(completed) = self.completed_evaluations.get(&self.epoch) {
+            for record in completed {
+                if &record.challenge_id != challenge_id {
+                    continue;
+                }
+                for (validator, eval) in &record.evaluations {
+                    let stake = self.validators.get(validator).copied().unwrap_or(0);
+                    results.push((
+                        record.submission_id.clone(),
+                        record.miner.clone(),
+                        validator.clone(),
+                        stake,
+                        eval.score,
+                        eval.timestamp,
+                    ));
+                }
+            }
+        }
+
+        results
     }
 
     pub fn update_task_progress(&mut self, record: TaskProgressRecord) {
@@ -1861,6 +1932,9 @@ mod tests {
         use platform_core::Keypair;
 
         let mut state = ChainState::new(100);
+        // Move past bootstrap period so non-bootstrap validators can vote
+        state.bittensor_block = platform_core::constants::BOOTSTRAP_END_BLOCK + 1;
+        state.epoch = platform_core::constants::BOOTSTRAP_PERIOD_EPOCHS + 1;
 
         // Create keypairs for validators
         let validator1_keypair = Keypair::generate();

@@ -329,6 +329,9 @@ impl RpcHandler {
             ["evaluation", "getProgress"] => self.evaluation_get_progress(req.id, req.params),
             ["evaluation", "getLogs"] => self.evaluation_get_logs(req.id, req.params),
 
+            // Validator evaluation data
+            ["validator", "getEvaluations"] => self.validator_get_evaluations(req.id, req.params),
+
             // Agent namespace
             ["agent", "getCode"] => self.agent_get_code(req.id, req.params),
             ["agent", "getLogs"] => self.agent_get_logs(req.id, req.params),
@@ -385,6 +388,8 @@ impl RpcHandler {
                     "leaderboard_get",
                     // Evaluation
                     "evaluation_getProgress", "evaluation_getLogs",
+                    // Validator
+                    "validator_getEvaluations",
                     // Agent
                     "agent_getCode", "agent_getLogs",
                     // RPC
@@ -1098,6 +1103,7 @@ impl RpcHandler {
         let parts: Vec<&str> = req.method.splitn(2, '_').collect();
         match parts.as_slice() {
             ["challenge", "call"] => self.challenge_call(req.id, req.params).await,
+            ["leaderboard", "get"] => self.leaderboard_get_async(req.id, req.params).await,
             _ => self.handle(req),
         }
     }
@@ -1497,7 +1503,17 @@ impl RpcHandler {
 
     // ==================== Leaderboard Namespace ====================
 
-    fn leaderboard_get(&self, id: Value, params: Value) -> JsonRpcResponse {
+    fn leaderboard_get(&self, id: Value, _params: Value) -> JsonRpcResponse {
+        // Redirected to async handler via handle_async()
+        JsonRpcResponse::error(
+            id,
+            INTERNAL_ERROR,
+            "leaderboard_get must be invoked via handle_async()",
+        )
+    }
+
+    /// Async leaderboard handler that proxies to the challenge's /leaderboard route
+    async fn leaderboard_get_async(&self, id: Value, params: Value) -> JsonRpcResponse {
         let challenge_id = match self.get_param_str(&params, 0, "challenge_id") {
             Some(c) => c,
             None => {
@@ -1514,16 +1530,73 @@ impl RpcHandler {
             .min(1000);
         let offset = self.get_param_u64(&params, 2, "offset").unwrap_or(0);
 
-        let chain = self.chain_state.read();
+        // Check challenge exists (in wasm_challenge_configs or legacy challenges)
+        let challenge_exists = {
+            let chain = self.chain_state.read();
+            chain
+                .challenges
+                .values()
+                .any(|c| c.id.to_string() == challenge_id || c.name == challenge_id)
+                || chain
+                    .wasm_challenge_configs
+                    .iter()
+                    .any(|(cid, cfg)| cid.to_string() == challenge_id || cfg.name == challenge_id)
+        };
 
-        let challenge_uuid = chain
-            .challenges
-            .values()
-            .find(|c| c.id.to_string() == challenge_id || c.name == challenge_id)
-            .map(|c| c.id);
+        if !challenge_exists {
+            return JsonRpcResponse::error(
+                id,
+                CHALLENGE_NOT_FOUND,
+                format!("Challenge '{}' not found", challenge_id),
+            );
+        }
 
-        match challenge_uuid {
-            Some(_cid) => JsonRpcResponse::result(
+        // Proxy to the challenge's /leaderboard route via the route handler
+        let handler = self.route_handler.read().clone();
+        if let Some(handler) = handler {
+            let route_req = platform_challenge_sdk::RouteRequest {
+                method: "GET".to_string(),
+                path: "/leaderboard".to_string(),
+                params: std::collections::HashMap::new(),
+                query: std::collections::HashMap::from([
+                    ("limit".to_string(), limit.to_string()),
+                    ("offset".to_string(), offset.to_string()),
+                ]),
+                headers: std::collections::HashMap::new(),
+                body: json!({ "limit": limit, "offset": offset }),
+                auth_hotkey: None,
+            };
+
+            let route_resp = handler(challenge_id.clone(), route_req).await;
+            if route_resp.status == 200 {
+                JsonRpcResponse::result(
+                    id,
+                    json!({
+                        "challengeId": challenge_id,
+                        "entries": route_resp.body,
+                        "limit": limit,
+                        "offset": offset,
+                    }),
+                )
+            } else {
+                warn!(
+                    "Leaderboard route returned status {} for {}",
+                    route_resp.status, challenge_id
+                );
+                JsonRpcResponse::result(
+                    id,
+                    json!({
+                        "challengeId": challenge_id,
+                        "entries": [],
+                        "total": 0,
+                        "limit": limit,
+                        "offset": offset,
+                        "error": format!("Challenge returned status {}", route_resp.status)
+                    }),
+                )
+            }
+        } else {
+            JsonRpcResponse::result(
                 id,
                 json!({
                     "challengeId": challenge_id,
@@ -1531,15 +1604,64 @@ impl RpcHandler {
                     "total": 0,
                     "limit": limit,
                     "offset": offset,
-                    "hint": "Use the challenge route GET /leaderboard for challenge-specific leaderboard data"
+                    "hint": "Route handler not configured"
                 }),
-            ),
-            None => JsonRpcResponse::error(
-                id,
-                CHALLENGE_NOT_FOUND,
-                format!("Challenge '{}' not found", challenge_id),
-            ),
+            )
         }
+    }
+
+    // ==================== Validator Namespace ====================
+
+    fn validator_get_evaluations(&self, id: Value, params: Value) -> JsonRpcResponse {
+        let challenge_id = match self.get_param_str(&params, 0, "challenge_id") {
+            Some(c) => c,
+            None => {
+                return JsonRpcResponse::error(
+                    id,
+                    INVALID_PARAMS,
+                    "Missing challenge_id parameter",
+                );
+            }
+        };
+
+        let state = self.chain_state.read();
+        let evals = state
+            .validator_evaluations
+            .get(&challenge_id)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut by_validator: std::collections::HashMap<String, Vec<Value>> =
+            std::collections::HashMap::new();
+        for (sub_id, _miner, validator, stake, score, ts) in &evals {
+            by_validator
+                .entry(validator.clone())
+                .or_default()
+                .push(json!({
+                    "submission_id": sub_id,
+                    "score": score,
+                    "timestamp": ts,
+                    "stake": stake,
+                }));
+        }
+
+        let validators: Vec<Value> = by_validator
+            .into_iter()
+            .map(|(hotkey, evaluations)| {
+                json!({
+                    "hotkey": hotkey,
+                    "evaluations": evaluations,
+                })
+            })
+            .collect();
+
+        JsonRpcResponse::result(
+            id,
+            json!({
+                "challenge_id": challenge_id,
+                "validators": validators,
+            }),
+        )
     }
 
     // ==================== Evaluation Namespace ====================

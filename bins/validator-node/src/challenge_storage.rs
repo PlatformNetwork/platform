@@ -59,6 +59,14 @@ impl ChallengeStorageBackend {
     pub fn clear_pending_writes(&self) {
         self.pending_writes.write().clear();
     }
+
+    /// Clear pending writes for a specific challenge only, leaving other
+    /// challenges' caches intact to avoid race conditions.
+    pub fn clear_pending_writes_for_challenge(&self, challenge_id: &str) {
+        self.pending_writes
+            .write()
+            .retain(|(cid, _), _| cid != challenge_id);
+    }
 }
 
 /// Build a standardized storage key for challenge data.

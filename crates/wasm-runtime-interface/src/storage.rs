@@ -319,6 +319,9 @@ pub trait StorageBackend: Send + Sync {
     /// Clear any pending write cache. Called after sync cycles complete
     /// so subsequent reads reflect only consensus-confirmed data.
     fn clear_pending_writes(&self) {}
+
+    /// Clear pending writes for a specific challenge only.
+    fn clear_pending_writes_for_challenge(&self, _challenge_id: &str) {}
 }
 
 pub struct NoopStorageBackend;
@@ -650,6 +653,12 @@ fn handle_storage_set(
         return StorageHostStatus::from(err).to_i32();
     }
 
+    // Enforce write restrictions based on config
+    if !storage.config.allow_direct_writes && !storage.config.require_consensus {
+        warn!("storage_set: writes disabled (allow_direct_writes=false, require_consensus=false)");
+        return StorageHostStatus::PermissionDenied.to_i32();
+    }
+
     let challenge_id = storage.challenge_id.clone();
     let backend = Arc::clone(&storage.backend);
 
@@ -681,6 +690,11 @@ fn handle_storage_delete(caller: &mut Caller<RuntimeState>, key_ptr: i32, key_le
     if let Err(err) = storage.config.validate_key(&key) {
         warn!(error = %err, "storage_delete: key validation failed");
         return StorageHostStatus::from(err).to_i32();
+    }
+
+    if !storage.config.allow_direct_writes && !storage.config.require_consensus {
+        warn!("storage_delete: writes disabled");
+        return StorageHostStatus::PermissionDenied.to_i32();
     }
 
     let challenge_id = storage.challenge_id.clone();
@@ -731,6 +745,11 @@ fn handle_storage_propose_write(
     if let Err(err) = storage.config.validate_value(&value) {
         warn!(error = %err, "storage_propose_write: value validation failed");
         return pack_result(StorageHostStatus::from(err), 0);
+    }
+
+    if !storage.config.allow_direct_writes && !storage.config.require_consensus {
+        warn!("storage_propose_write: writes disabled");
+        return pack_result(StorageHostStatus::PermissionDenied, 0);
     }
 
     let challenge_id = storage.challenge_id.clone();
