@@ -862,6 +862,40 @@ async fn main() -> Result<()> {
             rpc_server.rpc_handler().set_route_handler(handler);
         }
 
+        // Wire WASM cache invalidation callback for uploads
+        if let Some(ref executor) = wasm_executor {
+            let exec = Arc::clone(executor);
+            let cs_for_invalidator = Arc::clone(&chain_state);
+            let invalidator: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |challenge_id: &str| {
+                exec.invalidate_cache(challenge_id);
+                // Reload route definitions from the new WASM module
+                let net_policy = wasm_runtime_interface::NetworkPolicy::default();
+                let sandbox_policy = wasm_runtime_interface::SandboxPolicy::default();
+                if let Ok((bytes, _metrics)) = exec.execute_get_routes(challenge_id, &net_policy, &sandbox_policy) {
+                    if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&bytes) {
+                        let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes
+                            .iter()
+                            .map(|r| platform_core::ChallengeRouteInfo {
+                                method: r.method.clone(),
+                                path: r.path.clone(),
+                                description: r.description.clone(),
+                                requires_auth: r.requires_auth,
+                            })
+                            .collect();
+                        if let Ok(cid) = uuid::Uuid::parse_str(challenge_id) {
+                            let mut state = cs_for_invalidator.write();
+                            state.register_challenge_routes(
+                                platform_core::ChallengeId::from_uuid(cid),
+                                route_infos,
+                            );
+                            info!(challenge_id = challenge_id, "Reloaded WASM routes after upload");
+                        }
+                    }
+                }
+            });
+            *rpc_server.rpc_handler().wasm_cache_invalidator.write() = Some(invalidator);
+        }
+
         // Wire real-time weight computation for subnet_getWeights RPC
         {
             let uid_map = Arc::clone(&shared_uid_map);
@@ -3064,11 +3098,9 @@ async fn handle_network_event(
                         }
                     }
 
-                    // Invalidate WASM cache (skip for wasm_upload - module was just compiled fresh)
-                    if update.update_type != "wasm_upload" {
-                        if let Some(ref executor) = wasm_executor_ref {
-                            executor.invalidate_cache(&challenge_id_str);
-                        }
+                    // Always invalidate WASM cache on any update (including wasm_upload)
+                    if let Some(ref executor) = wasm_executor_ref {
+                        executor.invalidate_cache(&challenge_id_str);
                     }
                 } else {
                     warn!(

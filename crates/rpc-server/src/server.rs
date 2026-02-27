@@ -1238,6 +1238,14 @@ async fn sudo_challenge_handler(
             "Challenge update broadcast initiated"
         );
 
+        // Invalidate local WASM cache so new module is loaded on next request
+        if request.action == "wasm_upload" {
+            if let Some(ref invalidator) = *handler.wasm_cache_invalidator.read() {
+                invalidator(&request.challenge_id);
+                info!(challenge_id = %request.challenge_id, "WASM cache invalidated after upload");
+            }
+        }
+
         (
             StatusCode::OK,
             Json(serde_json::json!({

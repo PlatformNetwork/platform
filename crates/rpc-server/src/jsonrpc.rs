@@ -194,6 +194,8 @@ pub struct RpcHandler {
     pub keypair: Arc<RwLock<Option<platform_core::Keypair>>>,
     /// Real-time weight computation handler
     pub get_weights_handler: Arc<RwLock<Option<GetWeightsHandler>>>,
+    /// Callback to invalidate WASM cache for a challenge (called on wasm_upload)
+    pub wasm_cache_invalidator: Arc<RwLock<Option<Arc<dyn Fn(&str) + Send + Sync>>>>,
 }
 
 impl RpcHandler {
@@ -209,6 +211,7 @@ impl RpcHandler {
             broadcast_tx: Arc::new(RwLock::new(None)),
             keypair: Arc::new(RwLock::new(None)),
             get_weights_handler: Arc::new(RwLock::new(None)),
+            wasm_cache_invalidator: Arc::new(RwLock::new(None)),
         }
     }
 
