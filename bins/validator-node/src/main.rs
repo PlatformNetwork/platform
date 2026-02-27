@@ -866,30 +866,45 @@ async fn main() -> Result<()> {
         if let Some(ref executor) = wasm_executor {
             let exec = Arc::clone(executor);
             let cs_for_invalidator = Arc::clone(&chain_state);
-            let invalidator: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |challenge_id: &str| {
+            let invalidator: Arc<dyn Fn(&str, &[u8]) + Send + Sync> = Arc::new(move |challenge_id: &str, wasm_bytes: &[u8]| {
                 exec.invalidate_cache(challenge_id);
-                // Reload route definitions from the new WASM module
-                let net_policy = wasm_runtime_interface::NetworkPolicy::default();
-                let sandbox_policy = wasm_runtime_interface::SandboxPolicy::default();
-                if let Ok((bytes, _metrics)) = exec.execute_get_routes(challenge_id, &net_policy, &sandbox_policy) {
-                    if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&bytes) {
-                        let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes
-                            .iter()
-                            .map(|r| platform_core::ChallengeRouteInfo {
-                                method: r.method.clone(),
-                                path: r.path.clone(),
-                                description: r.description.clone(),
-                                requires_auth: r.requires_auth,
-                            })
-                            .collect();
-                        if let Ok(cid) = uuid::Uuid::parse_str(challenge_id) {
-                            let mut state = cs_for_invalidator.write();
-                            state.register_challenge_routes(
-                                platform_core::ChallengeId::from_uuid(cid),
-                                route_infos,
-                            );
-                            info!(challenge_id = challenge_id, "Reloaded WASM routes after upload");
+                if wasm_bytes.is_empty() {
+                    return;
+                }
+                // Reload route definitions from the new WASM bytes
+                match exec.execute_get_routes_from_bytes(
+                    challenge_id,
+                    wasm_bytes,
+                    &wasm_runtime_interface::NetworkPolicy::development(),
+                    &wasm_runtime_interface::SandboxPolicy::default(),
+                ) {
+                    Ok((routes_data, _)) => {
+                        if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
+                            let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes
+                                .iter()
+                                .map(|r| platform_core::ChallengeRouteInfo {
+                                    method: r.method.clone(),
+                                    path: r.path.clone(),
+                                    description: r.description.clone(),
+                                    requires_auth: r.requires_auth,
+                                })
+                                .collect();
+                            if let Ok(cid) = uuid::Uuid::parse_str(challenge_id) {
+                                let mut state = cs_for_invalidator.write();
+                                state.register_challenge_routes(
+                                    platform_core::ChallengeId::from_uuid(cid),
+                                    route_infos.clone(),
+                                );
+                                info!(
+                                    challenge_id = challenge_id,
+                                    routes_count = route_infos.len(),
+                                    "Reloaded WASM routes after upload"
+                                );
+                            }
                         }
+                    }
+                    Err(e) => {
+                        warn!(challenge_id = challenge_id, error = %e, "Failed to reload routes after upload");
                     }
                 }
             });
