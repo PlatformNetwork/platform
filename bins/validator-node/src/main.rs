@@ -867,7 +867,28 @@ async fn main() -> Result<()> {
             let exec = Arc::clone(executor);
             let cs_for_invalidator = Arc::clone(&chain_state);
             let invalidator: Arc<dyn Fn(&str, &[u8]) + Send + Sync> = Arc::new(move |challenge_id: &str, wasm_bytes: &[u8]| {
+                // Invalidate cache by both name and resolved UUID module_path
                 exec.invalidate_cache(challenge_id);
+                {
+                    let cs = cs_for_invalidator.read();
+                    let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
+                        Some(ChallengeId::from_uuid(uuid))
+                    } else {
+                        cs.wasm_challenge_configs.values()
+                            .find(|c| c.name == challenge_id)
+                            .map(|c| c.challenge_id)
+                    };
+                    if let Some(cid) = resolved {
+                        let module_path = cs.wasm_challenge_configs.get(&cid)
+                            .map(|c| c.module.module_path.clone());
+                        drop(cs);
+                        if let Some(path) = module_path {
+                            if path != challenge_id {
+                                exec.invalidate_cache(&path);
+                            }
+                        }
+                    }
+                }
                 if wasm_bytes.is_empty() {
                     return;
                 }
@@ -889,10 +910,21 @@ async fn main() -> Result<()> {
                                     requires_auth: r.requires_auth,
                                 })
                                 .collect();
-                            if let Ok(cid) = uuid::Uuid::parse_str(challenge_id) {
+                            let cid = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
+                                platform_core::ChallengeId::from_uuid(uuid)
+                            } else {
+                                // Try name-based lookup, then deterministic hash
+                                let cs_read = cs_for_invalidator.read();
+                                let found = cs_read.wasm_challenge_configs.values()
+                                    .find(|c| c.name == challenge_id)
+                                    .map(|c| c.challenge_id);
+                                drop(cs_read);
+                                found.unwrap_or_else(|| ChallengeId::from_string(challenge_id))
+                            };
+                            {
                                 let mut state = cs_for_invalidator.write();
                                 state.register_challenge_routes(
-                                    platform_core::ChallengeId::from_uuid(cid),
+                                    cid,
                                     route_infos.clone(),
                                 );
                                 info!(
