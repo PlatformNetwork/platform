@@ -892,9 +892,28 @@ async fn main() -> Result<()> {
                 if wasm_bytes.is_empty() {
                     return;
                 }
+                // Resolve the UUID module_path so compiled module is cached under the
+                // same key the HTTP handler uses for lookup.
+                let cache_key = {
+                    let cs = cs_for_invalidator.read();
+                    let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
+                        Some(ChallengeId::from_uuid(uuid))
+                    } else {
+                        cs.wasm_challenge_configs.values()
+                            .find(|c| c.name == challenge_id)
+                            .map(|c| c.challenge_id)
+                    };
+                    resolved
+                        .and_then(|cid| {
+                            cs_for_invalidator.read()
+                                .wasm_challenge_configs.get(&cid)
+                                .map(|c| c.module.module_path.clone())
+                        })
+                        .unwrap_or_else(|| challenge_id.to_string())
+                };
                 // Reload route definitions from the new WASM bytes
                 match exec.execute_get_routes_from_bytes(
-                    challenge_id,
+                    &cache_key,
                     wasm_bytes,
                     &wasm_runtime_interface::NetworkPolicy::development(),
                     &wasm_runtime_interface::SandboxPolicy::default(),
