@@ -16,10 +16,6 @@ services:
     container_name: platform-validator
     restart: unless-stopped
 
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
