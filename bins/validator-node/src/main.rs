@@ -1924,18 +1924,13 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                        // During bootstrap, non-bootstrap validators fetch from bootstrap RPC
-                        let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
-                        let precomputed = if in_bootstrap && keypair.ss58_address() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58 {
-                            match fetch_remote_weights().await {
-                                Ok(remote) if !remote.is_empty() => {
-                                    info!("Bootstrap RPC pre-compute: using {} entries from bootstrap validator", remote.len());
-                                    remote
-                                }
-                                _ => precomputed,
+                        // All validators fetch from bootstrap RPC for consistency
+                        let precomputed = match fetch_remote_weights().await {
+                            Ok(remote) if !remote.is_empty() => {
+                                info!("RPC pre-compute: using {} entries from bootstrap RPC", remote.len());
+                                remote
                             }
-                        } else {
-                            precomputed
+                            _ => precomputed,
                         };
 
                         if !precomputed.is_empty() {
@@ -4845,8 +4840,6 @@ async fn handle_block_event(
                 return;
             }
 
-            let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
-
             // Single submission path: collect WASM weights, convert hotkey->UID,
             // apply emission_weight, and submit directly via Subtensor.
             if let (Some(st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {
@@ -5061,40 +5054,31 @@ async fn handle_block_event(
                         }
                     };
 
-                // During bootstrap, non-bootstrap validators MUST use the bootstrap
-                // validator's weights to guarantee all validators submit identical
-                // weights on-chain. Only the bootstrap validator computes weights
-                // from WASM; everyone else fetches them via RPC.
-                let weights_to_submit = if in_bootstrap {
-                    let our_ss58 = _keypair.ss58_address();
-                    if our_ss58 == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58 {
-                        info!("Bootstrap validator: using locally computed weights");
-                        weights_to_submit
-                    } else {
-                        info!("Bootstrap: fetching weights from bootstrap validator RPC");
-                        match fetch_remote_weights().await {
-                            Ok(remote) if !remote.is_empty() => {
-                                info!(
-                                    "Bootstrap: using {} mechanism entries from bootstrap validator",
-                                    remote.len()
-                                );
-                                remote
-                            }
-                            Ok(_) => {
-                                warn!("Bootstrap: remote weights empty, falling back to local");
-                                weights_to_submit
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Bootstrap: failed to fetch remote weights ({}), falling back to local",
-                                    e
-                                );
-                                weights_to_submit
-                            }
+                // ALL validators (including bootstrap) fetch weights from the
+                // bootstrap RPC to guarantee everyone submits identical weights.
+                // Local computation is used only as fallback if the RPC is unreachable.
+                let weights_to_submit = {
+                    info!("Fetching weights from bootstrap validator RPC");
+                    match fetch_remote_weights().await {
+                        Ok(remote) if !remote.is_empty() => {
+                            info!(
+                                "Using {} mechanism entries from bootstrap RPC",
+                                remote.len()
+                            );
+                            remote
+                        }
+                        Ok(_) => {
+                            warn!("Remote weights empty, falling back to locally computed");
+                            weights_to_submit
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to fetch remote weights ({}), falling back to locally computed",
+                                e
+                            );
+                            weights_to_submit
                         }
                     }
-                } else {
-                    weights_to_submit
                 };
 
                 // Store computed weights in chain state for the subnet_getWeights RPC
