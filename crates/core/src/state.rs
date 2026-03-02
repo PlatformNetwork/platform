@@ -498,6 +498,10 @@ impl ChainState {
                 );
                 self.rename_challenge(challenge_id, new_name.clone());
             }
+            SudoAction::RemoveChallenge { challenge_id } => {
+                tracing::info!(challenge_id = %challenge_id, "Sudo: removing challenge");
+                self.remove_wasm_challenge(challenge_id);
+            }
         }
         self.increment_mutation_sequence();
         Ok(())

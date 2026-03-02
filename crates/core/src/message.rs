@@ -326,6 +326,11 @@ pub enum SudoAction {
         challenge_id: ChallengeId,
         new_name: String,
     },
+
+    /// Remove a challenge entirely
+    RemoveChallenge {
+        challenge_id: ChallengeId,
+    },
 }
 
 /// Configuration for how weights are distributed on a mechanism

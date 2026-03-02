@@ -946,6 +946,16 @@ async fn main() -> Result<()> {
                                     cid,
                                     route_infos.clone(),
                                 );
+                                // If challenge_id is a human-readable name (not UUID), ensure the
+                                // challenge config uses that name so HTTP name-based routing works.
+                                if uuid::Uuid::parse_str(challenge_id).is_err() {
+                                    let needs_rename = state.wasm_challenge_configs.get(&cid)
+                                        .map(|c| c.name != challenge_id)
+                                        .unwrap_or(false);
+                                    if needs_rename {
+                                        state.rename_challenge(&cid, challenge_id.to_string());
+                                    }
+                                }
                                 info!(
                                     challenge_id = challenge_id,
                                     routes_count = route_infos.len(),
