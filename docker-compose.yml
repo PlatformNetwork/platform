@@ -16,6 +16,10 @@ services:
     container_name: platform-validator
     restart: unless-stopped
 
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -25,6 +29,7 @@ services:
 
     volumes:
       - validator-data:/data
+      - ./target/release/validator-node:/usr/local/bin/validator-node:ro
 
     environment:
       - RUST_LOG=${RUST_LOG:-info,validator_node=debug}
@@ -36,6 +41,7 @@ services:
       - P2P_PORT=${P2P_PORT:-8090}
       - WITH_BOOTNODE=${WITH_BOOTNODE:-true}
       - BOOTNODE_PORT=${P2P_PORT:-8090}
+      - CHUTES_API_KEY=${CHUTES_API_KEY:-}
 
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
