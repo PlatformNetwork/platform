@@ -1182,6 +1182,7 @@ async fn main() -> Result<()> {
     let sync_block_interval: u64 = 1; // Call WASM sync every block, WASM decides frequency internally
     let mut storage_stats_interval = tokio::time::interval(Duration::from_secs(300));
     let mut storage_flush_interval = tokio::time::interval(Duration::from_secs(5));
+    let mut background_tick_interval = tokio::time::interval(Duration::from_secs(12));
     // Track last synced block per challenge for delta sync
     let challenge_last_sync: Arc<
         RwLock<std::collections::HashMap<platform_core::ChallengeId, u64>>,
@@ -2040,6 +2041,36 @@ async fn main() -> Result<()> {
                                         );
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Background tick - call background_tick() on persistent WASM instances every block
+            _ = background_tick_interval.tick() => {
+                if !is_bootnode {
+                    let current_block = state_manager.apply(|state| state.bittensor_block);
+                    let current_epoch = current_block / 360;
+
+                    let challenges: Vec<_> = {
+                        let cs = chain_state.read();
+                        cs.wasm_challenge_configs
+                            .iter()
+                            .filter(|(_, cfg)| cfg.is_active)
+                            .map(|(id, _)| id.clone())
+                            .collect()
+                    };
+
+                    for challenge_id in challenges {
+                        let module_path = challenge_id.to_string();
+                        if let Some(ref executor) = wasm_executor {
+                            if let Err(e) = executor.execute_background_tick(&module_path, current_block, current_epoch) {
+                                debug!(
+                                    challenge_id = %challenge_id,
+                                    error = %e,
+                                    "background_tick failed"
+                                );
                             }
                         }
                     }

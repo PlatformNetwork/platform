@@ -75,6 +75,12 @@ impl TimeState {
         }
     }
 
+    /// Update the fixed timestamp used in deterministic mode.
+    /// Called by the persistent instance machinery to keep time current.
+    pub fn set_fixed_timestamp(&mut self, ts_ms: u64) {
+        self.policy.fixed_timestamp_ms = ts_ms;
+    }
+
     pub fn get_timestamp(&self) -> Result<u64, TimeError> {
         if !self.policy.enabled {
             return Err(TimeError::Disabled);

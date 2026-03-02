@@ -1,16 +1,16 @@
 use anyhow::{Context, Result};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use platform_challenge_sdk_wasm::{DedupFlags, EvaluationInput, EvaluationOutput, WeightEntry};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use wasm_runtime_interface::{
-    ConsensusPolicy, ExecPolicy, InMemoryStorageBackend, InstanceConfig, LlmPolicy, NetworkPolicy,
-    RuntimeConfig, SandboxPolicy, StorageBackend, StorageHostConfig, TerminalPolicy, TimePolicy,
-    WasmModule, WasmRuntime, WasmRuntimeError,
+    ChallengeInstance, ConsensusPolicy, ExecPolicy, InMemoryStorageBackend, InstanceConfig,
+    LlmPolicy, NetworkPolicy, RuntimeConfig, SandboxPolicy, StorageBackend, StorageHostConfig,
+    TerminalPolicy, TimePolicy, WasmModule, WasmRuntime, WasmRuntimeError,
 };
 
 const MAX_EVALUATION_OUTPUT_SIZE: usize = 64 * 1024 * 1024;
@@ -125,10 +125,25 @@ impl Drop for DedupGuard<'_> {
     }
 }
 
+/// A persistent WASM instance that stays alive between calls.
+/// The module_version tracks which compiled module this instance was created
+/// from; when the module is re-uploaded the instance is recreated.
+struct PersistentInstance {
+    instance: ChallengeInstance,
+    module_version: u64,
+    created_at: Instant,
+}
+
+// ChallengeInstance contains wasmtime Store which is Send but not Sync.
+// We protect access with a Mutex so only one call at a time.
+unsafe impl Send for PersistentInstance {}
+
 pub struct WasmChallengeExecutor {
     runtime: WasmRuntime,
     config: WasmExecutorConfig,
     module_cache: RwLock<HashMap<String, Arc<WasmModule>>>,
+    module_versions: RwLock<HashMap<String, u64>>,
+    persistent_instances: RwLock<HashMap<String, Arc<Mutex<PersistentInstance>>>>,
     dedup_state: RwLock<HashMap<String, Arc<DedupState>>>,
 }
 
@@ -155,6 +170,8 @@ impl WasmChallengeExecutor {
             runtime,
             config,
             module_cache: RwLock::new(HashMap::new()),
+            module_versions: RwLock::new(HashMap::new()),
+            persistent_instances: RwLock::new(HashMap::new()),
             dedup_state: RwLock::new(HashMap::new()),
         })
     }
@@ -272,7 +289,7 @@ impl WasmChallengeExecutor {
             restart_id: String::new(),
             config_version: 0,
             storage_host_config: StorageHostConfig {
-                allow_direct_writes: false,
+                allow_direct_writes: true,
                 require_consensus: true,
                 ..self.config.storage_host_config.clone()
             },
@@ -404,7 +421,7 @@ impl WasmChallengeExecutor {
             restart_id: String::new(),
             config_version: 0,
             storage_host_config: StorageHostConfig {
-                allow_direct_writes: false,
+                allow_direct_writes: true,
                 require_consensus: true,
                 ..self.config.storage_host_config.clone()
             },
@@ -893,7 +910,7 @@ impl WasmChallengeExecutor {
             restart_id: String::new(),
             config_version: 0,
             storage_host_config: StorageHostConfig {
-                allow_direct_writes: false,
+                allow_direct_writes: true,
                 require_consensus: true,
                 ..self.config.storage_host_config.clone()
             },
@@ -1078,7 +1095,7 @@ impl WasmChallengeExecutor {
             challenge_id: module_path.to_string(),
             validator_id: "validator".to_string(),
             storage_host_config: StorageHostConfig {
-                allow_direct_writes: false,
+                allow_direct_writes: true,
                 require_consensus: true,
                 ..self.config.storage_host_config.clone()
             },
@@ -1150,7 +1167,7 @@ impl WasmChallengeExecutor {
     }
 
     /// Execute sync on a WASM challenge module with block context.
-    /// Returns WasmSyncResult with leaderboard hash and stats for consensus.
+    /// Reuses the persistent WASM instance across calls for in-memory state.
     pub fn execute_sync_with_block(
         &self,
         module_path: &str,
@@ -1179,40 +1196,31 @@ impl WasmChallengeExecutor {
             }
         };
 
-        // Pass real wall-clock time so WASM can compute a correct 24 h window
-        // for GitHub API &since= queries.
+        let pi = self.get_or_create_persistent(module_path, block_height, epoch)?;
+        let mut pi_guard = pi.lock();
+
         let real_now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        let instance_config = InstanceConfig {
-            challenge_id: module_path.to_string(),
-            validator_id: "validator".to_string(),
-            storage_host_config: StorageHostConfig {
-                allow_direct_writes: false,
-                require_consensus: true,
-                ..self.config.storage_host_config.clone()
-            },
-            storage_backend: Arc::clone(&self.config.storage_backend),
-            consensus_policy: ConsensusPolicy::default(),
-            network_policy: NetworkPolicy::development(),
-            time_policy: TimePolicy::deterministic(real_now_ms),
-            llm_policy: match &self.config.chutes_api_key {
-                Some(key) => LlmPolicy::with_api_key(key.clone()),
-                None => LlmPolicy::default(),
-            },
-            block_height,
-            epoch,
-            ..Default::default()
-        };
+        // Update block/epoch/timestamp on the persistent instance
+        {
+            let state = pi_guard.instance.store_mut().data_mut();
+            state.consensus_state.block_height = block_height;
+            state.consensus_state.epoch = epoch;
+            state.fixed_timestamp_ms = Some(real_now_ms as i64);
+            state.time_state.set_fixed_timestamp(real_now_ms);
+        }
 
-        let mut instance = self
-            .runtime
-            .instantiate(&module, instance_config, None)
-            .map_err(|e| anyhow::anyhow!("WASM instantiation failed: {}", e))?;
+        // Reset fuel before each sync call
+        if self.config.enable_fuel {
+            if let Some(limit) = self.config.fuel_limit {
+                let _ = pi_guard.instance.store_mut().set_fuel(limit);
+            }
+        }
 
-        let result = instance
+        let result = pi_guard.instance
             .call_return_i64("sync")
             .map_err(|e| anyhow::anyhow!("WASM sync call failed: {}", e))?;
 
@@ -1230,7 +1238,7 @@ impl WasmChallengeExecutor {
             });
         }
 
-        let result_data = instance
+        let result_data = pi_guard.instance
             .read_memory(out_ptr as usize, out_len as usize)
             .map_err(|e| anyhow::anyhow!("failed to read WASM memory for sync output: {}", e))?;
 
@@ -1242,7 +1250,7 @@ impl WasmChallengeExecutor {
             module = module_path,
             total_users = sync_result.total_users,
             execution_time_ms = start.elapsed().as_millis() as u64,
-            "WASM sync completed"
+            "WASM sync completed (persistent instance)"
         );
 
         // Clear the pending writes cache for this challenge so subsequent reads
@@ -1275,7 +1283,7 @@ impl WasmChallengeExecutor {
             challenge_id: module_path.to_string(),
             validator_id: "validator".to_string(),
             storage_host_config: StorageHostConfig {
-                allow_direct_writes: false,
+                allow_direct_writes: true,
                 require_consensus: true,
                 ..self.config.storage_host_config.clone()
             },
@@ -1428,6 +1436,121 @@ impl WasmChallengeExecutor {
         Ok(module)
     }
 
+    /// Get or create a persistent WASM instance for a challenge.
+    /// The instance is reused across sync/background_tick calls.
+    /// It is recreated when the module is re-uploaded (version bump).
+    fn get_or_create_persistent(
+        &self,
+        module_path: &str,
+        block_height: u64,
+        epoch: u64,
+    ) -> Result<Arc<Mutex<PersistentInstance>>> {
+        let current_version = self.module_versions.read().get(module_path).copied().unwrap_or(0);
+
+        // Check if we already have a valid persistent instance
+        {
+            let cache = self.persistent_instances.read();
+            if let Some(pi) = cache.get(module_path) {
+                let guard = pi.lock();
+                if guard.module_version == current_version {
+                    drop(guard);
+                    return Ok(Arc::clone(pi));
+                }
+                // Version mismatch, will recreate below
+            }
+        }
+
+        // Create a new persistent instance
+        let module = self.load_module(module_path)
+            .context("Failed to load WASM module for persistent instance")?;
+
+        let real_now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let instance_config = InstanceConfig {
+            challenge_id: module_path.to_string(),
+            validator_id: "validator".to_string(),
+            storage_host_config: StorageHostConfig {
+                allow_direct_writes: true,
+                require_consensus: true,
+                ..self.config.storage_host_config.clone()
+            },
+            storage_backend: Arc::clone(&self.config.storage_backend),
+            consensus_policy: ConsensusPolicy::default(),
+            network_policy: NetworkPolicy::development(),
+            time_policy: TimePolicy::deterministic(real_now_ms),
+            llm_policy: match &self.config.chutes_api_key {
+                Some(key) => LlmPolicy::with_api_key(key.clone()),
+                None => LlmPolicy::default(),
+            },
+            block_height,
+            epoch,
+            ..Default::default()
+        };
+
+        let instance = self.runtime
+            .instantiate(&module, instance_config, None)
+            .map_err(|e| anyhow::anyhow!("Failed to create persistent WASM instance: {}", e))?;
+
+        let pi = Arc::new(Mutex::new(PersistentInstance {
+            instance,
+            module_version: current_version,
+            created_at: Instant::now(),
+        }));
+
+        self.persistent_instances.write().insert(module_path.to_string(), Arc::clone(&pi));
+        info!(module = module_path, version = current_version, "persistent WASM instance created");
+        Ok(pi)
+    }
+
+    /// Execute background_tick() on the persistent WASM instance.
+    /// Called every block for lightweight background work.
+    pub fn execute_background_tick(
+        &self,
+        module_path: &str,
+        block_height: u64,
+        epoch: u64,
+    ) -> Result<()> {
+        let pi = self.get_or_create_persistent(module_path, block_height, epoch)?;
+        let mut guard = pi.lock();
+
+        let real_now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        // Update block/epoch/timestamp context on the persistent instance
+        {
+            let state = guard.instance.store_mut().data_mut();
+            state.consensus_state.block_height = block_height;
+            state.consensus_state.epoch = epoch;
+            state.fixed_timestamp_ms = Some(real_now_ms as i64);
+            state.time_state.set_fixed_timestamp(real_now_ms);
+        }
+
+        // Reset fuel if enabled
+        if self.config.enable_fuel {
+            if let Some(limit) = self.config.fuel_limit {
+                let _ = guard.instance.store_mut().set_fuel(limit);
+            }
+        }
+
+        // Call background_tick - void function, no return value
+        match guard.instance.call("background_tick", &[]) {
+            Ok(_) => {}
+            Err(WasmRuntimeError::MissingExport(_)) => {
+                // WASM doesn't export background_tick, that's fine
+            }
+            Err(e) => {
+                warn!(module = module_path, error = %e, "background_tick failed");
+            }
+        }
+
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn invalidate_cache(&self, module_path: &str) {
         let mut cache = self.module_cache.write();
@@ -1435,6 +1558,15 @@ impl WasmChallengeExecutor {
             info!(module = module_path, "WASM module cache entry invalidated");
         }
         self.dedup_state.write().remove(module_path);
+        // Bump module version so persistent instance gets recreated
+        let mut versions = self.module_versions.write();
+        let v = versions.entry(module_path.to_string()).or_insert(0);
+        *v += 1;
+        info!(module = module_path, version = *v, "module version bumped");
+        // Drop old persistent instance
+        if self.persistent_instances.write().remove(module_path).is_some() {
+            info!(module = module_path, "persistent instance dropped");
+        }
     }
 
     #[allow(dead_code)]
@@ -1442,6 +1574,7 @@ impl WasmChallengeExecutor {
         let mut cache = self.module_cache.write();
         let count = cache.len();
         cache.clear();
+        self.persistent_instances.write().clear();
         info!(cleared = count, "WASM module cache cleared");
     }
 

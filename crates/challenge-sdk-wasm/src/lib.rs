@@ -90,6 +90,12 @@ pub trait Challenge {
     fn dedup_flags(&self) -> i32 {
         DedupFlags::NONE
     }
+
+    /// Lightweight tick called on every block on the persistent WASM instance.
+    /// Use for background work: heartbeat probes, incremental task fetching,
+    /// cache maintenance. The instance stays alive between calls, so in-memory
+    /// state persists. The default implementation is a no-op.
+    fn background_tick(&self) {}
 }
 
 /// Pack a pointer and length into a single i64 value.
@@ -380,6 +386,11 @@ macro_rules! register_challenge {
         #[no_mangle]
         pub extern "C" fn get_dedup_flags() -> i32 {
             <$ty as $crate::Challenge>::dedup_flags(&_CHALLENGE)
+        }
+
+        #[no_mangle]
+        pub extern "C" fn background_tick() {
+            <$ty as $crate::Challenge>::background_tick(&_CHALLENGE);
         }
     };
 }
