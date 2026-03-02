@@ -72,7 +72,7 @@ fn test_storage_proposal_consensus_flow() {
 
     let proposal = StorageProposal {
         proposal_id,
-        challenge_id: ChallengeId::new(),
+        challenge_id: ChallengeId::new("test-challenge"),
         proposer: proposer.hotkey(),
         key: b"some-key".to_vec(),
         value: b"some-value".to_vec(),
@@ -108,14 +108,15 @@ fn test_storage_proposal_consensus_flow() {
 
 #[test]
 fn test_epoch_commit_reveal_with_phases() {
-    let challenge_id = platform_challenge_sdk::ChallengeId::new();
-    let mut cr_state = CommitRevealState::new(0, challenge_id);
+    let challenge_id = platform_challenge_sdk::ChallengeId::new("test-challenge");
+    let mut cr_state = CommitRevealState::new(0, challenge_id.clone());
 
     let v1 = Keypair::generate();
     let v2 = Keypair::generate();
 
     // Helper to create commitment + reveal pair
-    let make_pair = |kp: &Keypair| {
+    let challenge_id_clone = challenge_id.clone();
+    let make_pair = move |kp: &Keypair| {
         let weights = vec![
             platform_challenge_sdk::WeightAssignment::new("agent1".to_string(), 0.7),
             platform_challenge_sdk::WeightAssignment::new("agent2".to_string(), 0.3),
@@ -124,14 +125,14 @@ fn test_epoch_commit_reveal_with_phases() {
         let hash = platform_challenge_sdk::weights::create_commitment(&weights, &secret);
         let commitment = WeightCommitment {
             validator: kp.hotkey(),
-            challenge_id,
+            challenge_id: challenge_id_clone.clone(),
             epoch: 0,
             commitment_hash: hash,
             timestamp: chrono::Utc::now(),
         };
         let reveal = WeightReveal {
             validator: kp.hotkey(),
-            challenge_id,
+            challenge_id: challenge_id_clone.clone(),
             epoch: 0,
             weights,
             secret,
@@ -307,7 +308,7 @@ async fn test_storage_write_feeds_consensus_state() {
 
     let proposal = StorageProposal {
         proposal_id,
-        challenge_id: ChallengeId::new(),
+        challenge_id: ChallengeId::new("test-challenge"),
         proposer: proposer.hotkey(),
         key: key.to_bytes(),
         value: value.clone(),

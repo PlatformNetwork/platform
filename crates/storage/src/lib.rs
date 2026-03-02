@@ -259,11 +259,9 @@ impl Storage {
         for result in self.challenges_tree.iter() {
             let (key, _) =
                 result.map_err(|e| MiniChainError::Storage(format!("Iteration error: {}", e)))?;
-            if key.len() == 16 {
-                let mut bytes = [0u8; 16];
-                bytes.copy_from_slice(&key);
-                ids.push(ChallengeId(uuid::Uuid::from_bytes(bytes)));
-            }
+            let id_str = String::from_utf8(key.to_vec())
+                .map_err(|e| MiniChainError::Storage(format!("Invalid UTF-8 key: {}", e)))?;
+            ids.push(ChallengeId(id_str));
         }
         Ok(ids)
     }
@@ -433,7 +431,7 @@ mod lib_tests {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
 
-        let fake_id = ChallengeId(uuid::Uuid::new_v4());
+        let fake_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let loaded = storage.load_challenge(&fake_id).unwrap();
         assert!(loaded.is_none());
     }

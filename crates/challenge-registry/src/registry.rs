@@ -103,7 +103,7 @@ impl ChallengeEntry {
     pub fn new(name: String, version: ChallengeVersion) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         Self {
-            id: ChallengeId::new(),
+            id: ChallengeId::new(&name),
             name,
             version,
             endpoint: None,
@@ -191,17 +191,17 @@ impl ChallengeRegistry {
             ));
         }
 
-        let id = entry.id;
+        let id = entry.id.clone();
         let name = entry.name.clone();
 
-        let state_store = Arc::new(StateStore::new(id));
+        let state_store = Arc::new(StateStore::new(id.clone()));
         let registered = RegisteredChallenge { entry, state_store };
 
-        challenges.insert(id, registered);
-        name_index.insert(name.clone(), id);
+        challenges.insert(id.clone(), registered);
+        name_index.insert(name.clone(), id.clone());
 
         info!(challenge_id = %id, name = %name, "Challenge registered");
-        self.emit_event(LifecycleEvent::Registered { challenge_id: id });
+        self.emit_event(LifecycleEvent::Registered { challenge_id: id.clone() });
 
         Ok(id)
     }
@@ -248,7 +248,7 @@ impl ChallengeRegistry {
         name_index.remove(&registered.entry.name);
 
         info!(challenge_id = %id, "Challenge unregistered");
-        self.emit_event(LifecycleEvent::Unregistered { challenge_id: *id });
+        self.emit_event(LifecycleEvent::Unregistered { challenge_id: id.clone() });
 
         Ok(registered.entry)
     }
@@ -306,7 +306,7 @@ impl ChallengeRegistry {
         );
 
         self.emit_event(LifecycleEvent::StateChanged {
-            challenge_id: *id,
+            challenge_id: id.clone(),
             old_state,
             new_state,
         });
@@ -360,7 +360,7 @@ impl ChallengeRegistry {
         );
 
         self.emit_event(LifecycleEvent::VersionChanged {
-            challenge_id: *id,
+            challenge_id: id.clone(),
             old_version: old_version.clone(),
             new_version,
         });
@@ -409,7 +409,7 @@ impl ChallengeRegistry {
                 "Challenge restart configuration updated"
             );
             self.emit_event(LifecycleEvent::Restarted {
-                challenge_id: *id,
+                challenge_id: id.clone(),
                 previous_restart_id: previous_restart_id.clone(),
                 new_restart_id: restart_id,
                 previous_config_version,

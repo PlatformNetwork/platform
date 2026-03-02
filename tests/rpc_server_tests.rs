@@ -43,9 +43,9 @@ fn create_populated_chain_state() -> Arc<RwLock<ChainState>> {
     }
 
     // Add jobs
-    let challenge_id = state.read().challenges.values().next().unwrap().id;
+    let challenge_id = state.read().challenges.values().next().unwrap().id.clone();
     for i in 0..10 {
-        let job = Job::new(challenge_id, format!("agent_{}", i));
+        let job = Job::new(challenge_id.clone(), format!("agent_{}", i));
         state.write().add_job(job);
     }
 

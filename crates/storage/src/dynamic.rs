@@ -592,7 +592,7 @@ impl<'a> ChallengeStorage<'a> {
         ValidatorStorage {
             storage: self.storage,
             validator: validator.clone(),
-            challenge_id: Some(self.challenge_id),
+            challenge_id: Some(self.challenge_id.clone()),
         }
     }
 
@@ -716,9 +716,9 @@ mod tests {
     #[test]
     fn test_challenge_storage() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         cs.set("leaderboard_size", 100u64).unwrap();
 
         let value = cs.get("leaderboard_size").unwrap();
@@ -728,10 +728,10 @@ mod tests {
     #[test]
     fn test_validator_storage() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
         let validator = Hotkey([1u8; 32]);
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         let vs = cs.validator(&validator);
 
         vs.set("score", 95.5f64).unwrap();
@@ -983,9 +983,9 @@ mod tests {
     #[test]
     fn test_scan_namespace() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         cs.set("key1", 1u64).unwrap();
         cs.set("key2", 2u64).unwrap();
         cs.set("key3", 3u64).unwrap();
@@ -1034,9 +1034,9 @@ mod tests {
     #[test]
     fn test_challenge_storage_delete() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         cs.set("key", 42u64).unwrap();
 
         let deleted = cs.delete("key").unwrap();
@@ -1049,10 +1049,10 @@ mod tests {
     #[test]
     fn test_validator_storage_delete() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
         let validator = Hotkey([3u8; 32]);
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         let vs = cs.validator(&validator);
 
         vs.set("score", 100u64).unwrap();
@@ -1064,9 +1064,9 @@ mod tests {
     #[test]
     fn test_challenge_storage_with_ttl() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         cs.set_with_ttl("temp", 100u64, Duration::from_secs(5))
             .unwrap();
 
@@ -1077,9 +1077,9 @@ mod tests {
     #[test]
     fn test_challenge_storage_scan() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         cs.set("key1", 1u64).unwrap();
         cs.set("key2", 2u64).unwrap();
 
@@ -1090,9 +1090,9 @@ mod tests {
     #[test]
     fn test_challenge_storage_increment() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         let val1 = cs.increment("counter", 5).unwrap();
         assert_eq!(val1, 5);
 
@@ -1103,9 +1103,9 @@ mod tests {
     #[test]
     fn test_challenge_storage_map_operations() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         cs.map_set("config", "timeout", 30u64).unwrap();
         cs.map_set("config", "retries", 3u64).unwrap();
 
@@ -1119,10 +1119,10 @@ mod tests {
     #[test]
     fn test_validator_storage_with_ttl() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
         let validator = Hotkey([5u8; 32]);
 
-        let cs = storage.challenge_storage(cid);
+        let cs = storage.challenge_storage(cid.clone());
         let vs = cs.validator(&validator);
 
         vs.set_with_ttl("temp", 200u64, Duration::from_secs(10))
@@ -1241,7 +1241,7 @@ mod tests {
     #[test]
     fn test_parse_key_with_validator() {
         let (_dir, storage) = create_test_storage();
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
         let validator = Hotkey([5u8; 32]);
 
         let key = StorageKey::validator(&cid, &validator, "test_key");
@@ -1274,7 +1274,7 @@ mod tests {
             .unwrap();
         storage
             .set(
-                StorageKey::challenge(&ChallengeId(uuid::Uuid::new_v4()), "key2"),
+                StorageKey::challenge(&ChallengeId(uuid::Uuid::new_v4().to_string()), "key2"),
                 StorageValue::U64(2),
                 None,
             )

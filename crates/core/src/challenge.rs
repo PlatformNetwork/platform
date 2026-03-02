@@ -55,7 +55,7 @@ impl Challenge {
         let wasm_metadata = WasmModuleMetadata::from_code_hash(code_hash.clone());
 
         Self {
-            id: ChallengeId::new(),
+            id: ChallengeId::new(&name),
             name,
             description,
             wasm_code,
@@ -233,7 +233,7 @@ pub struct WasmChallengeConfig {
 impl Default for WasmChallengeConfig {
     fn default() -> Self {
         Self {
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::default(),
             name: String::new(),
             description: String::new(),
             owner: Hotkey([0u8; 32]),
@@ -247,7 +247,7 @@ impl Default for WasmChallengeConfig {
 impl From<&Challenge> for WasmChallengeConfig {
     fn from(challenge: &Challenge) -> Self {
         Self {
-            challenge_id: challenge.id,
+            challenge_id: challenge.id.clone(),
             name: challenge.name.clone(),
             description: challenge.description.clone(),
             owner: challenge.owner.clone(),
@@ -280,7 +280,7 @@ pub struct ChallengeMeta {
 impl From<&Challenge> for ChallengeMeta {
     fn from(c: &Challenge) -> Self {
         Self {
-            id: c.id,
+            id: c.id.clone(),
             name: c.name.clone(),
             description: c.description.clone(),
             code_hash: c.code_hash.clone(),

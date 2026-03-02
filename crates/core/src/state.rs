@@ -556,7 +556,8 @@ impl ChainState {
 
     /// Add a challenge
     pub fn add_challenge(&mut self, challenge: Challenge) {
-        self.challenges.insert(challenge.id, challenge);
+        let key = challenge.id.clone();
+        self.challenges.insert(key, challenge);
         self.update_hash();
     }
 
@@ -610,8 +611,8 @@ impl ChainState {
 
     /// Register a WASM challenge configuration
     pub fn register_wasm_challenge(&mut self, config: WasmChallengeConfig) {
-        self.wasm_challenge_configs
-            .insert(config.challenge_id, config);
+        let key = config.challenge_id.clone();
+        self.wasm_challenge_configs.insert(key, config);
         self.increment_mutation_sequence();
     }
 
@@ -834,7 +835,7 @@ mod tests {
             ChallengeConfig::default(),
         );
 
-        let id = challenge.id;
+        let id = challenge.id.clone();
         state.add_challenge(challenge);
         assert!(state.get_challenge(&id).is_some());
     }
@@ -850,7 +851,7 @@ mod tests {
             ChallengeConfig::default(),
         );
 
-        let id = challenge.id;
+        let id = challenge.id.clone();
         state.add_challenge(challenge);
 
         let removed = state.remove_challenge(&id);
@@ -861,7 +862,7 @@ mod tests {
     #[test]
     fn test_add_job() {
         let mut state = create_test_state();
-        let job = Job::new(ChallengeId::new(), "agent1".to_string());
+        let job = Job::new(ChallengeId::new("test-challenge"), "agent1".to_string());
 
         state.add_job(job);
         assert_eq!(state.pending_jobs.len(), 1);
@@ -870,7 +871,7 @@ mod tests {
     #[test]
     fn test_claim_job() {
         let mut state = create_test_state();
-        let job = Job::new(ChallengeId::new(), "agent1".to_string());
+        let job = Job::new(ChallengeId::new("test-challenge"), "agent1".to_string());
         state.add_job(job);
 
         let kp = Keypair::generate();
@@ -996,7 +997,7 @@ mod tests {
         assert!(result.is_none());
 
         // Add a job and assign it
-        let job = Job::new(ChallengeId::new(), "agent1".to_string());
+        let job = Job::new(ChallengeId::new("test-challenge"), "agent1".to_string());
         state.add_job(job);
         let claimed = state.claim_job(&kp.hotkey());
         assert!(claimed.is_some());

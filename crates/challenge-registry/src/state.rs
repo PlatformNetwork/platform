@@ -127,7 +127,7 @@ impl StateStore {
     /// Create a new state store for a challenge
     pub fn new(challenge_id: ChallengeId) -> Self {
         Self {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             state: RwLock::new(ChallengeState::new(challenge_id)),
             snapshots: RwLock::new(Vec::new()),
             max_snapshots: 5,
@@ -137,7 +137,7 @@ impl StateStore {
     /// Create a state store with custom snapshot limit
     pub fn with_max_snapshots(challenge_id: ChallengeId, max_snapshots: usize) -> Self {
         Self {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             state: RwLock::new(ChallengeState::new(challenge_id)),
             snapshots: RwLock::new(Vec::new()),
             max_snapshots,
@@ -198,7 +198,7 @@ impl StateStore {
         let data = serde_json::to_vec(&*state)
             .map_err(|e| RegistryError::StatePersistence(e.to_string()))?;
 
-        let snapshot = StateSnapshot::new(self.challenge_id, version, data);
+        let snapshot = StateSnapshot::new(self.challenge_id.clone(), version, data);
 
         let mut snapshots = self.snapshots.write();
         snapshots.push(snapshot.clone());
@@ -242,7 +242,7 @@ impl StateStore {
     /// Clear all state
     pub fn clear(&self) {
         let mut state = self.state.write();
-        *state = ChallengeState::new(self.challenge_id);
+        *state = ChallengeState::new(self.challenge_id.clone());
     }
 }
 
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_state_store() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
         let store = StateStore::new(id);
 
         store.track_evaluation("job1".to_string());
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_creation() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
         let store = StateStore::new(id);
 
         store.track_evaluation("job1".to_string());
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_restoration() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
         let store = StateStore::new(id);
 
         store.track_evaluation("job1".to_string());
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_limit() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
         let store = StateStore::with_max_snapshots(id, 3);
 
         for i in 0..5 {

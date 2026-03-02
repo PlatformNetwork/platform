@@ -326,7 +326,7 @@ async fn challenge_route_handler(
         let chain = handler.chain_state.read();
 
         if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
-            let cid = ChallengeId(uuid);
+            let cid = ChallengeId(uuid.to_string());
             (challenge_id.clone(), Some(cid))
         } else {
             let found = chain
@@ -335,7 +335,7 @@ async fn challenge_route_handler(
                 .find(|c| c.name == challenge_id);
 
             if let Some(config) = found {
-                (config.challenge_id.0.to_string(), Some(config.challenge_id))
+                (config.challenge_id.0.clone(), Some(config.challenge_id.clone()))
             } else {
                 (challenge_id.clone(), None)
             }
@@ -1180,7 +1180,7 @@ async fn sudo_challenge_handler(
                     .values()
                     .find(|c| c.name == request.challenge_id);
                 if let Some(config) = found {
-                    config.challenge_id
+                    config.challenge_id.clone()
                 } else {
                     ChallengeId::from_string(&request.challenge_id)
                 }

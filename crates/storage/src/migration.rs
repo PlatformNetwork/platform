@@ -1585,7 +1585,7 @@ mod tests {
     #[test]
     fn test_challenge_migration_serialization() {
         let migration = ChallengeMigration {
-            challenge_id: ChallengeId(uuid::Uuid::new_v4()),
+            challenge_id: ChallengeId(uuid::Uuid::new_v4().to_string()),
             from_version: 1,
             to_version: 2,
             state_hash_before: [1u8; 32],
@@ -1635,7 +1635,7 @@ mod tests {
 
         let mut ctx = MigrationContext::new(&storage_tree, &state_tree, 0);
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
 
         // Empty state should still produce a hash
         let hash1 = compute_migration_state_hash(&ctx, &challenge_id);

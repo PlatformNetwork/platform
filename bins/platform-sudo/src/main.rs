@@ -207,7 +207,7 @@ impl SudoCli {
 
         // Send challenge_id as-is (name or UUID). Server resolves names to UUIDs.
         let id_str = if challenge_id == "new" {
-            ChallengeId::new().to_string()
+            uuid::Uuid::new_v4().to_string()
         } else {
             challenge_id.to_string()
         };

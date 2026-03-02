@@ -389,7 +389,7 @@ mod tests {
         let mut data = CheckpointData::new(1, 5, 100);
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: "sub1".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([1u8; 32]),
             submission_hash: "hash1".to_string(),
             scores: HashMap::new(),
@@ -473,13 +473,13 @@ mod tests {
         let dir = tempdir().unwrap();
 
         let mut manager = CheckpointManager::new(dir.path(), 5).unwrap();
-        let challenge1 = ChallengeId::new();
-        let challenge2 = ChallengeId::new();
+        let challenge1 = ChallengeId::new("challenge-1");
+        let challenge2 = ChallengeId::new("challenge-2");
 
         let mut data = CheckpointData::new(1, 5, 100);
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: "sub1".to_string(),
-            challenge_id: challenge1,
+            challenge_id: challenge1.clone(),
             miner: Hotkey([1u8; 32]),
             submission_hash: "hash1".to_string(),
             scores: HashMap::new(),
@@ -488,7 +488,7 @@ mod tests {
         });
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: "sub2".to_string(),
-            challenge_id: challenge2,
+            challenge_id: challenge2.clone(),
             miner: Hotkey([2u8; 32]),
             submission_hash: "hash2".to_string(),
             scores: HashMap::new(),
@@ -499,7 +499,7 @@ mod tests {
 
         // Restore with filter for only challenge1
         let mut filter = HashSet::new();
-        filter.insert(challenge1);
+        filter.insert(challenge1.clone());
         let options = RestorationOptions::new().with_challenge_filter(filter);
         let restoration = RestorationManager::new(dir.path(), options).unwrap();
         let result = restoration.restore_latest().unwrap();
@@ -577,7 +577,7 @@ mod tests {
         let mut data = CheckpointData::new(1, 5, 100);
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: "".to_string(), // Empty - invalid
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([1u8; 32]),
             submission_hash: "hash1".to_string(),
             scores: HashMap::new(),

@@ -636,9 +636,9 @@ async fn custom_route_handler<C: ServerChallenge + 'static>(
     // In production, the ChallengeContext would be populated by the validator node
     let ctx = ChallengeContext {
         db: Arc::new(
-            ChallengeDatabase::open(std::env::temp_dir(), crate::types::ChallengeId::new())
+            ChallengeDatabase::open(std::env::temp_dir(), crate::types::ChallengeId::new("test-challenge"))
                 .unwrap_or_else(|_| {
-                    ChallengeDatabase::open(std::env::temp_dir(), crate::types::ChallengeId::new())
+                    ChallengeDatabase::open(std::env::temp_dir(), crate::types::ChallengeId::new("test-challenge"))
                         .expect("Failed to open temporary challenge database")
                 }),
         ),

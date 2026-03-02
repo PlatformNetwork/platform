@@ -24,3 +24,4 @@ base64 = "0.21"
 hex = { workspace = true }
 sp-core = { workspace = true }
 rustyline = "14"
+uuid = { workspace = true }

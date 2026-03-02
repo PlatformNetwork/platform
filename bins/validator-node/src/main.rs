@@ -146,7 +146,7 @@ impl ShutdownHandler {
         for (id, record) in &state.pending_evaluations {
             let pending = PendingEvaluationState {
                 submission_id: id.clone(),
-                challenge_id: record.challenge_id,
+                challenge_id: record.challenge_id.clone(),
                 miner: record.miner.clone(),
                 submission_hash: record.agent_hash.clone(),
                 scores: record
@@ -166,7 +166,7 @@ impl ShutdownHandler {
                 if let Some(score) = record.aggregated_score {
                     let completed_state = CompletedEvaluationState {
                         submission_id: record.submission_id.clone(),
-                        challenge_id: record.challenge_id,
+                        challenge_id: record.challenge_id.clone(),
                         final_score: score,
                         epoch: state.epoch,
                         completed_at: record.finalized_at.unwrap_or(record.created_at),
@@ -762,6 +762,12 @@ async fn main() -> Result<()> {
     let (rpc_p2p_tx, mut rpc_p2p_rx) =
         tokio::sync::mpsc::channel::<platform_rpc::RpcP2PCommand>(64);
 
+    // Channel for spawned threads to request immediate core state persistence.
+    // This avoids losing state changes (e.g. route registration) if the validator
+    // restarts before the next periodic 60-second persist tick.
+    let (persist_trigger_tx, mut persist_trigger_rx) =
+        tokio::sync::mpsc::unbounded_channel::<&'static str>();
+
     let bans = Arc::new(RwLock::new(BanList::new()));
 
     // Start RPC server (enabled by default)
@@ -801,13 +807,14 @@ async fn main() -> Result<()> {
                         let module_path: Option<String> = {
                             let chain_guard = chain.read();
 
-                            // Try parsing as UUID first
-                            if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
-                                let cid = platform_core::ChallengeId(uuid);
-                                chain_guard
-                                    .wasm_challenge_configs
-                                    .get(&cid)
-                                    .map(|c| c.module.module_path.clone())
+                            // Try direct lookup first (by name or UUID string)
+                            let cid = platform_core::ChallengeId::from_string(&challenge_id);
+                            if let Some(mp) = chain_guard
+                                .wasm_challenge_configs
+                                .get(&cid)
+                                .map(|c| c.module.module_path.clone())
+                            {
+                                Some(mp)
                             } else {
                                 // Search by name in wasm_challenge_configs
                                 chain_guard
@@ -866,6 +873,7 @@ async fn main() -> Result<()> {
         if let Some(ref executor) = wasm_executor {
             let exec = Arc::clone(executor);
             let cs_for_invalidator = Arc::clone(&chain_state);
+            let persist_tx_invalidator = persist_trigger_tx.clone();
             let invalidator: Arc<dyn Fn(&str, &[u8]) + Send + Sync> = Arc::new(move |challenge_id: &str, wasm_bytes: &[u8]| {
                 // Invalidate cache by both name and resolved UUID module_path
                 exec.invalidate_cache(challenge_id);
@@ -876,7 +884,7 @@ async fn main() -> Result<()> {
                     } else {
                         cs.wasm_challenge_configs.values()
                             .find(|c| c.name == challenge_id)
-                            .map(|c| c.challenge_id)
+                            .map(|c| c.challenge_id.clone())
                     };
                     if let Some(cid) = resolved {
                         let module_path = cs.wasm_challenge_configs.get(&cid)
@@ -901,7 +909,7 @@ async fn main() -> Result<()> {
                     } else {
                         cs.wasm_challenge_configs.values()
                             .find(|c| c.name == challenge_id)
-                            .map(|c| c.challenge_id)
+                            .map(|c| c.challenge_id.clone())
                     };
                     resolved
                         .and_then(|cid| {
@@ -936,14 +944,14 @@ async fn main() -> Result<()> {
                                 let cs_read = cs_for_invalidator.read();
                                 let found = cs_read.wasm_challenge_configs.values()
                                     .find(|c| c.name == challenge_id)
-                                    .map(|c| c.challenge_id);
+                                    .map(|c| c.challenge_id.clone());
                                 drop(cs_read);
                                 found.unwrap_or_else(|| ChallengeId::from_string(challenge_id))
                             };
                             {
                                 let mut state = cs_for_invalidator.write();
                                 state.register_challenge_routes(
-                                    cid,
+                                    cid.clone(),
                                     route_infos.clone(),
                                 );
                                 // If challenge_id is a human-readable name (not UUID), ensure the
@@ -962,6 +970,7 @@ async fn main() -> Result<()> {
                                     "Reloaded WASM routes after upload"
                                 );
                             }
+                            let _ = persist_tx_invalidator.send("wasm_cache_invalidator");
                         }
                     }
                     Err(e) => {
@@ -1002,7 +1011,7 @@ async fn main() -> Result<()> {
             let cs = chain_state.read();
             cs.wasm_challenge_configs
                 .iter()
-                .map(|(id, config)| (*id, config.module.module_path.clone()))
+                .map(|(id, config)| (id.clone(), config.module.module_path.clone()))
                 .collect()
         };
 
@@ -1025,7 +1034,7 @@ async fn main() -> Result<()> {
                 {
                     Ok(Some(stored)) => {
                         let exec = executor.clone();
-                        let cid = *challenge_id;
+                        let cid = challenge_id.clone();
                         let mp = if module_path.is_empty() {
                             challenge_id_str.clone()
                         } else {
@@ -1098,6 +1107,12 @@ async fn main() -> Result<()> {
                 }
             }
             info!("All WASM modules reloaded");
+
+            // Persist state after startup route registration so routes survive
+            // a crash before the first periodic persist tick (60s).
+            if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
+                warn!("Failed to persist core state after startup WASM reload: {}", e);
+            }
 
             // Run sync() on each challenge at startup
             for (challenge_id, module_path) in &challenges {
@@ -1194,6 +1209,7 @@ async fn main() -> Result<()> {
                     &shared_llm_validators_json,
                     &shared_registered_hotkeys_json,
                     &rpc_handler_opt,
+                    &persist_trigger_tx,
                 ).await;
             }
 
@@ -1375,7 +1391,7 @@ async fn main() -> Result<()> {
                         let signature = keypair.sign(msg_to_sign.as_bytes());
 
                         let update_msg = platform_p2p_consensus::ChallengeUpdateMessage {
-                            challenge_id,
+                            challenge_id: challenge_id.clone(),
                             updater: keypair.hotkey(),
                             update_type: update_type.clone(),
                             data: data.clone(),
@@ -1397,8 +1413,8 @@ async fn main() -> Result<()> {
                             // Broadcast StateMutationProposal for consensus validation
                             if update_type == "wasm_upload" || update_type == "rename" || update_type == "sudo_action" {
                                 let mutation_type = match update_type.as_str() {
-                                    "wasm_upload" => platform_p2p_consensus::StateMutationType::WasmUpload { challenge_id },
-                                    "rename" => platform_p2p_consensus::StateMutationType::ChallengeRename { challenge_id },
+                                    "wasm_upload" => platform_p2p_consensus::StateMutationType::WasmUpload { challenge_id: challenge_id.clone() },
+                                    "rename" => platform_p2p_consensus::StateMutationType::ChallengeRename { challenge_id: challenge_id.clone() },
                                     "sudo_action" => platform_p2p_consensus::StateMutationType::SudoAction,
                                     _ => unreachable!(),
                                 };
@@ -1477,7 +1493,7 @@ async fn main() -> Result<()> {
                                                 let existing_config = cs.wasm_challenge_configs.get(&challenge_id)
                                                     .map(|c| c.config.clone());
                                                 let wasm_config = platform_core::WasmChallengeConfig {
-                                                    challenge_id,
+                                                    challenge_id: challenge_id.clone(),
                                                     name: challenge_name,
                                                     description: String::new(),
                                                     owner,
@@ -1502,6 +1518,7 @@ async fn main() -> Result<()> {
                                             let challenge_id_for_routes = challenge_id;
                                             let challenge_id_str_for_routes = challenge_id_str.clone();
                                             let chain_state_for_routes = chain_state.clone();
+                                            let persist_tx = persist_trigger_tx.clone();
 
                                             std::thread::spawn(move || {
                                                 match executor.execute_get_routes_from_bytes(
@@ -1527,6 +1544,8 @@ async fn main() -> Result<()> {
                                                             }).collect();
                                                             let mut cs = chain_state_for_routes.write();
                                                             cs.register_challenge_routes(challenge_id_for_routes, route_infos);
+                                                            drop(cs);
+                                                            let _ = persist_tx.send("local_upload_routes");
                                                         }
                                                     }
                                                     Err(e) => {
@@ -1703,6 +1722,17 @@ async fn main() -> Result<()> {
                 }
                 if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
                     warn!("Failed to persist core state: {}", e);
+                }
+            }
+
+            // Immediate core state persistence requested by spawned threads
+            Some(reason) = persist_trigger_rx.recv() => {
+                // Drain any queued triggers to coalesce into a single persist
+                while persist_trigger_rx.try_recv().is_ok() {}
+                if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
+                    warn!("Failed to persist core state (trigger: {}): {}", reason, e);
+                } else {
+                    debug!("Core state persisted (trigger: {})", reason);
                 }
             }
 
@@ -1953,7 +1983,7 @@ async fn main() -> Result<()> {
                             cs.wasm_challenge_configs
                                 .iter()
                                 .filter(|(_, cfg)| cfg.is_active)
-                                .map(|(id, _)| *id)
+                                .map(|(id, _)| id.clone())
                                 .collect()
                         };
 
@@ -2195,7 +2225,12 @@ async fn load_core_state_from_storage(
             None
         }
         Err(e) => {
-            warn!("Failed to load persisted core state: {}", e);
+            error!(
+                "Failed to deserialize persisted core state: {}. \
+                 Starting fresh — challenges, routes, and emission weights will need to be \
+                 re-synced from the network. This may indicate a schema migration issue.",
+                e
+            );
             None
         }
     }
@@ -2299,6 +2334,7 @@ async fn handle_network_event(
     shared_llm_validators_json: &Arc<parking_lot::RwLock<Vec<u8>>>,
     shared_registered_hotkeys_json: &Arc<parking_lot::RwLock<Vec<u8>>>,
     rpc_handler: &Option<Arc<platform_rpc::RpcHandler>>,
+    persist_trigger_tx: &tokio::sync::mpsc::UnboundedSender<&'static str>,
 ) {
     match event {
         NetworkEvent::Message { source, message } => match message {
@@ -2660,7 +2696,7 @@ async fn handle_network_event(
                             let data = bincode::serialize(&storage_entries).unwrap_or_default();
                             let timestamp = chrono::Utc::now().timestamp_millis();
                             let request_id = req.request_id.clone();
-                            let challenge_id = req.challenge_id;
+                            let challenge_id = req.challenge_id.clone();
                             let sign_data = bincode::serialize(&(&request_id, &data, timestamp))
                                 .unwrap_or_default();
                             let signature = keypair.sign_bytes(&sign_data).unwrap_or_default();
@@ -2670,7 +2706,7 @@ async fn handle_network_event(
                                     request_id: request_id.clone(),
                                     responder: keypair.hotkey(),
                                     target: Some(req.requester.clone()),
-                                    challenge_id,
+                                    challenge_id: challenge_id.clone(),
                                     data_type: "challenge_storage".to_string(),
                                     data,
                                     timestamp,
@@ -2950,7 +2986,7 @@ async fn handle_network_event(
                                             if state.get_challenge(&update.challenge_id).is_none() {
                                                 let challenge_config =
                                                     platform_p2p_consensus::ChallengeConfig {
-                                                        id: update.challenge_id,
+                                                        id: update.challenge_id.clone(),
                                                         name: challenge_name.clone(),
                                                         weight: 100, // Default weight
                                                         is_active: true,
@@ -2964,7 +3000,7 @@ async fn handle_network_event(
                                         });
 
                                         // Sync challenge to ChainState for RPC and persist
-                                        let cid = update.challenge_id;
+                                        let cid = update.challenge_id.clone();
                                         let owner = update.updater.clone();
                                         let code_hash = hex::encode(metadata.value_hash);
                                         let version = metadata.version.to_string();
@@ -2975,6 +3011,9 @@ async fn handle_network_event(
                                             chain_state.clone(),
                                             "wasm_upload_p2p",
                                             |cs| {
+                                                // Preserve existing config (emission_weight, mechanism_id)
+                                                let existing_config = cs.wasm_challenge_configs.get(&cid)
+                                                    .map(|c| c.config.clone());
                                                 let wasm_config =
                                                     platform_core::WasmChallengeConfig {
                                                         challenge_id: cid,
@@ -2987,9 +3026,7 @@ async fn handle_network_event(
                                                             version,
                                                             ..Default::default()
                                                         },
-                                                        config:
-                                                            platform_core::ChallengeConfig::default(
-                                                            ),
+                                                        config: existing_config.unwrap_or_default(),
                                                         is_active: true,
                                                     };
                                                 cs.register_wasm_challenge(wasm_config);
@@ -3001,10 +3038,11 @@ async fn handle_network_event(
                                         if let Some(ref executor) = wasm_executor_ref {
                                             let wasm_bytes = update.data.clone();
                                             let executor = executor.clone();
-                                            let challenge_id_for_routes = update.challenge_id;
+                                            let challenge_id_for_routes = update.challenge_id.clone();
                                             let challenge_id_str_for_routes =
                                                 challenge_id_str.clone();
                                             let chain_state_for_routes = chain_state.clone();
+                                            let persist_tx = persist_trigger_tx.clone();
 
                                             std::thread::spawn(move || {
                                                 match executor.execute_get_routes_from_bytes(
@@ -3040,6 +3078,8 @@ async fn handle_network_event(
                                                             }).collect();
                                                             let mut cs = chain_state_for_routes.write();
                                                             cs.register_challenge_routes(challenge_id_for_routes, route_infos);
+                                                            drop(cs);
+                                                            let _ = persist_tx.send("p2p_upload_routes");
                                                         }
                                                     }
                                                     Err(e) => {
@@ -3227,7 +3267,7 @@ async fn handle_network_event(
                     // Add proposal to state
                     let storage_proposal = StorageProposal {
                         proposal_id: proposal.proposal_id,
-                        challenge_id: proposal.challenge_id,
+                        challenge_id: proposal.challenge_id.clone(),
                         proposer: proposal.proposer.clone(),
                         key: proposal.key.clone(),
                         value: proposal.value.clone(),
@@ -3266,7 +3306,7 @@ async fn handle_network_event(
                         !proposal.key.is_empty()
                             && proposal.key.len() <= max_key_size
                             && proposal.value.len() <= max_value_size
-                            && proposal.challenge_id.0 != uuid::Uuid::nil()
+                            && !proposal.challenge_id.0.is_empty()
                             && challenge_known
                             && !proposal.signature.is_empty()
                     };
@@ -3499,7 +3539,7 @@ async fn handle_network_event(
                             state
                                 .challenge_storage_roots
                                 .iter()
-                                .map(|(k, v)| (*k, *v))
+                                .map(|(k, v)| (k.clone(), *v))
                                 .collect()
                         });
                     let local_map: std::collections::HashMap<_, _> =
@@ -3532,7 +3572,7 @@ async fn handle_network_event(
                                 platform_p2p_consensus::DataRequestMessage {
                                     request_id,
                                     requester: keypair.hotkey(),
-                                    challenge_id: *cid,
+                                    challenge_id: cid.clone(),
                                     data_type: "challenge_storage".to_string(),
                                     data_key: "all".to_string(),
                                     timestamp,
@@ -3658,7 +3698,7 @@ async fn handle_network_event(
                                         let wasm_key = StorageKey::new("wasm", &challenge_id_str);
                                         match storage.put(wasm_key, entry.data.clone(), put_options_with_block(&state_manager)).await {
                                             Ok(metadata) => {
-                                                let cid = *challenge_id;
+                                                let cid = challenge_id.clone();
                                                 let owner = entry.proposer.clone();
                                                 let code_hash = hex::encode(metadata.value_hash);
                                                 let version = metadata.version.to_string();
@@ -3713,7 +3753,7 @@ async fn handle_network_event(
                                     }
                                     platform_p2p_consensus::StateMutationType::ChallengeRename { challenge_id } => {
                                         if let Ok(new_name) = String::from_utf8(entry.data.clone()) {
-                                            let cid = *challenge_id;
+                                            let cid = challenge_id.clone();
                                             mutate_and_persist(storage.clone(), chain_state.clone(), "rename_consensus", |cs| {
                                                 cs.rename_challenge(&cid, new_name);
                                             }).await;
@@ -3721,14 +3761,14 @@ async fn handle_network_event(
                                     }
                                     platform_p2p_consensus::StateMutationType::RouteRegistration { challenge_id } => {
                                         if let Ok(routes) = bincode::deserialize::<Vec<platform_core::ChallengeRouteInfo>>(&entry.data) {
-                                            let cid = *challenge_id;
+                                            let cid = challenge_id.clone();
                                             mutate_and_persist(storage.clone(), chain_state.clone(), "routes_consensus", |cs| {
                                                 cs.register_challenge_routes(cid, routes);
                                             }).await;
                                         }
                                     }
                                     platform_p2p_consensus::StateMutationType::ChallengeActivation { challenge_id, active } => {
-                                        let cid = *challenge_id;
+                                        let cid = challenge_id.clone();
                                         let is_active = *active;
                                         mutate_and_persist(storage.clone(), chain_state.clone(), "activation_consensus", |cs| {
                                             cs.set_challenge_active(&cid, is_active);
@@ -3899,7 +3939,7 @@ async fn handle_network_event(
                     // In sync -- update last_sync_block
                     challenge_last_sync
                         .write()
-                        .insert(proposal.challenge_id, proposal.block_number);
+                        .insert(proposal.challenge_id.clone(), proposal.block_number);
                     debug!(
                         challenge_id = %proposal.challenge_id,
                         "Sync hash matches peer, storage is in sync"
@@ -4040,7 +4080,7 @@ async fn handle_network_event(
 
                                 let resp = P2PMessage::StorageSyncResponse(
                                     platform_p2p_consensus::StorageSyncResponseMessage {
-                                        challenge_id: req.challenge_id,
+                                        challenge_id: req.challenge_id.clone(),
                                         responder: keypair.hotkey(),
                                         target: Some(req.requester.clone()),
                                         data_hash,
@@ -4237,7 +4277,7 @@ async fn handle_network_event(
                     if max_block > 0 {
                         challenge_last_sync
                             .write()
-                            .insert(resp.challenge_id, max_block);
+                            .insert(resp.challenge_id.clone(), max_block);
                     }
 
                     // Recompute and update the storage root for this challenge
@@ -4255,7 +4295,7 @@ async fn handle_network_event(
                                 let new_root: [u8; 32] = hasher.finalize().into();
                                 state_manager.apply(|state| {
                                     state
-                                        .update_challenge_storage_root(resp.challenge_id, new_root);
+                                        .update_challenge_storage_root(resp.challenge_id.clone(), new_root);
                                 });
                                 debug!(
                                     challenge_id = %resp.challenge_id,
@@ -4277,7 +4317,7 @@ async fn handle_network_event(
                     if max_block > 0 {
                         challenge_last_sync
                             .write()
-                            .insert(resp.challenge_id, max_block);
+                            .insert(resp.challenge_id.clone(), max_block);
                     }
 
                     info!(
@@ -4652,7 +4692,7 @@ async fn handle_block_event(
                     cs.wasm_challenge_configs
                         .iter()
                         .filter(|(_, cfg)| cfg.is_active)
-                        .map(|(id, cfg)| (*id, cfg.module.module_path.clone()))
+                        .map(|(id, cfg)| (id.clone(), cfg.module.module_path.clone()))
                         .collect()
                 };
 
@@ -4760,7 +4800,7 @@ async fn handle_block_event(
                                     e.rank = (i + 1) as u32;
                                 }
                                 state_manager.apply(|state| {
-                                    state.update_leaderboard(*challenge_id, lb_entries);
+                                    state.update_leaderboard(challenge_id.clone(), lb_entries);
                                 });
                             }
                         }
@@ -5171,7 +5211,7 @@ async fn process_wasm_evaluations(
             .filter(|(_, record)| {
                 !record.finalized && !record.evaluations.contains_key(&keypair.hotkey())
             })
-            .map(|(id, record)| (id.clone(), record.challenge_id, record.agent_hash.clone()))
+            .map(|(id, record)| (id.clone(), record.challenge_id.clone(), record.agent_hash.clone()))
             .collect()
     });
 
@@ -5394,7 +5434,7 @@ fn try_finalize_evaluation(state: &mut platform_p2p_consensus::ChainState, submi
         return;
     }
 
-    let challenge_id = record.challenge_id;
+    let challenge_id = record.challenge_id.clone();
     let miner = record.miner.clone();
 
     match state.finalize_evaluation(submission_id) {

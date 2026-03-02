@@ -144,7 +144,7 @@ const CHALLENGE_PREFIX: &str = "challenge:";
 ///
 /// ```text
 /// let registry = MetadataRegistry::new(&db)?;
-/// registry.register_challenge(challenge_id, serde_json::json!({}))?;
+/// registry.register_challenge(challenge_id.clone(), serde_json::json!({}))?;
 /// registry.update_challenge_state_root(&challenge_id, state_root)?;
 /// ```
 pub struct MetadataRegistry {
@@ -242,7 +242,7 @@ impl MetadataRegistry {
             )));
         }
 
-        let metadata = ChallengeMetadata::new(challenge_id, config);
+        let metadata = ChallengeMetadata::new(challenge_id.clone(), config);
 
         // Persist challenge metadata
         let key = format!("{}{}", CHALLENGE_PREFIX, challenge_id);
@@ -254,7 +254,7 @@ impl MetadataRegistry {
         })?;
 
         // Update global metadata
-        self.global.challenges.insert(challenge_id, metadata);
+        self.global.challenges.insert(challenge_id.clone(), metadata);
         self.persist_global()?;
 
         info!("Registered challenge {}", challenge_id);
@@ -340,7 +340,7 @@ impl MetadataRegistry {
 
         // Sort challenges by ID for deterministic ordering
         let mut challenge_ids: Vec<_> = self.global.challenges.keys().collect();
-        challenge_ids.sort_by_key(|id| id.0);
+        challenge_ids.sort_by_key(|id| id.0.clone());
 
         for challenge_id in challenge_ids {
             if let Some(metadata) = self.global.challenges.get(challenge_id) {
@@ -379,7 +379,7 @@ impl MetadataRegistry {
     ///
     /// A vector of all registered challenge IDs.
     pub fn list_challenges(&self) -> Vec<ChallengeId> {
-        self.global.challenges.keys().copied().collect()
+        self.global.challenges.keys().cloned().collect()
     }
 
     /// Get the schema version for a specific challenge
@@ -522,14 +522,14 @@ mod tests {
     #[test]
     fn test_metadata_registry_persistence() {
         let dir = tempdir().expect("Failed to create temp dir");
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
 
         // Create and register challenge
         {
             let db = sled::open(dir.path()).expect("Failed to open sled db");
             let mut registry = MetadataRegistry::new(&db).unwrap();
             registry
-                .register_challenge(challenge_id, serde_json::json!({"key": "value"}))
+                .register_challenge(challenge_id.clone(), serde_json::json!({"key": "value"}))
                 .unwrap();
             registry.flush().unwrap();
         }
@@ -552,13 +552,13 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let config = serde_json::json!({
             "timeout": 3600,
             "max_submissions": 100
         });
 
-        let result = registry.register_challenge(challenge_id, config.clone());
+        let result = registry.register_challenge(challenge_id.clone(), config.clone());
         assert!(result.is_ok());
 
         // Verify registration
@@ -576,13 +576,13 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         // Try to register again
-        let result = registry.register_challenge(challenge_id, serde_json::json!({}));
+        let result = registry.register_challenge(challenge_id.clone(), serde_json::json!({}));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), MiniChainError::Validation(_)));
     }
@@ -592,9 +592,9 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         let state_root = [42u8; 32];
@@ -614,7 +614,7 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let result = registry.update_challenge_state_root(&challenge_id, [0u8; 32]);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), MiniChainError::NotFound(_)));
@@ -625,7 +625,7 @@ mod tests {
         let db = create_test_db();
         let registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let metadata = registry.get_challenge_metadata(&challenge_id).unwrap();
         assert!(metadata.is_none());
     }
@@ -639,9 +639,9 @@ mod tests {
         let root1 = registry.compute_global_state_root();
 
         // Add a challenge
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         // Hash should change
@@ -663,14 +663,14 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id1 = ChallengeId::new();
-        let challenge_id2 = ChallengeId::new();
+        let challenge_id1 = ChallengeId::new("challenge-1");
+        let challenge_id2 = ChallengeId::new("challenge-2");
 
         registry
-            .register_challenge(challenge_id1, serde_json::json!({}))
+            .register_challenge(challenge_id1.clone(), serde_json::json!({}))
             .unwrap();
         registry
-            .register_challenge(challenge_id2, serde_json::json!({}))
+            .register_challenge(challenge_id2.clone(), serde_json::json!({}))
             .unwrap();
 
         // Should be deterministic
@@ -684,9 +684,9 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         let state_root = [123u8; 32];
@@ -701,7 +701,7 @@ mod tests {
         assert!(!registry.validate_state_root(&challenge_id, [0u8; 32]));
 
         // Non-existent challenge
-        let fake_id = ChallengeId::new();
+        let fake_id = ChallengeId::new("nonexistent-challenge");
         assert!(!registry.validate_state_root(&fake_id, state_root));
     }
 
@@ -712,14 +712,14 @@ mod tests {
 
         assert!(registry.list_challenges().is_empty());
 
-        let challenge_id1 = ChallengeId::new();
-        let challenge_id2 = ChallengeId::new();
+        let challenge_id1 = ChallengeId::new("challenge-1");
+        let challenge_id2 = ChallengeId::new("challenge-2");
 
         registry
-            .register_challenge(challenge_id1, serde_json::json!({}))
+            .register_challenge(challenge_id1.clone(), serde_json::json!({}))
             .unwrap();
         registry
-            .register_challenge(challenge_id2, serde_json::json!({}))
+            .register_challenge(challenge_id2.clone(), serde_json::json!({}))
             .unwrap();
 
         let challenges = registry.list_challenges();
@@ -733,15 +733,15 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         assert_eq!(registry.get_schema_version(&challenge_id), Some(1));
 
         // Non-existent challenge
-        let fake_id = ChallengeId::new();
+        let fake_id = ChallengeId::new("nonexistent-challenge");
         assert_eq!(registry.get_schema_version(&fake_id), None);
     }
 
@@ -750,9 +750,9 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         let result = registry.update_schema_version(&challenge_id, 2);
@@ -766,7 +766,7 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let result = registry.update_schema_version(&challenge_id, 2);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), MiniChainError::NotFound(_)));
@@ -777,9 +777,9 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         assert_eq!(registry.list_challenges().len(), 1);
@@ -800,7 +800,7 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let result = registry.unregister_challenge(&challenge_id);
         assert!(result.is_ok());
         assert!(!result.unwrap());
@@ -834,9 +834,9 @@ mod tests {
 
     #[test]
     fn test_challenge_metadata_new() {
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let config = serde_json::json!({"test": true});
-        let metadata = ChallengeMetadata::new(challenge_id, config.clone());
+        let metadata = ChallengeMetadata::new(challenge_id.clone(), config.clone());
 
         assert_eq!(metadata.challenge_id, challenge_id);
         assert_eq!(metadata.schema_version, 1);
@@ -847,8 +847,8 @@ mod tests {
 
     #[test]
     fn test_challenge_metadata_update_state_root() {
-        let challenge_id = ChallengeId::new();
-        let mut metadata = ChallengeMetadata::new(challenge_id, serde_json::json!({}));
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut metadata = ChallengeMetadata::new(challenge_id.clone(), serde_json::json!({}));
 
         let initial_updated_at = metadata.updated_at;
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -862,8 +862,8 @@ mod tests {
 
     #[test]
     fn test_challenge_metadata_update_schema_version() {
-        let challenge_id = ChallengeId::new();
-        let mut metadata = ChallengeMetadata::new(challenge_id, serde_json::json!({}));
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut metadata = ChallengeMetadata::new(challenge_id.clone(), serde_json::json!({}));
 
         let initial_updated_at = metadata.updated_at;
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -889,19 +889,18 @@ mod tests {
         let mut global = GlobalMetadata::new("1.0.0".to_string());
         assert_eq!(global.challenge_count(), 0);
 
-        let challenge_id = ChallengeId::new();
-        global.challenges.insert(
-            challenge_id,
-            ChallengeMetadata::new(challenge_id, serde_json::json!({})),
+        let challenge_id = ChallengeId::new("test-challenge");
+        global.challenges.insert(challenge_id.clone(),
+            ChallengeMetadata::new(challenge_id.clone(), serde_json::json!({})),
         );
         assert_eq!(global.challenge_count(), 1);
     }
 
     #[test]
     fn test_metadata_serialization() {
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let metadata = ChallengeMetadata::new(
-            challenge_id,
+            challenge_id.clone(),
             serde_json::json!({
                 "timeout": 60,
                 "nested": {"key": "value"}
@@ -922,10 +921,9 @@ mod tests {
     #[test]
     fn test_global_metadata_serialization() {
         let mut global = GlobalMetadata::new("1.0.0".to_string());
-        let challenge_id = ChallengeId::new();
-        global.challenges.insert(
-            challenge_id,
-            ChallengeMetadata::new(challenge_id, serde_json::json!({})),
+        let challenge_id = ChallengeId::new("test-challenge");
+        global.challenges.insert(challenge_id.clone(),
+            ChallengeMetadata::new(challenge_id.clone(), serde_json::json!({})),
         );
 
         let serialized = bincode::serialize(&global);
@@ -944,9 +942,9 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         registry
-            .register_challenge(challenge_id, serde_json::json!({}))
+            .register_challenge(challenge_id.clone(), serde_json::json!({}))
             .unwrap();
 
         let result = registry.flush();
@@ -958,14 +956,14 @@ mod tests {
         let db = create_test_db();
         let mut registry = MetadataRegistry::new(&db).unwrap();
 
-        let challenge_id1 = ChallengeId::new();
-        let challenge_id2 = ChallengeId::new();
+        let challenge_id1 = ChallengeId::new("challenge-1");
+        let challenge_id2 = ChallengeId::new("challenge-2");
 
         registry
-            .register_challenge(challenge_id1, serde_json::json!({}))
+            .register_challenge(challenge_id1.clone(), serde_json::json!({}))
             .unwrap();
         registry
-            .register_challenge(challenge_id2, serde_json::json!({}))
+            .register_challenge(challenge_id2.clone(), serde_json::json!({}))
             .unwrap();
 
         registry

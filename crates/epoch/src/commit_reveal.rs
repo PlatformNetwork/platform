@@ -195,7 +195,7 @@ impl CommitRevealState {
         );
 
         Ok(FinalizedWeights {
-            challenge_id: self.challenge_id,
+            challenge_id: self.challenge_id.clone(),
             epoch: self.epoch,
             weights: aggregated,
             participating_validators: participating,
@@ -359,7 +359,7 @@ impl CommitRevealManager {
         challenge_id: ChallengeId,
     ) -> parking_lot::RwLockWriteGuard<'_, HashMap<(u64, ChallengeId), CommitRevealState>> {
         let mut states = self.states.write();
-        let key = (epoch, challenge_id);
+        let key = (epoch, challenge_id.clone());
 
         states
             .entry(key)
@@ -376,7 +376,7 @@ impl CommitRevealManager {
         commitment: WeightCommitment,
     ) -> Result<(), CommitRevealError> {
         let mut states = self.states.write();
-        let key = (epoch, challenge_id);
+        let key = (epoch, challenge_id.clone());
 
         let state = states
             .entry(key)
@@ -458,7 +458,7 @@ mod tests {
 
         let commitment = WeightCommitment {
             validator: validator.hotkey(),
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             epoch,
             commitment_hash: hash,
             timestamp: chrono::Utc::now(),
@@ -478,11 +478,11 @@ mod tests {
 
     #[test]
     fn test_commit_reveal_flow() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         // Submit commitment
         state
@@ -497,11 +497,11 @@ mod tests {
 
     #[test]
     fn test_commitment_mismatch() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, mut reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, mut reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         state
             .submit_commitment(EpochPhase::Commit, commitment)
@@ -516,11 +516,11 @@ mod tests {
 
     #[test]
     fn test_wrong_epoch_commitment() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (mut commitment, _) = create_test_commitment(&validator, 1, challenge_id);
+        let (mut commitment, _) = create_test_commitment(&validator, 1, challenge_id.clone());
         commitment.epoch = 1; // Wrong epoch
 
         let result = state.submit_commitment(EpochPhase::Commit, commitment);
@@ -535,12 +535,12 @@ mod tests {
 
     #[test]
     fn test_wrong_challenge() {
-        let challenge_id = ChallengeId::new();
-        let different_challenge = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let different_challenge = ChallengeId::new("different-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, _) = create_test_commitment(&validator, 0, different_challenge);
+        let (commitment, _) = create_test_commitment(&validator, 0, different_challenge.clone());
 
         let result = state.submit_commitment(EpochPhase::Commit, commitment);
         assert!(matches!(result, Err(CommitRevealError::WrongChallenge)));
@@ -548,11 +548,11 @@ mod tests {
 
     #[test]
     fn test_already_committed() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, _) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, _) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         state
             .submit_commitment(EpochPhase::Commit, commitment.clone())
@@ -563,11 +563,11 @@ mod tests {
 
     #[test]
     fn test_already_revealed() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         state
             .submit_commitment(EpochPhase::Commit, commitment)
@@ -582,11 +582,11 @@ mod tests {
 
     #[test]
     fn test_reveal_no_commitment() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (_, reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (_, reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         let result = state.submit_reveal(EpochPhase::Reveal, reveal);
         assert!(matches!(result, Err(CommitRevealError::NoCommitment)));
@@ -594,11 +594,11 @@ mod tests {
 
     #[test]
     fn test_reveal_wrong_epoch() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, mut reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, mut reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         state
             .submit_commitment(EpochPhase::Commit, commitment)
@@ -617,11 +617,11 @@ mod tests {
 
     #[test]
     fn test_finalize_insufficient_validators() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator = Keypair::generate();
-        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
 
         state
             .submit_commitment(EpochPhase::Commit, commitment)
@@ -641,16 +641,16 @@ mod tests {
 
     #[test]
     fn test_finalize_success() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator1 = Keypair::generate();
         let validator2 = Keypair::generate();
         let validator3 = Keypair::generate();
 
-        let (c1, r1) = create_test_commitment(&validator1, 0, challenge_id);
-        let (c2, r2) = create_test_commitment(&validator2, 0, challenge_id);
-        let (c3, r3) = create_test_commitment(&validator3, 0, challenge_id);
+        let (c1, r1) = create_test_commitment(&validator1, 0, challenge_id.clone());
+        let (c2, r2) = create_test_commitment(&validator2, 0, challenge_id.clone());
+        let (c3, r3) = create_test_commitment(&validator3, 0, challenge_id.clone());
 
         state.submit_commitment(EpochPhase::Commit, c1).unwrap();
         state.submit_commitment(EpochPhase::Commit, c2).unwrap();
@@ -669,16 +669,16 @@ mod tests {
 
     #[test]
     fn test_finalize_missing_reveals() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         let validator1 = Keypair::generate();
         let validator2 = Keypair::generate();
         let validator3 = Keypair::generate();
 
-        let (c1, r1) = create_test_commitment(&validator1, 0, challenge_id);
-        let (c2, _r2) = create_test_commitment(&validator2, 0, challenge_id);
-        let (c3, r3) = create_test_commitment(&validator3, 0, challenge_id);
+        let (c1, r1) = create_test_commitment(&validator1, 0, challenge_id.clone());
+        let (c2, _r2) = create_test_commitment(&validator2, 0, challenge_id.clone());
+        let (c3, r3) = create_test_commitment(&validator3, 0, challenge_id.clone());
 
         state.submit_commitment(EpochPhase::Commit, c1).unwrap();
         state.submit_commitment(EpochPhase::Commit, c2).unwrap();
@@ -696,13 +696,13 @@ mod tests {
 
     #[test]
     fn test_commitment_count() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         assert_eq!(state.commitment_count(), 0);
 
         let validator = Keypair::generate();
-        let (commitment, _) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, _) = create_test_commitment(&validator, 0, challenge_id.clone());
         state
             .submit_commitment(EpochPhase::Commit, commitment)
             .unwrap();
@@ -712,13 +712,13 @@ mod tests {
 
     #[test]
     fn test_reveal_count() {
-        let challenge_id = ChallengeId::new();
-        let mut state = CommitRevealState::new(0, challenge_id);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut state = CommitRevealState::new(0, challenge_id.clone());
 
         assert_eq!(state.reveal_count(), 0);
 
         let validator = Keypair::generate();
-        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id);
+        let (commitment, reveal) = create_test_commitment(&validator, 0, challenge_id.clone());
         state
             .submit_commitment(EpochPhase::Commit, commitment)
             .unwrap();
@@ -730,16 +730,16 @@ mod tests {
     #[test]
     fn test_commit_reveal_manager() {
         let manager = CommitRevealManager::new();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let epoch = 1;
 
         let validator = Keypair::generate();
-        let (commitment, reveal) = create_test_commitment(&validator, epoch, challenge_id);
+        let (commitment, reveal) = create_test_commitment(&validator, epoch, challenge_id.clone());
 
-        manager.commit(epoch, challenge_id, commitment).unwrap();
-        manager.reveal(epoch, challenge_id, reveal).unwrap();
+        manager.commit(epoch, challenge_id.clone(), commitment).unwrap();
+        manager.reveal(epoch, challenge_id.clone(), reveal).unwrap();
 
-        let finalized = manager.finalize(epoch, challenge_id, 0.3, 1).unwrap();
+        let finalized = manager.finalize(epoch, challenge_id.clone(), 0.3, 1).unwrap();
         assert_eq!(finalized.epoch, epoch);
     }
 
@@ -747,21 +747,21 @@ mod tests {
     fn test_commit_reveal_manager_default() {
         let manager = CommitRevealManager::default();
         // Verify initial state
-        let result = manager.finalize(0, ChallengeId::new(), 0.3, 1);
+        let result = manager.finalize(0, ChallengeId::new("test-challenge"), 0.3, 1);
         assert!(result.is_err()); // No commits exist
     }
 
     #[test]
     fn test_cleanup_old_epochs() {
         let manager = CommitRevealManager::new();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
 
         let validator = Keypair::generate();
 
         // Create states for epochs 0, 1, 2
         for epoch in 0..3 {
-            let (commitment, _) = create_test_commitment(&validator, epoch, challenge_id);
-            manager.commit(epoch, challenge_id, commitment).unwrap();
+            let (commitment, _) = create_test_commitment(&validator, epoch, challenge_id.clone());
+            manager.commit(epoch, challenge_id.clone(), commitment).unwrap();
         }
 
         // Cleanup, keeping only last 1 epoch
@@ -770,15 +770,15 @@ mod tests {
         // Should only have epoch 2 remaining (current 2 - keep 1 = cutoff 1)
         // Verify old epochs were removed by checking that get_or_create returns empty for epoch 0
         {
-            let states_map = manager.get_or_create(0, challenge_id);
-            let state = states_map.get(&(0, challenge_id)).unwrap();
+            let states_map = manager.get_or_create(0, challenge_id.clone());
+            let state = states_map.get(&(0, challenge_id.clone())).unwrap();
             assert_eq!(state.commitment_count(), 0);
         }
 
         // Verify epoch 2 still exists with commitment
         {
-            let states_map = manager.get_or_create(2, challenge_id);
-            let state = states_map.get(&(2, challenge_id)).unwrap();
+            let states_map = manager.get_or_create(2, challenge_id.clone());
+            let state = states_map.get(&(2, challenge_id.clone())).unwrap();
             assert_eq!(state.commitment_count(), 1);
         }
     }
@@ -786,19 +786,19 @@ mod tests {
     #[test]
     fn test_manager_get_or_create() {
         let manager = CommitRevealManager::new();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let epoch = 0;
 
         // First call creates the state
         {
-            let states = manager.get_or_create(epoch, challenge_id);
-            assert!(states.contains_key(&(epoch, challenge_id)));
+            let states = manager.get_or_create(epoch, challenge_id.clone());
+            assert!(states.contains_key(&(epoch, challenge_id.clone())));
         }
 
         // Second call retrieves existing - verify by checking it exists
         {
-            let states = manager.get_or_create(epoch, challenge_id);
-            let state = states.get(&(epoch, challenge_id)).unwrap();
+            let states = manager.get_or_create(epoch, challenge_id.clone());
+            let state = states.get(&(epoch, challenge_id.clone())).unwrap();
             assert_eq!(state.epoch, epoch);
             assert_eq!(state.challenge_id, challenge_id);
         }
@@ -807,10 +807,10 @@ mod tests {
     #[test]
     fn test_finalize_manager_no_state() {
         let manager = CommitRevealManager::new();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
 
         // Try to finalize without any commits
-        let result = manager.finalize(0, challenge_id, 0.3, 1);
+        let result = manager.finalize(0, challenge_id.clone(), 0.3, 1);
         assert!(matches!(
             result,
             Err(CommitRevealError::InsufficientValidators { .. })
@@ -820,30 +820,30 @@ mod tests {
     #[test]
     fn test_multiple_challenges_same_epoch() {
         let manager = CommitRevealManager::new();
-        let challenge1 = ChallengeId::new();
-        let challenge2 = ChallengeId::new();
+        let challenge1 = ChallengeId::new("challenge-1");
+        let challenge2 = ChallengeId::new("challenge-2");
         let epoch = 0;
 
         let validator1 = Keypair::generate();
         let validator2 = Keypair::generate();
 
-        let (c1_1, r1_1) = create_test_commitment(&validator1, epoch, challenge1);
-        let (c2_1, r2_1) = create_test_commitment(&validator2, epoch, challenge1);
-        let (c1_2, r1_2) = create_test_commitment(&validator1, epoch, challenge2);
+        let (c1_1, r1_1) = create_test_commitment(&validator1, epoch, challenge1.clone());
+        let (c2_1, r2_1) = create_test_commitment(&validator2, epoch, challenge1.clone());
+        let (c1_2, r1_2) = create_test_commitment(&validator1, epoch, challenge2.clone());
 
         // Submit to challenge1
-        manager.commit(epoch, challenge1, c1_1).unwrap();
-        manager.commit(epoch, challenge1, c2_1).unwrap();
-        manager.reveal(epoch, challenge1, r1_1).unwrap();
-        manager.reveal(epoch, challenge1, r2_1).unwrap();
+        manager.commit(epoch, challenge1.clone(), c1_1).unwrap();
+        manager.commit(epoch, challenge1.clone(), c2_1).unwrap();
+        manager.reveal(epoch, challenge1.clone(), r1_1).unwrap();
+        manager.reveal(epoch, challenge1.clone(), r2_1).unwrap();
 
         // Submit to challenge2
-        manager.commit(epoch, challenge2, c1_2).unwrap();
-        manager.reveal(epoch, challenge2, r1_2).unwrap();
+        manager.commit(epoch, challenge2.clone(), c1_2).unwrap();
+        manager.reveal(epoch, challenge2.clone(), r1_2).unwrap();
 
         // Finalize both
-        let finalized1 = manager.finalize(epoch, challenge1, 0.3, 2).unwrap();
-        let finalized2 = manager.finalize(epoch, challenge2, 0.3, 1).unwrap();
+        let finalized1 = manager.finalize(epoch, challenge1.clone(), 0.3, 2).unwrap();
+        let finalized2 = manager.finalize(epoch, challenge2.clone(), 0.3, 1).unwrap();
 
         assert_eq!(finalized1.challenge_id, challenge1);
         assert_eq!(finalized2.challenge_id, challenge2);

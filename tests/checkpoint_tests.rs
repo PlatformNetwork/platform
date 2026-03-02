@@ -21,7 +21,7 @@ fn create_test_data() -> CheckpointData {
     for i in 0..5 {
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: format!("submission_{}", i),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([i as u8; 32]),
             submission_hash: format!("hash_{}", i),
             scores: {
@@ -39,7 +39,7 @@ fn create_test_data() -> CheckpointData {
     for i in 0..3 {
         data.completed_evaluations.push(CompletedEvaluationState {
             submission_id: format!("completed_{}", i),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             final_score: 0.87 + (i as f64 * 0.01),
             epoch: 5,
             completed_at: chrono::Utc::now().timestamp_millis(),
@@ -120,7 +120,7 @@ fn test_multiple_checkpoints() {
         let mut data = CheckpointData::new(i, i / 2, 100);
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: format!("sub_{}", i),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([i as u8; 32]),
             submission_hash: format!("hash_{}", i),
             scores: HashMap::new(),
@@ -289,7 +289,7 @@ fn test_pending_evaluation_scores_persistence() {
 
     data.pending_evaluations.push(PendingEvaluationState {
         submission_id: "scored_submission".to_string(),
-        challenge_id: ChallengeId::new(),
+        challenge_id: ChallengeId::new("test-challenge"),
         miner: Hotkey([5u8; 32]),
         submission_hash: "hash_scored".to_string(),
         scores,
@@ -408,13 +408,13 @@ fn test_completed_evaluations_persistence() {
     let dir = tempdir().expect("Failed to create temp dir");
     let mut manager = CheckpointManager::new(dir.path(), 5).expect("Failed to create manager");
 
-    let challenge_id = ChallengeId::new();
+    let challenge_id = ChallengeId::new("test-challenge");
     let mut data = CheckpointData::new(1, 5, 100);
 
     for i in 0..5 {
         data.completed_evaluations.push(CompletedEvaluationState {
             submission_id: format!("completed_{}", i),
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             final_score: 0.80 + (i as f64 * 0.04),
             epoch: 5,
             completed_at: chrono::Utc::now().timestamp_millis(),
@@ -477,7 +477,7 @@ fn test_restoration_validates_epoch() {
     let mut data = CheckpointData::new(1, 2_000_000, 100); // Unreasonably high epoch
     data.pending_evaluations.push(PendingEvaluationState {
         submission_id: "test".to_string(),
-        challenge_id: ChallengeId::new(),
+        challenge_id: ChallengeId::new("test-challenge"),
         miner: Hotkey([1u8; 32]),
         submission_hash: "hash".to_string(),
         scores: HashMap::new(),
@@ -504,7 +504,7 @@ fn test_restoration_validates_submission_id() {
     let mut data = CheckpointData::new(1, 5, 100);
     data.pending_evaluations.push(PendingEvaluationState {
         submission_id: "".to_string(), // Empty submission_id is invalid
-        challenge_id: ChallengeId::new(),
+        challenge_id: ChallengeId::new("test-challenge"),
         miner: Hotkey([1u8; 32]),
         submission_hash: "hash".to_string(),
         scores: HashMap::new(),

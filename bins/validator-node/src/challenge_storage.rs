@@ -137,7 +137,7 @@ impl StorageBackend for ChallengeStorageBackend {
 
             let msg = P2PMessage::StorageProposal(StorageProposalMessage {
                 proposal_id,
-                challenge_id: ChallengeId(challenge_uuid),
+                challenge_id: ChallengeId::from_string(challenge_id),
                 proposer: kp.hotkey(),
                 key: key.to_vec(),
                 value: value.to_vec(),
@@ -177,7 +177,7 @@ impl StorageBackend for ChallengeStorageBackend {
             if let Some(local_tx) = &self.local_proposal_tx {
                 let local_proposal = StorageProposal {
                     proposal_id,
-                    challenge_id: ChallengeId(challenge_uuid),
+                    challenge_id: ChallengeId::from_string(challenge_id),
                     proposer: kp.hotkey(),
                     key: key.to_vec(),
                     value: value.to_vec(),

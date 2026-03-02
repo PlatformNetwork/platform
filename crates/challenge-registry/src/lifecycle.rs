@@ -274,10 +274,10 @@ mod tests {
 
     #[test]
     fn test_lifecycle_event_variants() {
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test");
 
         // Test Registered event
-        let registered_event = LifecycleEvent::Registered { challenge_id };
+        let registered_event = LifecycleEvent::Registered { challenge_id: challenge_id.clone() };
         match registered_event {
             LifecycleEvent::Registered { challenge_id: id } => {
                 assert_eq!(id, challenge_id);
@@ -286,7 +286,7 @@ mod tests {
         }
 
         // Test Unregistered event
-        let unregistered_event = LifecycleEvent::Unregistered { challenge_id };
+        let unregistered_event = LifecycleEvent::Unregistered { challenge_id: challenge_id.clone() };
         match unregistered_event {
             LifecycleEvent::Unregistered { challenge_id: id } => {
                 assert_eq!(id, challenge_id);
@@ -296,7 +296,7 @@ mod tests {
 
         // Test StateChanged event
         let state_changed_event = LifecycleEvent::StateChanged {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             old_state: LifecycleState::Registered,
             new_state: LifecycleState::Starting,
         };
@@ -317,7 +317,7 @@ mod tests {
         let old_version = ChallengeVersion::new(1, 0, 0);
         let new_version = ChallengeVersion::new(1, 1, 0);
         let version_changed_event = LifecycleEvent::VersionChanged {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             old_version: old_version.clone(),
             new_version: new_version.clone(),
         };
@@ -336,7 +336,7 @@ mod tests {
 
         // Test Restarted event
         let restarted_event = LifecycleEvent::Restarted {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             previous_restart_id: Some("old".to_string()),
             new_restart_id: Some("new".to_string()),
             previous_config_version: 1,

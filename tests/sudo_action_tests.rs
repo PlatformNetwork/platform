@@ -292,7 +292,7 @@ fn test_sudo_action_serialization_roundtrip() {
         },
         SudoAction::Resume,
         SudoAction::SetEmission {
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             emission_weight: 0.5,
         },
     ];
@@ -364,7 +364,7 @@ fn test_all_sudo_action_variants_can_be_signed() {
             config: NetworkConfig::default(),
         },
         SudoAction::SetEmission {
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             emission_weight: 0.5,
         },
         SudoAction::SetRequiredVersion {
@@ -460,10 +460,10 @@ fn test_force_state_update_action() {
 
 #[test]
 fn test_set_emission_action() {
-    let challenge_id = ChallengeId::new();
+    let challenge_id = ChallengeId::new("test-challenge");
 
     let action = SudoAction::SetEmission {
-        challenge_id,
+        challenge_id: challenge_id.clone(),
         emission_weight: 0.75,
     };
 

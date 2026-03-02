@@ -924,12 +924,10 @@ mod tests {
     fn test_evaluation_result() {
         let kp = Keypair::generate();
         let job_id = uuid::Uuid::new_v4();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let score = Score::new(0.85, 1.0);
 
-        let result = EvaluationResult::new(
-            job_id,
-            challenge_id,
+        let result = EvaluationResult::new(job_id, challenge_id.clone(),
             "agent123".to_string(),
             score,
             100,
@@ -945,8 +943,8 @@ mod tests {
     #[test]
     fn test_weight_commitment_message() {
         let hotkey = Hotkey([5u8; 32]);
-        let challenge_id = ChallengeId::new();
-        let commitment = WeightCommitmentMessage::new(hotkey.clone(), challenge_id, 10, [0xab; 32]);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let commitment = WeightCommitmentMessage::new(hotkey.clone(), challenge_id.clone(), 10, [0xab; 32]);
 
         assert_eq!(commitment.validator, hotkey);
         assert_eq!(commitment.challenge_id, challenge_id);
@@ -957,7 +955,7 @@ mod tests {
     #[test]
     fn test_weight_reveal_message() {
         let hotkey = Hotkey([6u8; 32]);
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let weights = vec![
             WeightEntry {
                 agent_hash: "agent1".to_string(),
@@ -969,7 +967,7 @@ mod tests {
             },
         ];
         let reveal =
-            WeightRevealMessage::new(hotkey.clone(), challenge_id, 10, weights, vec![1, 2, 3, 4]);
+            WeightRevealMessage::new(hotkey.clone(), challenge_id.clone(), 10, weights, vec![1, 2, 3, 4]);
 
         assert_eq!(reveal.validator, hotkey);
         assert_eq!(reveal.challenge_id, challenge_id);
@@ -988,7 +986,7 @@ mod tests {
 
     #[test]
     fn test_job_assignment() {
-        let job = Job::new(ChallengeId::new(), "abc123".to_string());
+        let job = Job::new(ChallengeId::new("test-challenge"), "abc123".to_string());
 
         let hotkey = Hotkey([7u8; 32]);
         let assignment = JobAssignment {
@@ -1194,7 +1192,7 @@ mod tests {
         let _ = NetworkMessage::Vote(Vote::approve(uuid::Uuid::new_v4(), hotkey.clone()));
 
         // JobAssignment
-        let job = Job::new(ChallengeId::new(), "test".to_string());
+        let job = Job::new(ChallengeId::new("test-challenge"), "test".to_string());
         let _ = NetworkMessage::JobAssignment(JobAssignment {
             job,
             assigned_to: hotkey.clone(),
@@ -1204,7 +1202,7 @@ mod tests {
         // EvaluationResult
         let _ = NetworkMessage::EvaluationResult(EvaluationResult::new(
             uuid::Uuid::new_v4(),
-            ChallengeId::new(),
+            ChallengeId::new("test-challenge"),
             "hash".to_string(),
             crate::Score::new(0.5, 1.0),
             100,
@@ -1220,7 +1218,7 @@ mod tests {
         // WeightCommitment
         let _ = NetworkMessage::WeightCommitment(WeightCommitmentMessage::new(
             hotkey.clone(),
-            ChallengeId::new(),
+            ChallengeId::new("test-challenge"),
             1,
             [0; 32],
         ));
@@ -1228,7 +1226,7 @@ mod tests {
         // WeightReveal
         let _ = NetworkMessage::WeightReveal(WeightRevealMessage::new(
             hotkey.clone(),
-            ChallengeId::new(),
+            ChallengeId::new("test-challenge"),
             1,
             vec![],
             vec![1, 2, 3],
@@ -1324,8 +1322,8 @@ mod tests {
 
     #[test]
     fn test_challenge_weight_allocation_new() {
-        let challenge_id = ChallengeId::new();
-        let allocation = ChallengeWeightAllocation::new(challenge_id, 1, 0.7);
+        let challenge_id = ChallengeId::new("test-challenge");
+        let allocation = ChallengeWeightAllocation::new(challenge_id.clone(), 1, 0.7);
         assert_eq!(allocation.challenge_id, challenge_id);
         assert_eq!(allocation.mechanism_id, 1);
         assert_eq!(allocation.weight_ratio, 0.7);

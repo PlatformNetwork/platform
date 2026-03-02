@@ -314,7 +314,7 @@ fn test_five_validator_consensus_proposal_with_challenge() {
 fn test_consensus_state_manager_with_challenges() {
     let state_manager = StateManager::for_netuid(100);
 
-    let challenge_id = ChallengeId::new();
+    let challenge_id = ChallengeId::new("test-challenge");
     let config = ConsensusChallengeConfig {
         id: challenge_id,
         name: "term-challenge".to_string(),

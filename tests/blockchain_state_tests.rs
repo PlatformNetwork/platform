@@ -285,7 +285,7 @@ fn test_state_hash_unique_per_modification() {
 
     // Add challenge
     let config = ChallengeConfig {
-        id: ChallengeId::new(),
+        id: ChallengeId::new("test-challenge"),
         name: "Test Challenge".to_string(),
         weight: 50,
         is_active: true,
@@ -411,7 +411,7 @@ fn test_full_state_lifecycle_with_block_linking() {
 
     // Add challenge
     let challenge = ChallengeConfig {
-        id: ChallengeId::new(),
+        id: ChallengeId::new("test-challenge"),
         name: "Integration Test Challenge".to_string(),
         weight: 100,
         is_active: true,
@@ -566,9 +566,9 @@ fn test_state_determinism() {
 fn test_challenge_removal_changes_hash() {
     let mut state = ChainState::new(100);
 
-    let challenge_id = ChallengeId::new();
+    let challenge_id = ChallengeId::new("test-challenge");
     let config = ChallengeConfig {
-        id: challenge_id,
+        id: challenge_id.clone(),
         name: "Removable Challenge".to_string(),
         weight: 50,
         is_active: true,
@@ -597,7 +597,7 @@ fn test_evaluation_record_lifecycle() {
     // Create evaluation record
     let record = EvaluationRecord {
         submission_id: "test_submission_001".to_string(),
-        challenge_id: ChallengeId::new(),
+        challenge_id: ChallengeId::new("test-challenge"),
         miner: Keypair::generate().hotkey(),
         agent_hash: "agent_hash_123".to_string(),
         evaluations: HashMap::new(),

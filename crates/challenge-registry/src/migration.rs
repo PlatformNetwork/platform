@@ -319,7 +319,7 @@ impl ChallengeMigration {
 
     /// Start executing a migration plan
     pub fn start_migration(&self, plan: MigrationPlan) -> RegistryResult<()> {
-        let challenge_id = plan.challenge_id;
+        let challenge_id = plan.challenge_id.clone();
 
         let mut plans = self.active_plans.write();
         if plans.contains_key(&challenge_id) {
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn test_migration_plan_creation() {
         let migration = ChallengeMigration::new();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
 
         let plan = migration
             .create_plan(
@@ -452,11 +452,11 @@ mod tests {
     #[test]
     fn test_migration_execution() {
         let migration = ChallengeMigration::new();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
 
         let plan = migration
             .create_plan(
-                id,
+                id.clone(),
                 "test".to_string(),
                 ChallengeVersion::new(1, 0, 0),
                 ChallengeVersion::new(1, 0, 1),
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn test_duplicate_migration_prevention() {
         let migration = ChallengeMigration::new();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
 
         let plan = migration
             .create_plan(
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn test_major_version_migration() {
         let migration = ChallengeMigration::new();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
 
         let plan = migration
             .create_plan(

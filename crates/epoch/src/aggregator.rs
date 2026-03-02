@@ -85,7 +85,7 @@ impl WeightAggregator {
                     hotkey: weight.hotkey.clone(),
                     weight: weight.weight,
                     emission: miner_emission,
-                    challenge_id: challenge.id,
+                    challenge_id: challenge.id.clone(),
                 });
             }
         }
@@ -125,8 +125,8 @@ impl WeightAggregator {
                 // Use the first challenge_id (or could aggregate differently)
                 let challenge_id = emissions
                     .first()
-                    .map(|e| e.challenge_id)
-                    .unwrap_or_else(ChallengeId::new);
+                    .map(|e| e.challenge_id.clone())
+                    .unwrap_or_else(|| ChallengeId::default());
 
                 AgentEmission {
                     hotkey,
@@ -151,7 +151,7 @@ impl WeightAggregator {
                 suspicious.push(SuspiciousValidator {
                     hotkey: validator.clone(),
                     reason: SuspicionReason::ExcludedFromConsensus,
-                    challenge_id: fw.challenge_id,
+                    challenge_id: fw.challenge_id.clone(),
                     epoch: fw.epoch,
                 });
             }
@@ -230,7 +230,7 @@ mod tests {
 
     fn create_test_challenge(name: &str, weight: f64) -> ChallengeMetadata {
         ChallengeMetadata {
-            id: ChallengeId::new(),
+            id: ChallengeId::new(name),
             name: name.to_string(),
             description: "Test".to_string(),
             version: "1.0".to_string(),
@@ -253,9 +253,9 @@ mod tests {
         let mut finalized = HashMap::new();
 
         finalized.insert(
-            challenge1.id,
+            challenge1.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge1.id,
+                challenge_id: challenge1.id.clone(),
                 epoch: 0,
                 weights: vec![
                     WeightAssignment::new("agent1".to_string(), 0.7),
@@ -269,9 +269,9 @@ mod tests {
         );
 
         finalized.insert(
-            challenge2.id,
+            challenge2.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge2.id,
+                challenge_id: challenge2.id.clone(),
                 epoch: 0,
                 weights: vec![
                     WeightAssignment::new("agent1".to_string(), 0.5),
@@ -341,9 +341,9 @@ mod tests {
 
         // Same agent in both challenges
         finalized.insert(
-            challenge1.id,
+            challenge1.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge1.id,
+                challenge_id: challenge1.id.clone(),
                 epoch: 0,
                 weights: vec![WeightAssignment::new("agent1".to_string(), 1.0)],
                 participating_validators: vec![],
@@ -354,9 +354,9 @@ mod tests {
         );
 
         finalized.insert(
-            challenge2.id,
+            challenge2.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge2.id,
+                challenge_id: challenge2.id.clone(),
                 epoch: 0,
                 weights: vec![WeightAssignment::new("agent1".to_string(), 1.0)],
                 participating_validators: vec![],
@@ -383,7 +383,7 @@ mod tests {
         let validator2 = Keypair::generate().hotkey();
 
         let finalized = vec![FinalizedWeights {
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             epoch: 0,
             weights: vec![],
             participating_validators: vec![],
@@ -406,7 +406,7 @@ mod tests {
 
         let history = vec![
             FinalizedWeights {
-                challenge_id: ChallengeId::new(),
+                challenge_id: ChallengeId::new("test-challenge"),
                 epoch: 0,
                 weights: vec![],
                 participating_validators: vec![validator.clone()],
@@ -415,7 +415,7 @@ mod tests {
                 finalized_at: chrono::Utc::now(),
             },
             FinalizedWeights {
-                challenge_id: ChallengeId::new(),
+                challenge_id: ChallengeId::new("test-challenge"),
                 epoch: 1,
                 weights: vec![],
                 participating_validators: vec![validator.clone()],
@@ -439,7 +439,7 @@ mod tests {
 
         let history = vec![
             FinalizedWeights {
-                challenge_id: ChallengeId::new(),
+                challenge_id: ChallengeId::new("test-challenge"),
                 epoch: 0,
                 weights: vec![],
                 participating_validators: vec![validator.clone()],
@@ -448,7 +448,7 @@ mod tests {
                 finalized_at: chrono::Utc::now(),
             },
             FinalizedWeights {
-                challenge_id: ChallengeId::new(),
+                challenge_id: ChallengeId::new("test-challenge"),
                 epoch: 1,
                 weights: vec![],
                 participating_validators: vec![],
@@ -498,9 +498,9 @@ mod tests {
         let mut finalized = HashMap::new();
 
         finalized.insert(
-            challenge1.id,
+            challenge1.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge1.id,
+                challenge_id: challenge1.id.clone(),
                 epoch: 0,
                 weights: vec![
                     WeightAssignment::new("agent1".to_string(), 0.8),
@@ -514,9 +514,9 @@ mod tests {
         );
 
         finalized.insert(
-            challenge2.id,
+            challenge2.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge2.id,
+                challenge_id: challenge2.id.clone(),
                 epoch: 0,
                 weights: vec![
                     WeightAssignment::new("agent3".to_string(), 0.4),
@@ -548,9 +548,9 @@ mod tests {
 
         let mut finalized = HashMap::new();
         finalized.insert(
-            challenge.id,
+            challenge.id.clone(),
             FinalizedWeights {
-                challenge_id: challenge.id,
+                challenge_id: challenge.id.clone(),
                 epoch: 0,
                 weights: vec![], // Empty weights
                 participating_validators: vec![],

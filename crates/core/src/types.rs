@@ -62,48 +62,61 @@ impl fmt::Display for Hotkey {
     }
 }
 
-/// Challenge ID
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ChallengeId(pub uuid::Uuid);
+/// Challenge ID — a human-readable string name (e.g. "bounty-challenge").
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+pub struct ChallengeId(pub String);
 
 impl ChallengeId {
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4())
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
     }
 
-    pub fn from_uuid(uuid: uuid::Uuid) -> Self {
-        Self(uuid)
-    }
-
+    /// Accept any string (UUID or name) and normalise it.
+    /// If the input is a valid UUID, it is kept as-is for backwards compat;
+    /// otherwise the raw string is stored.
     pub fn from_string(s: &str) -> Self {
-        match uuid::Uuid::parse_str(s) {
-            Ok(uuid) => Self(uuid),
-            Err(_) => {
-                // If not a valid UUID, create one from hash of string
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&s, &mut hasher);
-                let hash = std::hash::Hasher::finish(&hasher);
-                Self(uuid::Uuid::from_u64_pair(hash, hash.wrapping_mul(31)))
-            }
-        }
+        Self(s.to_string())
+    }
+
+    /// Backwards-compat helper used during migration only.
+    pub fn from_uuid(uuid: uuid::Uuid) -> Self {
+        Self(uuid.to_string())
     }
 }
 
 impl Default for ChallengeId {
     fn default() -> Self {
-        Self::new()
+        Self(String::new())
     }
 }
 
 impl fmt::Debug for ChallengeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Challenge({})", &self.0.to_string()[..8])
+        write!(f, "Challenge({})", self.0)
     }
 }
 
 impl fmt::Display for ChallengeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for ChallengeId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for ChallengeId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl AsRef<str> for ChallengeId {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -329,8 +342,8 @@ mod tests {
 
     #[test]
     fn test_challenge_id() {
-        let id1 = ChallengeId::new();
-        let id2 = ChallengeId::new();
+        let id1 = ChallengeId::new("challenge-1");
+        let id2 = ChallengeId::new("challenge-2");
         assert_ne!(id1, id2);
     }
 
@@ -350,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_challenge_id_display() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         let display = format!("{}", id);
         assert!(!display.is_empty());
     }
@@ -380,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_job_creation() {
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let job = Job::new(challenge_id, "agent123".to_string());
         assert_eq!(job.status, JobStatus::Pending);
         assert!(job.assigned_validator.is_none());
@@ -403,11 +416,11 @@ mod tests {
 
     #[test]
     fn test_challenge_id_debug() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         let debug = format!("{:?}", id);
-        // Debug contains the UUID string
+        // Debug contains the name string
         assert!(!debug.is_empty());
-        assert!(debug.len() > 10); // UUID is at least 36 chars
+        assert!(debug.len() > 10);
     }
 
     #[test]
@@ -465,12 +478,12 @@ mod tests {
     fn test_challenge_id_hash() {
         use std::collections::HashMap;
 
-        let id1 = ChallengeId::new();
-        let id2 = ChallengeId::new();
+        let id1 = ChallengeId::new("challenge-1");
+        let id2 = ChallengeId::new("challenge-2");
 
         let mut map: HashMap<ChallengeId, i32> = HashMap::new();
-        map.insert(id1, 1);
-        map.insert(id2, 2);
+        map.insert(id1.clone(), 1);
+        map.insert(id2.clone(), 2);
 
         assert_eq!(map.get(&id1), Some(&1));
         assert_eq!(map.get(&id2), Some(&2));
@@ -508,15 +521,15 @@ mod tests {
     fn test_challenge_id_from_uuid() {
         let uuid = uuid::Uuid::new_v4();
         let challenge_id = ChallengeId::from_uuid(uuid);
-        assert_eq!(challenge_id.0, uuid);
+        assert_eq!(challenge_id.0, uuid.to_string());
         assert_eq!(format!("{}", challenge_id), format!("{}", uuid));
     }
 
     #[test]
     fn test_challenge_id_default() {
         let id1 = ChallengeId::default();
-        let id2 = ChallengeId::default();
-        // Each default should be unique
+        assert_eq!(id1.0, ""); // Default is empty string
+        let id2 = ChallengeId::new("test");
         assert_ne!(id1, id2);
     }
 }

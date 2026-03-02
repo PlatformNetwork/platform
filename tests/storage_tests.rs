@@ -51,7 +51,7 @@ mod main_storage {
             ChallengeConfig::default(),
         );
 
-        let id = challenge.id;
+        let id = challenge.id.clone();
 
         // Save
         storage.save_challenge(&challenge).unwrap();
@@ -146,7 +146,7 @@ mod storage_errors {
     fn test_load_nonexistent_challenge() {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         assert!(storage.load_challenge(&id).unwrap().is_none());
     }
 
@@ -163,7 +163,7 @@ mod storage_errors {
     fn test_delete_nonexistent_challenge() {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         assert!(!storage.delete_challenge(&id).unwrap());
     }
 

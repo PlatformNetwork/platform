@@ -973,7 +973,7 @@ impl RpcHandler {
 
         // Find in wasm_challenge_configs by UUID or name
         let config = if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
-            let cid = platform_core::ChallengeId(uuid);
+            let cid = platform_core::ChallengeId(uuid.to_string());
             chain.wasm_challenge_configs.get(&cid)
         } else {
             chain
@@ -1041,13 +1041,13 @@ impl RpcHandler {
 
         // Resolve challenge ID (might be name)
         let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
-            Some(platform_core::ChallengeId(uuid))
+            Some(platform_core::ChallengeId(uuid.to_string()))
         } else {
             chain
                 .wasm_challenge_configs
                 .values()
                 .find(|c| c.name == challenge_id)
-                .map(|c| c.challenge_id)
+                .map(|c| c.challenge_id.clone())
         };
 
         let cid =
@@ -1163,7 +1163,7 @@ impl RpcHandler {
 
             // Try parsing as UUID first
             if let Ok(uuid) = uuid::Uuid::parse_str(&challenge_id) {
-                let cid = platform_core::ChallengeId(uuid);
+                let cid = platform_core::ChallengeId(uuid.to_string());
                 if chain.challenge_routes.contains_key(&cid) {
                     (challenge_id.clone(), Some(cid))
                 } else {
@@ -1177,13 +1177,13 @@ impl RpcHandler {
                     .find(|c| c.name == challenge_id);
 
                 if let Some(config) = found {
-                    (config.challenge_id.0.to_string(), Some(config.challenge_id))
+                    (config.challenge_id.0.clone(), Some(config.challenge_id.clone()))
                 } else {
                     // Also check legacy challenges by name
                     let legacy = chain.challenges.values().find(|c| c.name == challenge_id);
 
                     if let Some(c) = legacy {
-                        (c.id.to_string(), Some(c.id))
+                        (c.id.to_string(), Some(c.id.clone()))
                     } else {
                         (challenge_id.clone(), None)
                     }
@@ -1196,7 +1196,7 @@ impl RpcHandler {
             let chain = self.chain_state.read();
             let challenge_uuid = uuid::Uuid::parse_str(&resolved_id)
                 .ok()
-                .map(platform_core::ChallengeId);
+                .map(|u| platform_core::ChallengeId(u.to_string()));
 
             let has_routes = challenge_uuid
                 .as_ref()
@@ -1237,7 +1237,7 @@ impl RpcHandler {
             let chain = self.chain_state.read();
             let challenge_uuid_check = uuid::Uuid::parse_str(&challenge_id)
                 .ok()
-                .map(platform_core::ChallengeId);
+                .map(|u| platform_core::ChallengeId(u.to_string()));
 
             if let Some(cid) = challenge_uuid_check.as_ref() {
                 if let Some(chain_routes) = chain.challenge_routes.get(cid) {
@@ -1279,7 +1279,7 @@ impl RpcHandler {
             let chain = self.chain_state.read();
             let challenge_uuid = uuid::Uuid::parse_str(&challenge_id)
                 .ok()
-                .map(platform_core::ChallengeId);
+                .map(|u| platform_core::ChallengeId(u.to_string()));
 
             challenge_uuid
                 .as_ref()
@@ -2774,9 +2774,9 @@ mod tests {
 
         // Add a WASM challenge config
         let kp = Keypair::generate();
-        let challenge_id = platform_core::ChallengeId::new();
+        let challenge_id = platform_core::ChallengeId::new("test-challenge");
         let wasm_config = platform_core::WasmChallengeConfig {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             name: "test-challenge".to_string(),
             description: "Test description".to_string(),
             owner: kp.hotkey(),
@@ -2787,9 +2787,9 @@ mod tests {
 
         {
             let mut cs = handler.chain_state.write();
-            cs.wasm_challenge_configs.insert(challenge_id, wasm_config);
+            cs.wasm_challenge_configs.insert(challenge_id.clone(), wasm_config);
             cs.register_challenge_routes(
-                challenge_id,
+                challenge_id.clone(),
                 vec![
                     platform_core::ChallengeRouteInfo {
                         method: "GET".to_string(),
@@ -2824,9 +2824,9 @@ mod tests {
         let handler = create_handler();
 
         let kp = Keypair::generate();
-        let challenge_id = platform_core::ChallengeId::new();
+        let challenge_id = platform_core::ChallengeId::new("test-challenge");
         let wasm_config = platform_core::WasmChallengeConfig {
-            challenge_id,
+            challenge_id: challenge_id.clone(),
             name: "my-challenge".to_string(),
             description: "".to_string(),
             owner: kp.hotkey(),
@@ -2837,9 +2837,9 @@ mod tests {
 
         {
             let mut cs = handler.chain_state.write();
-            cs.wasm_challenge_configs.insert(challenge_id, wasm_config);
+            cs.wasm_challenge_configs.insert(challenge_id.clone(), wasm_config);
             cs.register_challenge_routes(
-                challenge_id,
+                challenge_id.clone(),
                 vec![platform_core::ChallengeRouteInfo {
                     method: "GET".to_string(),
                     path: "/status".to_string(),

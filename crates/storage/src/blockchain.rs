@@ -921,10 +921,10 @@ mod tests {
         let genesis = Block::genesis(proposer.clone(), 1000);
         storage.append_block(genesis.clone()).expect("Failed");
 
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let transitions = vec![
-            StateTransition::challenge_registered(challenge_id, [42u8; 32]),
-            StateTransition::state_root_update(challenge_id, [0u8; 32], [1u8; 32]),
+            StateTransition::challenge_registered(challenge_id.clone(), [42u8; 32]),
+            StateTransition::state_root_update(challenge_id.clone(), [0u8; 32], [1u8; 32]),
         ];
 
         let mut header1 =
@@ -947,12 +947,12 @@ mod tests {
         let mut storage = BlockchainStorage::new(&db).expect("Failed to create storage");
 
         let proposer = create_test_hotkey(1);
-        let challenge1 = ChallengeId::new();
-        let challenge2 = ChallengeId::new();
+        let challenge1 = ChallengeId::new("challenge-1");
+        let challenge2 = ChallengeId::new("challenge-2");
 
         let mut header = BlockHeader::genesis(proposer.clone(), 1000)
-            .with_challenge_root(challenge1, [11u8; 32])
-            .with_challenge_root(challenge2, [22u8; 32]);
+            .with_challenge_root(challenge1.clone(), [11u8; 32])
+            .with_challenge_root(challenge2.clone(), [22u8; 32]);
         header.state_root = [99u8; 32];
 
         let block = Block::new(header, vec![]);
@@ -979,7 +979,7 @@ mod tests {
         assert_eq!(root2, [22u8; 32]);
 
         // Non-existent challenge
-        let fake_challenge = ChallengeId::new();
+        let fake_challenge = ChallengeId::new("test-challenge");
         let no_root = storage
             .get_challenge_root_at_block(0, &fake_challenge)
             .expect("Failed");
@@ -1114,16 +1114,16 @@ mod tests {
     #[test]
     fn test_block_hash_determinism() {
         let proposer = create_test_hotkey(1);
-        let challenge1 = ChallengeId::new();
-        let challenge2 = ChallengeId::new();
+        let challenge1 = ChallengeId::new("challenge-1");
+        let challenge2 = ChallengeId::new("challenge-2");
 
         let header1 = BlockHeader::new(1, [0u8; 32], [1u8; 32], 1000, proposer.clone())
-            .with_challenge_root(challenge1, [11u8; 32])
-            .with_challenge_root(challenge2, [22u8; 32]);
+            .with_challenge_root(challenge1.clone(), [11u8; 32])
+            .with_challenge_root(challenge2.clone(), [22u8; 32]);
 
         let header2 = BlockHeader::new(1, [0u8; 32], [1u8; 32], 1000, proposer.clone())
-            .with_challenge_root(challenge2, [22u8; 32])
-            .with_challenge_root(challenge1, [11u8; 32]);
+            .with_challenge_root(challenge2.clone(), [22u8; 32])
+            .with_challenge_root(challenge1.clone(), [11u8; 32]);
 
         // Same data, different insertion order - should produce same hash
         let hash1 = BlockchainStorage::compute_block_hash(&header1);
@@ -1133,15 +1133,15 @@ mod tests {
 
     #[test]
     fn test_state_transition_constructors() {
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
 
-        let reg = StateTransition::challenge_registered(challenge_id, [1u8; 32]);
+        let reg = StateTransition::challenge_registered(challenge_id.clone(), [1u8; 32]);
         assert!(matches!(reg, StateTransition::ChallengeRegistered { .. }));
 
-        let update = StateTransition::state_root_update(challenge_id, [0u8; 32], [1u8; 32]);
+        let update = StateTransition::state_root_update(challenge_id.clone(), [0u8; 32], [1u8; 32]);
         assert!(matches!(update, StateTransition::StateRootUpdate { .. }));
 
-        let migration = StateTransition::migration_applied(Some(challenge_id), 1);
+        let migration = StateTransition::migration_applied(Some(challenge_id.clone()), 1);
         assert!(matches!(
             migration,
             StateTransition::MigrationApplied { .. }

@@ -347,11 +347,11 @@ impl RequestLimits {
     /// Development-friendly limits.
     pub fn development() -> Self {
         Self {
-            max_request_bytes: 1024 * 1024,
-            max_response_bytes: 2 * 1024 * 1024,
+            max_request_bytes: 2 * 1024 * 1024,
+            max_response_bytes: 4 * 1024 * 1024,
             max_header_bytes: 64 * 1024,
-            timeout_ms: 15_000,
-            max_requests: 512,
+            timeout_ms: 120_000,
+            max_requests: 1024,
             max_redirects: 4,
         }
     }

@@ -560,7 +560,7 @@ mod tests {
     async fn test_challenges_handler_with_challenges() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let config = ChallengeConfig {
             mechanism_id: 1,
             emission_weight: 1.0,
@@ -572,7 +572,7 @@ mod tests {
             wasm: WasmConfig::default(),
         };
         let challenge = Challenge {
-            id: challenge_id,
+            id: challenge_id.clone(),
             name: "Test Challenge".to_string(),
             description: "Test description".to_string(),
             code_hash: "abc123".to_string(),
@@ -589,7 +589,7 @@ mod tests {
             .chain_state
             .write()
             .challenges
-            .insert(challenge_id, challenge);
+            .insert(challenge_id.clone(), challenge);
 
         let response = challenges_handler(State(state)).await;
         let challenges = response.0.data.unwrap();
@@ -601,7 +601,7 @@ mod tests {
     async fn test_challenge_handler_found() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let config = ChallengeConfig {
             mechanism_id: 1,
             emission_weight: 1.0,
@@ -613,7 +613,7 @@ mod tests {
             wasm: WasmConfig::default(),
         };
         let challenge = Challenge {
-            id: challenge_id,
+            id: challenge_id.clone(),
             name: "Test Challenge".to_string(),
             description: "Test description".to_string(),
             code_hash: "abc123".to_string(),
@@ -630,7 +630,7 @@ mod tests {
             .chain_state
             .write()
             .challenges
-            .insert(challenge_id, challenge);
+            .insert(challenge_id.clone(), challenge);
 
         let response = challenge_handler(State(state), Path(challenge_id.to_string())).await;
         assert!(response.is_ok());
@@ -651,7 +651,7 @@ mod tests {
     async fn test_challenge_handler_find_by_name() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
         let config = ChallengeConfig {
             mechanism_id: 1,
             emission_weight: 1.0,
@@ -663,7 +663,7 @@ mod tests {
             wasm: WasmConfig::default(),
         };
         let challenge = Challenge {
-            id: challenge_id,
+            id: challenge_id.clone(),
             name: "test-challenge".to_string(),
             description: "Test description".to_string(),
             code_hash: "abc123".to_string(),
@@ -680,7 +680,7 @@ mod tests {
             .chain_state
             .write()
             .challenges
-            .insert(challenge_id, challenge);
+            .insert(challenge_id.clone(), challenge);
 
         let response = challenge_handler(State(state), Path("test-challenge".to_string())).await;
         assert!(response.is_ok());
@@ -857,7 +857,7 @@ mod tests {
             for i in 0..5 {
                 let job = platform_core::Job {
                     id: uuid::Uuid::new_v4(),
-                    challenge_id: ChallengeId::new(),
+                    challenge_id: ChallengeId::new("test-challenge"),
                     agent_hash: format!("hash{}", i),
                     status: platform_core::JobStatus::Pending,
                     created_at: chrono::Utc::now(),
@@ -1097,7 +1097,7 @@ mod tests {
         let job_id = uuid::Uuid::new_v4();
         let job = platform_core::Job {
             id: job_id,
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             agent_hash: "hash123".to_string(),
             status: platform_core::JobStatus::Pending,
             created_at: chrono::Utc::now(),

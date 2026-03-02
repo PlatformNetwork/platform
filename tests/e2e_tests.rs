@@ -56,7 +56,7 @@ fn test_e2e_storage_challenge_lifecycle() {
         ChallengeConfig::default(),
     );
 
-    let challenge_id = challenge.id;
+    let challenge_id = challenge.id.clone();
 
     // Add to state
     state.add_challenge(challenge.clone());
@@ -107,11 +107,11 @@ fn test_e2e_job_queue() {
     let sudo = Keypair::generate();
     let mut state = ChainState::new(sudo.hotkey(), NetworkConfig::default());
 
-    let challenge_id = ChallengeId::new();
+    let challenge_id = ChallengeId::new("test-challenge");
 
     // Add jobs
     for i in 0..5 {
-        let job = Job::new(challenge_id, format!("agent_{}", i));
+        let job = Job::new(challenge_id.clone(), format!("agent_{}", i));
         state.add_job(job);
     }
 

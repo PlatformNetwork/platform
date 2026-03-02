@@ -155,14 +155,14 @@ mod state_errors {
     fn test_get_nonexistent_challenge() {
         let sudo = Keypair::generate();
         let state = ChainState::new(sudo.hotkey(), NetworkConfig::default());
-        assert!(state.get_challenge(&ChallengeId::new()).is_none());
+        assert!(state.get_challenge(&ChallengeId::new("test-challenge")).is_none());
     }
 
     #[test]
     fn test_remove_nonexistent_challenge() {
         let sudo = Keypair::generate();
         let mut state = ChainState::new(sudo.hotkey(), NetworkConfig::default());
-        let removed = state.remove_challenge(&ChallengeId::new());
+        let removed = state.remove_challenge(&ChallengeId::new("test-challenge"));
         assert!(removed.is_none());
     }
 
@@ -218,7 +218,7 @@ mod storage_errors {
     fn test_load_nonexistent_challenge() {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
-        let loaded = storage.load_challenge(&ChallengeId::new()).unwrap();
+        let loaded = storage.load_challenge(&ChallengeId::new("test-challenge")).unwrap();
         assert!(loaded.is_none());
     }
 
@@ -235,7 +235,7 @@ mod storage_errors {
     fn test_delete_nonexistent_challenge() {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
-        let deleted = storage.delete_challenge(&ChallengeId::new()).unwrap();
+        let deleted = storage.delete_challenge(&ChallengeId::new("test-challenge")).unwrap();
         assert!(!deleted);
     }
 
@@ -366,8 +366,8 @@ mod edge_cases {
 
     #[test]
     fn test_job_status_transitions() {
-        let challenge_id = ChallengeId::new();
-        let mut job = Job::new(challenge_id, "agent1".into());
+        let challenge_id = ChallengeId::new("test-challenge");
+        let mut job = Job::new(challenge_id.clone(), "agent1".into());
 
         assert_eq!(job.status, JobStatus::Pending);
 
@@ -378,11 +378,11 @@ mod edge_cases {
         job.result = Some(Score::new(0.95, 1.0));
         assert_eq!(job.status, JobStatus::Completed);
 
-        let mut failed_job = Job::new(challenge_id, "agent2".into());
+        let mut failed_job = Job::new(challenge_id.clone(), "agent2".into());
         failed_job.status = JobStatus::Failed;
         assert_eq!(failed_job.status, JobStatus::Failed);
 
-        let mut timeout_job = Job::new(challenge_id, "agent3".into());
+        let mut timeout_job = Job::new(challenge_id.clone(), "agent3".into());
         timeout_job.status = JobStatus::Timeout;
         assert_eq!(timeout_job.status, JobStatus::Timeout);
     }

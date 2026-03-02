@@ -491,7 +491,7 @@ mod tests {
         let mut data = CheckpointData::new(1, 0, 100);
         let pending = PendingEvaluationState {
             submission_id: "sub1".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([1u8; 32]),
             submission_hash: "abc123".to_string(),
             scores: HashMap::new(),
@@ -507,7 +507,7 @@ mod tests {
         let mut data = CheckpointData::new(1, 0, 100);
         let completed = CompletedEvaluationState {
             submission_id: "sub1".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             final_score: 0.85,
             epoch: 5,
             completed_at: chrono::Utc::now().timestamp_millis(),
@@ -524,7 +524,7 @@ mod tests {
         let mut data = CheckpointData::new(1, 0, 100);
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: "sub1".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([1u8; 32]),
             submission_hash: "abc123".to_string(),
             scores: HashMap::new(),
@@ -641,7 +641,7 @@ mod tests {
         let mut data = CheckpointData::new(1, 5, 100);
         data.pending_evaluations.push(PendingEvaluationState {
             submission_id: "sub_with_scores".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([3u8; 32]),
             submission_hash: "hash123".to_string(),
             scores,
@@ -696,7 +696,7 @@ mod tests {
     fn test_pending_evaluation_state_clone() {
         let state = PendingEvaluationState {
             submission_id: "test".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([5u8; 32]),
             submission_hash: "hash".to_string(),
             scores: HashMap::new(),
@@ -712,7 +712,7 @@ mod tests {
     fn test_completed_evaluation_state_clone() {
         let state = CompletedEvaluationState {
             submission_id: "test".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             final_score: 0.75,
             epoch: 10,
             completed_at: 67890,

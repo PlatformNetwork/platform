@@ -611,7 +611,7 @@ impl ChainState {
     /// Add a challenge
     pub fn add_challenge(&mut self, config: ChallengeConfig) {
         info!(challenge_id = %config.id, name = %config.name, "Adding challenge to state");
-        self.challenges.insert(config.id, config);
+        self.challenges.insert(config.id.clone(), config);
         self.increment_sequence();
     }
 
@@ -1841,7 +1841,7 @@ mod tests {
     fn test_challenge_management() {
         let mut state = ChainState::new(100);
         let config = ChallengeConfig {
-            id: ChallengeId::new(),
+            id: ChallengeId::new("test-challenge"),
             name: "Test Challenge".to_string(),
             weight: 50,
             is_active: true,
@@ -1850,7 +1850,7 @@ mod tests {
             wasm_hash: [0u8; 32],
         };
 
-        let id = config.id;
+        let id = config.id.clone();
         state.add_challenge(config);
         assert!(state.challenges.contains_key(&id));
 
@@ -1867,7 +1867,7 @@ mod tests {
         // Add evaluation record
         let record = EvaluationRecord {
             submission_id: "sub1".to_string(),
-            challenge_id: ChallengeId::new(),
+            challenge_id: ChallengeId::new("test-challenge"),
             miner: Hotkey([1u8; 32]),
             agent_hash: "abc123".to_string(),
             evaluations: HashMap::new(),

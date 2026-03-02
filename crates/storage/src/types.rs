@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_storage_key_challenge() {
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
         let key = StorageKey::challenge(&cid, "leaderboard");
         assert_eq!(key.namespace, cid.0.to_string());
         assert!(key.validator.is_none());
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_storage_key_validator() {
-        let cid = ChallengeId(uuid::Uuid::new_v4());
+        let cid = ChallengeId(uuid::Uuid::new_v4().to_string());
         let hotkey = Hotkey([1u8; 32]);
         let key = StorageKey::validator(&cid, &hotkey, "score");
         assert!(key.validator.is_some());

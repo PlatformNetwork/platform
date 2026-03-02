@@ -58,7 +58,7 @@ impl ChallengeDatabase {
 
     /// Get challenge ID
     pub fn challenge_id(&self) -> ChallengeId {
-        self.challenge_id
+        self.challenge_id.clone()
     }
 
     // ==================== Agents ====================
@@ -290,15 +290,15 @@ mod tests {
     #[test]
     fn test_database_open() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new());
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge"));
         assert!(db.is_ok());
     }
 
     #[test]
     fn test_challenge_id() {
         let dir = tempdir().unwrap();
-        let challenge_id = ChallengeId::new();
-        let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+        let challenge_id = ChallengeId::new("test-challenge");
+        let db = ChallengeDatabase::open(dir.path(), challenge_id.clone()).unwrap();
 
         assert_eq!(db.challenge_id(), challenge_id);
     }
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_agent_storage() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         let agent = AgentInfo::new("test_hash_123".to_string());
         db.save_agent(&agent).unwrap();
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn test_list_agents() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         let agent1 = AgentInfo::new("hash1".to_string());
         let agent2 = AgentInfo::new("hash2".to_string());
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn test_result_storage() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         let result = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.85);
 
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn test_get_all_results() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         let result1 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.85);
         let result2 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent2".to_string(), 0.90);
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn test_get_latest_results() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         // Save multiple results for same agent (agent1)
         let mut result1 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.70);
@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn test_kv_store() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         db.kv_set("my_key", &42i32).unwrap();
 
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn test_kv_delete() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         db.kv_set("key_to_delete", &"value").unwrap();
 
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn test_kv_keys() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         db.kv_set("key1", &1).unwrap();
         db.kv_set("key2", &2).unwrap();
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn test_set_meta() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         db.set_meta("author", "test_author").unwrap();
 
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn test_get_meta() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         let value = db.get_meta("non_existent").unwrap();
         assert!(value.is_none());
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn test_get_version() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         // Should return 0 for new database
         let version = db.get_version().unwrap();
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn test_set_version() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         db.set_version(5).unwrap();
 
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn test_open_tree() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         let custom_tree = db.open_tree("custom_data").unwrap();
 
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn test_flush() {
         let dir = tempdir().unwrap();
-        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new("test-challenge")).unwrap();
 
         db.kv_set("test_key", &"test_value").unwrap();
 
@@ -510,11 +510,11 @@ mod tests {
     fn test_data_persistence_across_reopens() {
         // Test that data persists after closing and reopening the database
         let dir = tempdir().unwrap();
-        let challenge_id = ChallengeId::new();
+        let challenge_id = ChallengeId::new("test-challenge");
 
         // First session: write data
         {
-            let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+            let db = ChallengeDatabase::open(dir.path(), challenge_id.clone()).unwrap();
 
             // Save an agent
             let agent = AgentInfo::new("persistent_agent".to_string());
@@ -540,7 +540,7 @@ mod tests {
 
         // Second session: verify data persists
         {
-            let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+            let db = ChallengeDatabase::open(dir.path(), challenge_id.clone()).unwrap();
 
             // Verify agent persists
             let agent = db.get_agent("persistent_agent").unwrap();
@@ -566,7 +566,7 @@ mod tests {
 
         // Third session: verify data still persists (double check)
         {
-            let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+            let db = ChallengeDatabase::open(dir.path(), challenge_id.clone()).unwrap();
 
             let agents = db.list_agents().unwrap();
             assert_eq!(agents.len(), 1);

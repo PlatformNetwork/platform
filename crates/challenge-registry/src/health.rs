@@ -147,7 +147,7 @@ impl HealthMonitor {
     /// Register a challenge for health monitoring
     pub fn register(&self, challenge_id: ChallengeId) {
         let mut state = self.health_state.write();
-        state.insert(challenge_id, ChallengeHealth::new(challenge_id));
+        state.insert(challenge_id.clone(), ChallengeHealth::new(challenge_id));
     }
 
     /// Unregister a challenge from health monitoring
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_health_status() {
-        let mut health = ChallengeHealth::new(ChallengeId::new());
+        let mut health = ChallengeHealth::new(ChallengeId::new("test"));
 
         assert_eq!(health.status, HealthStatus::Unknown);
         assert!(!health.is_healthy());
@@ -230,9 +230,9 @@ mod tests {
     #[test]
     fn test_health_monitor() {
         let monitor = HealthMonitor::new();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
 
-        monitor.register(id);
+        monitor.register(id.clone());
         assert!(monitor.get_health(&id).is_some());
 
         monitor.record_success(&id, 100.0);
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_response_time_averaging() {
-        let mut health = ChallengeHealth::new(ChallengeId::new());
+        let mut health = ChallengeHealth::new(ChallengeId::new("test"));
 
         health.record_success(100.0);
         assert_eq!(health.avg_response_time_ms, 100.0);
@@ -263,8 +263,8 @@ mod tests {
 
     #[test]
     fn test_challenge_health_new() {
-        let challenge_id = ChallengeId::new();
-        let health = ChallengeHealth::new(challenge_id);
+        let challenge_id = ChallengeId::new("test");
+        let health = ChallengeHealth::new(challenge_id.clone());
 
         assert_eq!(health.challenge_id, challenge_id);
         assert_eq!(health.status, HealthStatus::Unknown);
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_challenge_health_metrics() {
-        let mut health = ChallengeHealth::new(ChallengeId::new());
+        let mut health = ChallengeHealth::new(ChallengeId::new("test"));
 
         health.metrics.insert("cpu_usage".to_string(), 45.5);
         health.metrics.insert("memory_mb".to_string(), 512.0);
@@ -337,20 +337,20 @@ mod tests {
     #[test]
     fn test_health_monitor_get_all_health() {
         let monitor = HealthMonitor::new();
-        let id1 = ChallengeId::new();
-        let id2 = ChallengeId::new();
-        let id3 = ChallengeId::new();
+        let id1 = ChallengeId::new("test1");
+        let id2 = ChallengeId::new("test2");
+        let id3 = ChallengeId::new("test3");
 
         assert!(monitor.get_all_health().is_empty());
 
-        monitor.register(id1);
-        monitor.register(id2);
-        monitor.register(id3);
+        monitor.register(id1.clone());
+        monitor.register(id2.clone());
+        monitor.register(id3.clone());
 
         let all_health = monitor.get_all_health();
         assert_eq!(all_health.len(), 3);
 
-        let ids: Vec<ChallengeId> = all_health.iter().map(|h| h.challenge_id).collect();
+        let ids: Vec<ChallengeId> = all_health.iter().map(|h| h.challenge_id.clone()).collect();
         assert!(ids.contains(&id1));
         assert!(ids.contains(&id2));
         assert!(ids.contains(&id3));
@@ -359,9 +359,9 @@ mod tests {
     #[test]
     fn test_health_monitor_update_health() {
         let monitor = HealthMonitor::new();
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test");
 
-        monitor.register(id);
+        monitor.register(id.clone());
         let health = monitor.get_health(&id).expect("should be registered");
         assert_eq!(health.status, HealthStatus::Unknown);
 
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_challenge_health_consecutive_successes() {
-        let mut health = ChallengeHealth::new(ChallengeId::new());
+        let mut health = ChallengeHealth::new(ChallengeId::new("test"));
 
         health.record_failure("error 1".to_string());
         health.record_failure("error 2".to_string());

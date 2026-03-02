@@ -4,40 +4,61 @@ use platform_core::Hotkey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Unique challenge identifier
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ChallengeId(pub uuid::Uuid);
+/// Unique challenge identifier — a human-readable string name.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ChallengeId(pub String);
 
 impl ChallengeId {
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4())
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
     }
 
+    pub fn from_string(s: &str) -> Self {
+        Self(s.to_string())
+    }
+
+    /// Backwards-compat helper used during migration only.
     pub fn from_uuid(uuid: uuid::Uuid) -> Self {
-        Self(uuid)
+        Self(uuid.to_string())
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
-        uuid::Uuid::parse_str(s).ok().map(Self)
+        if s.is_empty() {
+            None
+        } else {
+            Some(Self(s.to_string()))
+        }
     }
 }
 
 impl Default for ChallengeId {
     fn default() -> Self {
-        Self::new()
+        Self(String::new())
     }
 }
 
 impl std::fmt::Debug for ChallengeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Challenge({})", &self.0.to_string()[..8])
+        write!(f, "Challenge({})", self.0)
     }
 }
 
 impl std::fmt::Display for ChallengeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for ChallengeId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for ChallengeId {
+    fn from(s: String) -> Self {
+        Self(s)
     }
 }
 
@@ -312,13 +333,14 @@ mod tests {
     #[test]
     fn test_challenge_id_default() {
         let id = ChallengeId::default();
-        let id2 = ChallengeId::default();
-        assert_ne!(id, id2); // Each default should create unique ID
+        assert_eq!(id.0, ""); // Default is empty string
+        let id2 = ChallengeId::new("test");
+        assert_ne!(id, id2);
     }
 
     #[test]
     fn test_challenge_id_debug() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         let debug_str = format!("{:?}", id);
         assert!(debug_str.starts_with("Challenge("));
         assert!(debug_str.ends_with(")"));
@@ -384,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_job_creation() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         let job = EvaluationJob::new(
             id,
             "agent1".to_string(),
@@ -463,8 +485,8 @@ mod tests {
 
     #[test]
     fn test_challenge_id_new() {
-        let id1 = ChallengeId::new();
-        let id2 = ChallengeId::new();
+        let id1 = ChallengeId::new("challenge-1");
+        let id2 = ChallengeId::new("challenge-2");
         assert_ne!(id1, id2);
     }
 
@@ -481,13 +503,16 @@ mod tests {
         let valid = ChallengeId::from_str("550e8400-e29b-41d4-a716-446655440000");
         assert!(valid.is_some());
 
-        let invalid = ChallengeId::from_str("not-a-uuid");
+        let valid_name = ChallengeId::from_str("my-challenge");
+        assert!(valid_name.is_some());
+
+        let invalid = ChallengeId::from_str("");
         assert!(invalid.is_none());
     }
 
     #[test]
     fn test_challenge_id_display() {
-        let id = ChallengeId::new();
+        let id = ChallengeId::new("test-challenge");
         let display = format!("{}", id);
         assert!(!display.is_empty());
     }

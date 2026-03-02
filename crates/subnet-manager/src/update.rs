@@ -461,9 +461,9 @@ mod tests {
 
     #[test]
     fn test_update_target_variants() {
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let targets = vec![
-            UpdateTarget::Challenge(challenge_id),
+            UpdateTarget::Challenge(challenge_id.clone()),
             UpdateTarget::Config,
             UpdateTarget::AllChallenges,
             UpdateTarget::Validators,
@@ -531,7 +531,7 @@ mod tests {
 
         let wasm_bytes = vec![0u8; 100];
         let wasm_hash = UpdateManager::compute_hash(&wasm_bytes);
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
 
         let config = ChallengeConfig {
             id: challenge_id.0.to_string(),
@@ -545,7 +545,7 @@ mod tests {
         };
 
         let id = manager.queue_update(
-            UpdateTarget::Challenge(challenge_id),
+            UpdateTarget::Challenge(challenge_id.clone()),
             UpdatePayload::WasmChallenge {
                 wasm_bytes,
                 wasm_hash,
@@ -742,12 +742,12 @@ mod tests {
 
     #[test]
     fn test_update_struct_fields() {
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let update = Update {
             id: uuid::Uuid::new_v4(),
             update_type: UpdateType::Hot,
             version: "1.0.0".into(),
-            target: UpdateTarget::Challenge(challenge_id),
+            target: UpdateTarget::Challenge(challenge_id.clone()),
             payload: UpdatePayload::Config(SubnetConfig::default()),
             status: UpdateStatus::Pending,
             created_at: chrono::Utc::now(),
@@ -796,7 +796,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = UpdateManager::new(dir.path().to_path_buf());
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let config = ChallengeConfig {
             id: challenge_id.0.to_string(),
             name: "Test".into(),
@@ -809,7 +809,7 @@ mod tests {
         };
 
         manager.queue_update(
-            UpdateTarget::Challenge(challenge_id),
+            UpdateTarget::Challenge(challenge_id.clone()),
             UpdatePayload::WasmChallenge {
                 wasm_bytes: vec![],
                 wasm_hash: "hash".into(),
@@ -911,7 +911,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = UpdateManager::new(dir.path().to_path_buf());
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let bad_hash = "not_the_real_hash".to_string();
         let wasm_bytes = vec![1u8, 2, 3];
 
@@ -927,7 +927,7 @@ mod tests {
         };
 
         manager.queue_update(
-            UpdateTarget::Challenge(challenge_id),
+            UpdateTarget::Challenge(challenge_id.clone()),
             UpdatePayload::WasmChallenge {
                 wasm_bytes,
                 wasm_hash: bad_hash,
@@ -966,7 +966,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = UpdateManager::new(dir.path().to_path_buf());
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let wasm_bytes = vec![0u8, 1, 2];
         let bad_hash = "incorrect".to_string();
 
@@ -982,7 +982,7 @@ mod tests {
         };
 
         manager.queue_update(
-            UpdateTarget::Challenge(challenge_id),
+            UpdateTarget::Challenge(challenge_id.clone()),
             UpdatePayload::WasmChallenge {
                 wasm_bytes,
                 wasm_hash: bad_hash,
@@ -1009,7 +1009,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = UpdateManager::new(dir.path().to_path_buf());
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let wasm_bytes = vec![9u8, 8, 7, 6];
         let wasm_hash = UpdateManager::compute_hash(&wasm_bytes);
 
@@ -1028,7 +1028,7 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             update_type: UpdateType::Hot,
             version: "1.0.0".into(),
-            target: UpdateTarget::Challenge(challenge_id),
+            target: UpdateTarget::Challenge(challenge_id.clone()),
             payload: UpdatePayload::WasmChallenge {
                 wasm_bytes: wasm_bytes.clone(),
                 wasm_hash,
@@ -1057,7 +1057,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = UpdateManager::new(dir.path().to_path_buf());
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let wasm_bytes = vec![1u8, 2, 3];
 
         let config = ChallengeConfig {
@@ -1075,7 +1075,7 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             update_type: UpdateType::Hot,
             version: "1.0.0".into(),
-            target: UpdateTarget::Challenge(challenge_id),
+            target: UpdateTarget::Challenge(challenge_id.clone()),
             payload: UpdatePayload::WasmChallenge {
                 wasm_bytes: wasm_bytes.clone(),
                 wasm_hash: "expected_hash".into(),
@@ -1214,7 +1214,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = UpdateManager::new(dir.path().to_path_buf());
 
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
         let rollback_bytes = b"restore-wasm".to_vec();
 
         let challenge_dir = dir
@@ -1227,7 +1227,7 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             update_type: UpdateType::Hot,
             version: "1.0.0".into(),
-            target: UpdateTarget::Challenge(challenge_id),
+            target: UpdateTarget::Challenge(challenge_id.clone()),
             payload: UpdatePayload::Config(SubnetConfig::default()),
             status: UpdateStatus::Failed("hash".into()),
             created_at: chrono::Utc::now(),
@@ -1344,8 +1344,8 @@ mod tests {
 
     #[test]
     fn test_update_target_challenge() {
-        let challenge_id = ChallengeId(uuid::Uuid::new_v4());
-        let target = UpdateTarget::Challenge(challenge_id);
+        let challenge_id = ChallengeId(uuid::Uuid::new_v4().to_string());
+        let target = UpdateTarget::Challenge(challenge_id.clone());
         let json = serde_json::to_string(&target).unwrap();
         let decoded: UpdateTarget = serde_json::from_str(&json).unwrap();
         assert!(matches!(decoded, UpdateTarget::Challenge(_)));
