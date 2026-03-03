@@ -1966,95 +1966,15 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Challenge sync ticker - every 60 blocks, sync all challenges
+            // Challenge sync ticker - sync all challenges (including bootnode)
             _ = challenge_sync_interval.tick() => {
-                if !is_bootnode {
-                    let current_block = state_manager.apply(|state| state.bittensor_block);
+                let current_block = state_manager.apply(|state| state.bittensor_block);
 
-                    // Check if we should sync (every 60 blocks)
-                    if current_block / sync_block_interval > last_sync_block / sync_block_interval {
-                        last_sync_block = current_block;
+                // Check if we should sync (every sync_block_interval blocks)
+                if current_block / sync_block_interval > last_sync_block / sync_block_interval {
+                    last_sync_block = current_block;
 
-                        // Get all active challenges
-                        let challenges: Vec<_> = {
-                            let cs = chain_state.read();
-                            cs.wasm_challenge_configs
-                                .iter()
-                                .filter(|(_, cfg)| cfg.is_active)
-                                .map(|(id, _)| id.clone())
-                                .collect()
-                        };
-
-                        let current_epoch = current_block / 360;
-                        for challenge_id in challenges {
-                            let challenge_id_str = challenge_id.to_string();
-                            let module_path = challenge_id_str.clone();
-
-                            if let Some(ref executor) = wasm_executor {
-                                match executor.execute_sync_with_block(&module_path, current_block, current_epoch) {
-                                    Ok(sync_result) => {
-                                        // Skip broadcasting if sync was deduped (zeroed hash
-                                        // from DedupFlags guard). Broadcasting a zeroed hash
-                                        // would poison P2P consensus.
-                                        if sync_result.leaderboard_hash == [0u8; 32] && sync_result.total_users == 0 {
-                                            debug!(
-                                                challenge_id = %challenge_id,
-                                                "Sync deduped (zeroed result), skipping broadcast"
-                                            );
-                                        } else {
-                                            info!(
-                                                challenge_id = %challenge_id,
-                                                block = current_block,
-                                                total_users = sync_result.total_users,
-                                                "Challenge sync completed, broadcasting proposal"
-                                            );
-
-                                            // Broadcast sync proposal
-                                            let timestamp = chrono::Utc::now().timestamp_millis();
-                                            let proposal_data = bincode::serialize(&(
-                                                &challenge_id,
-                                                &sync_result.leaderboard_hash,
-                                                current_block,
-                                                timestamp
-                                            )).unwrap_or_default();
-                                            let signature = keypair.sign_bytes(&proposal_data).unwrap_or_default();
-
-                                            let proposal_msg = P2PMessage::ChallengeSyncProposal(
-                                                platform_p2p_consensus::ChallengeSyncProposalMessage {
-                                                    challenge_id,
-                                                    sync_result_hash: sync_result.leaderboard_hash,
-                                                    proposer: keypair.hotkey(),
-                                                    block_number: current_block,
-                                                    timestamp,
-                                                    signature,
-                                                }
-                                            );
-
-                                            if let Err(e) = p2p_broadcast_tx.send(platform_p2p_consensus::P2PCommand::Broadcast(proposal_msg)).await {
-                                                warn!(error = %e, "Failed to broadcast sync proposal");
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        debug!(
-                                            challenge_id = %challenge_id,
-                                            error = %e,
-                                            "Failed to execute sync (WASM may not support sync)"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Background tick - call background_tick() on persistent WASM instances every block
-            _ = background_tick_interval.tick() => {
-                if !is_bootnode {
-                    let current_block = state_manager.apply(|state| state.bittensor_block);
-                    let current_epoch = current_block / 360;
-
+                    // Get all active challenges
                     let challenges: Vec<_> = {
                         let cs = chain_state.read();
                         cs.wasm_challenge_configs
@@ -2064,16 +1984,92 @@ async fn main() -> Result<()> {
                             .collect()
                     };
 
+                    let current_epoch = current_block / 360;
                     for challenge_id in challenges {
-                        let module_path = challenge_id.to_string();
+                        let challenge_id_str = challenge_id.to_string();
+                        let module_path = challenge_id_str.clone();
+
                         if let Some(ref executor) = wasm_executor {
-                            if let Err(e) = executor.execute_background_tick(&module_path, current_block, current_epoch) {
-                                debug!(
-                                    challenge_id = %challenge_id,
-                                    error = %e,
-                                    "background_tick failed"
-                                );
+                            match executor.execute_sync_with_block(&module_path, current_block, current_epoch) {
+                                Ok(sync_result) => {
+                                    // Skip broadcasting if sync was deduped (zeroed hash
+                                    // from DedupFlags guard). Broadcasting a zeroed hash
+                                    // would poison P2P consensus.
+                                    if sync_result.leaderboard_hash == [0u8; 32] && sync_result.total_users == 0 {
+                                        debug!(
+                                            challenge_id = %challenge_id,
+                                            "Sync deduped (zeroed result), skipping broadcast"
+                                        );
+                                    } else {
+                                        info!(
+                                            challenge_id = %challenge_id,
+                                            block = current_block,
+                                            total_users = sync_result.total_users,
+                                            "Challenge sync completed, broadcasting proposal"
+                                        );
+
+                                        // Broadcast sync proposal
+                                        let timestamp = chrono::Utc::now().timestamp_millis();
+                                        let proposal_data = bincode::serialize(&(
+                                            &challenge_id,
+                                            &sync_result.leaderboard_hash,
+                                            current_block,
+                                            timestamp
+                                        )).unwrap_or_default();
+                                        let signature = keypair.sign_bytes(&proposal_data).unwrap_or_default();
+
+                                        let proposal_msg = P2PMessage::ChallengeSyncProposal(
+                                            platform_p2p_consensus::ChallengeSyncProposalMessage {
+                                                challenge_id,
+                                                sync_result_hash: sync_result.leaderboard_hash,
+                                                proposer: keypair.hotkey(),
+                                                block_number: current_block,
+                                                timestamp,
+                                                signature,
+                                            }
+                                        );
+
+                                        if let Err(e) = p2p_broadcast_tx.send(platform_p2p_consensus::P2PCommand::Broadcast(proposal_msg)).await {
+                                            warn!(error = %e, "Failed to broadcast sync proposal");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        challenge_id = %challenge_id,
+                                        error = %e,
+                                        "Failed to execute sync (WASM may not support sync)"
+                                    );
+                                }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Background tick - call background_tick() on persistent WASM instances every block (including bootnode)
+            _ = background_tick_interval.tick() => {
+                let current_block = state_manager.apply(|state| state.bittensor_block);
+                let current_epoch = current_block / 360;
+
+                let challenges: Vec<_> = {
+                    let cs = chain_state.read();
+                    cs.wasm_challenge_configs
+                        .iter()
+                        .filter(|(_, cfg)| cfg.is_active)
+                        .map(|(id, _)| id.clone())
+                        .collect()
+                };
+
+                for challenge_id in challenges {
+                    let module_path = challenge_id.to_string();
+                    if let Some(ref executor) = wasm_executor {
+                        if let Err(e) = executor.execute_background_tick(&module_path, current_block, current_epoch) {
+                            debug!(
+                                challenge_id = %challenge_id,
+                                error = %e,
+                                "background_tick failed"
+                            );
                         }
                     }
                 }
