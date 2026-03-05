@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// Configure your bootstrap peers via the BOOTSTRAP_PEERS environment variable
 /// or add them here for your deployment.
 pub const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[
-    "/dns4/bootnode.platform.network/tcp/8090/p2p/12D3KooWQNqDofQAivCNMdntAFPEbgwyVBUnrPBeWK2kunPgJRp2",
+    "/dns4/bootnode.platform.zip/tcp/8090/p2p/12D3KooWQNqDofQAivCNMdntAFPEbgwyVBUnrPBeWK2kunPgJRp2",
 ];
 
 /// P2P network configuration

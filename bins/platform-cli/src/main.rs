@@ -70,7 +70,7 @@ impl Default for PlatformConfig {
         );
         Self {
             network: NetworkConfig {
-                rpc_endpoint: "wss://chain.platform.network".to_string(),
+                rpc_endpoint: "wss://chain.platform.zip".to_string(),
                 netuid: 100,
             },
             challenges,
