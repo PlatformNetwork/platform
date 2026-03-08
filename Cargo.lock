@@ -9249,6 +9249,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "validate-test-commands"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "tempfile",
+]
+
+[[package]]
 name = "validate-workspace-yaml"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,12 @@
+[package]
+name = "validate-test-commands"
+version = "0.1.0"
+edition = "2021"
+description = "Validates that workspace.yaml files have non-empty fail_to_pass and pass_to_pass test commands with executable string format"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+[dev-dependencies]
+tempfile = "3.12"
