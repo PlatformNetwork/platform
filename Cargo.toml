@@ -21,6 +21,7 @@ members = [
     "tests",
     "scripts/validate-workspace-yaml",
     "scripts/validate-test-commands",
+    "scripts/fresh-container-replay",
 ]
 # Note: Challenges are in separate repositories and import platform-challenge-sdk as a git dependency
 # Note: WASM runtime removed - updates via git, version checked at handshake
