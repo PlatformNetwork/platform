@@ -1348,6 +1348,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "check-duplicate-instance-ids"
+version = "0.1.0"
+dependencies = [
+ "serde_yaml",
+ "tempfile",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"

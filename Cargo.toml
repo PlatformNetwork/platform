@@ -23,6 +23,7 @@ members = [
     "scripts/validate-test-commands",
     "scripts/fresh-container-replay",
     "scripts/test-command-execution",
+    "scripts/check-duplicate-instance-ids",
 ]
 # Note: Challenges are in separate repositories and import platform-challenge-sdk as a git dependency
 # Note: WASM runtime removed - updates via git, version checked at handshake
