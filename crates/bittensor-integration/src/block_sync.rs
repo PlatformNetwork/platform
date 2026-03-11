@@ -193,6 +193,7 @@ impl BlockSync {
             let mut first_block_seen = false;
             let mut current_block_rx = block_rx;
             let mut consecutive_reconnect_failures: u32 = 0;
+            let mut consecutive_connection_errors: u32 = 0;
 
             loop {
                 if !*running.read().await {
@@ -202,6 +203,17 @@ impl BlockSync {
                 match current_block_rx.recv().await {
                     Ok(event) => {
                         consecutive_reconnect_failures = 0;
+
+                        // Track consecutive ConnectionError events.
+                        // When the WebSocket dies, BlockListener keeps
+                        // retrying on the same dead client and emits
+                        // ConnectionError in a loop without ever closing
+                        // the broadcast channel.  After a threshold of
+                        // consecutive errors we proactively recreate the
+                        // listener with a fresh client.
+                        let is_connection_error =
+                            matches!(&event, BlockEvent::ConnectionError(_));
+
                         let should_break = BlockSync::handle_block_event(
                             event,
                             &event_tx,
@@ -215,6 +227,81 @@ impl BlockSync {
 
                         if should_break {
                             break;
+                        }
+
+                        if is_connection_error {
+                            consecutive_connection_errors += 1;
+                        } else {
+                            consecutive_connection_errors = 0;
+                        }
+
+                        // Too many consecutive connection errors — the
+                        // underlying client is dead.  Recreate everything.
+                        if consecutive_connection_errors >= 5 {
+                            warn!(
+                                errors = consecutive_connection_errors,
+                                "Too many consecutive connection errors — \
+                                 recreating Bittensor client"
+                            );
+                            consecutive_connection_errors = 0;
+
+                            if !*running.read().await {
+                                break;
+                            }
+
+                            let delay_secs = 5u64;
+                            tokio::time::sleep(
+                                std::time::Duration::from_secs(delay_secs),
+                            )
+                            .await;
+
+                            match BlockSync::recreate_listener(&rpc_url, &config)
+                                .await
+                            {
+                                Ok((
+                                    new_client,
+                                    new_listener,
+                                    new_rx,
+                                    epoch_info,
+                                )) => {
+                                    info!(
+                                        block = epoch_info.current_block,
+                                        epoch = epoch_info.epoch_number,
+                                        "Bittensor client recreated after \
+                                         consecutive connection errors"
+                                    );
+                                    *current_block.write().await =
+                                        epoch_info.current_block;
+                                    *current_epoch.write().await =
+                                        epoch_info.epoch_number;
+                                    *current_phase.write().await =
+                                        epoch_info.phase;
+                                    current_block_rx = new_rx;
+                                    was_disconnected = true;
+
+                                    if let Err(e) =
+                                        new_listener.start(new_client).await
+                                    {
+                                        warn!(
+                                            "Failed to start recreated \
+                                             listener: {}",
+                                            e
+                                        );
+                                    } else {
+                                        let _ = event_tx
+                                            .send(BlockSyncEvent::Reconnected)
+                                            .await;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        error = %e,
+                                        "Failed to recreate Bittensor client \
+                                         after connection errors, will keep \
+                                         retrying"
+                                    );
+                                }
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
