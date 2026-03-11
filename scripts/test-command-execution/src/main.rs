@@ -50,17 +50,11 @@ pub struct TaskConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandExecResult {
     /// The command was found and executed (may have passed or failed, but it ran).
-    Executable {
-        exit_code: i32,
-    },
+    Executable { exit_code: i32 },
     /// The command could not be found or executed due to environment issues.
-    NotExecutable {
-        error: String,
-    },
+    NotExecutable { error: String },
     /// Docker or infrastructure failed before the command could be tested.
-    InfrastructureError {
-        error: String,
-    },
+    InfrastructureError { error: String },
 }
 
 impl fmt::Display for CommandExecResult {
@@ -237,7 +231,11 @@ fn detect_tooling(commands: &[String]) -> Vec<&'static str> {
     if joined.contains("pytest") || joined.contains("python") || joined.contains("pip") {
         tools.push("python");
     }
-    if joined.contains("npm") || joined.contains("node") || joined.contains("yarn") || joined.contains("jest") {
+    if joined.contains("npm")
+        || joined.contains("node")
+        || joined.contains("yarn")
+        || joined.contains("jest")
+    {
         tools.push("node");
     }
     if joined.contains("mvn") || joined.contains("gradle") || joined.contains("java") {
@@ -271,11 +269,15 @@ fn tooling_install_script(tools: &[&str]) -> String {
                 script.push_str("export PATH=\"$HOME/.cargo/bin:$PATH\"\n");
             }
             "python" => {
-                script.push_str("apt-get install -y -qq python3 python3-pip python3-venv > /dev/null 2>&1\n");
+                script.push_str(
+                    "apt-get install -y -qq python3 python3-pip python3-venv > /dev/null 2>&1\n",
+                );
                 script.push_str("pip3 install pytest > /dev/null 2>&1 || python3 -m pip install pytest > /dev/null 2>&1\n");
             }
             "node" => {
-                script.push_str("curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1\n");
+                script.push_str(
+                    "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1\n",
+                );
                 script.push_str("apt-get install -y -qq nodejs > /dev/null 2>&1\n");
             }
             "java" => {
@@ -333,10 +335,7 @@ fn build_single_command_script(
     script.push_str("cd /workspace\n\n");
 
     // Checkout the specified commit
-    script.push_str(&format!(
-        "git checkout {} 2>&1\n",
-        commit
-    ));
+    script.push_str(&format!("git checkout {} 2>&1\n", commit));
     script.push_str("CHECKOUT_EXIT=$?\n");
     script.push_str("if [ $CHECKOUT_EXIT -ne 0 ]; then\n");
     script.push_str("  echo \"INFRA_ERROR: Failed to checkout commit\"\n");
@@ -347,8 +346,11 @@ fn build_single_command_script(
     script.push_str("# Install project dependencies\n");
     if tools.contains(&"python") {
         script.push_str("if [ -f requirements.txt ]; then pip3 install -r requirements.txt > /dev/null 2>&1 || true; fi\n");
-        script.push_str("if [ -f setup.py ]; then pip3 install -e . > /dev/null 2>&1 || true; fi\n");
-        script.push_str("if [ -f pyproject.toml ]; then pip3 install -e . > /dev/null 2>&1 || true; fi\n");
+        script
+            .push_str("if [ -f setup.py ]; then pip3 install -e . > /dev/null 2>&1 || true; fi\n");
+        script.push_str(
+            "if [ -f pyproject.toml ]; then pip3 install -e . > /dev/null 2>&1 || true; fi\n",
+        );
     }
     if tools.contains(&"node") {
         script.push_str("if [ -f package.json ]; then npm install > /dev/null 2>&1 || true; fi\n");
@@ -433,9 +435,7 @@ pub fn check_command_executable(
                 return SingleCommandResult {
                     command: test_command.to_string(),
                     source: CommandSource::FailToPass,
-                    result: CommandExecResult::NotExecutable {
-                        error: error_line,
-                    },
+                    result: CommandExecResult::NotExecutable { error: error_line },
                     stdout,
                     stderr,
                 };
@@ -470,18 +470,14 @@ pub fn load_task_config(path: &Path) -> Result<TaskConfig, String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-    serde_yaml::from_str(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    serde_yaml::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }
 
 /// Validates that all test commands in a task are executable.
 ///
 /// Runs each FAIL_TO_PASS and PASS_TO_PASS command individually in a Docker
 /// container and checks for "command not found" errors.
-pub fn validate_task_commands(
-    task: &TaskConfig,
-    config: &ExecConfig,
-) -> TaskExecutionResult {
+pub fn validate_task_commands(task: &TaskConfig, config: &ExecConfig) -> TaskExecutionResult {
     let all_commands: Vec<String> = task
         .FAIL_TO_PASS
         .iter()
@@ -493,26 +489,16 @@ pub fn validate_task_commands(
 
     // Check each FAIL_TO_PASS command
     for cmd in &task.FAIL_TO_PASS {
-        let mut result = check_command_executable(
-            config,
-            &task.repo,
-            &task.base_commit,
-            cmd,
-            &all_commands,
-        );
+        let mut result =
+            check_command_executable(config, &task.repo, &task.base_commit, cmd, &all_commands);
         result.source = CommandSource::FailToPass;
         command_results.push(result);
     }
 
     // Check each PASS_TO_PASS command
     for cmd in &task.PASS_TO_PASS {
-        let mut result = check_command_executable(
-            config,
-            &task.repo,
-            &task.base_commit,
-            cmd,
-            &all_commands,
-        );
+        let mut result =
+            check_command_executable(config, &task.repo, &task.base_commit, cmd, &all_commands);
         result.source = CommandSource::PassToPass;
         command_results.push(result);
     }
@@ -594,7 +580,9 @@ fn parse_args() -> CliArgs {
             "--help" | "-h" => {
                 println!("Usage: test-command-execution [TASKS_DIR] [OPTIONS]");
                 println!();
-                println!("Validates that test commands can execute without 'command not found' errors.");
+                println!(
+                    "Validates that test commands can execute without 'command not found' errors."
+                );
                 println!();
                 println!("Options:");
                 println!("  --limit N      Validate at most N tasks");
@@ -793,8 +781,7 @@ fn main() {
     } else {
         println!(
             "RESULT: PASS — all {} commands are executable across {} tasks",
-            total_commands,
-            tasks_all_executable
+            total_commands, tasks_all_executable
         );
         process::exit(0);
     }
@@ -878,10 +865,7 @@ difficulty: "easy"
         let r = CommandExecResult::NotExecutable {
             error: "pytest: command not found".to_string(),
         };
-        assert_eq!(
-            r.to_string(),
-            "NotExecutable: pytest: command not found"
-        );
+        assert_eq!(r.to_string(), "NotExecutable: pytest: command not found");
     }
 
     #[test]
@@ -943,19 +927,14 @@ difficulty: "easy"
 
     #[test]
     fn test_detect_command_not_found_module_error() {
-        let result = detect_command_not_found(
-            "ModuleNotFoundError: No module named 'pytest'",
-            "",
-        );
+        let result = detect_command_not_found("ModuleNotFoundError: No module named 'pytest'", "");
         assert!(result.is_some());
     }
 
     #[test]
     fn test_detect_command_not_found_import_error() {
-        let result = detect_command_not_found(
-            "ImportError: cannot import name 'missing_module'",
-            "",
-        );
+        let result =
+            detect_command_not_found("ImportError: cannot import name 'missing_module'", "");
         assert!(result.is_some());
     }
 
@@ -982,19 +961,14 @@ difficulty: "easy"
 
     #[test]
     fn test_detect_no_error_passing_tests() {
-        let result = detect_command_not_found(
-            "test result: ok. 5 passed; 0 failed",
-            "",
-        );
+        let result = detect_command_not_found("test result: ok. 5 passed; 0 failed", "");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_detect_no_error_compilation_error() {
-        let result = detect_command_not_found(
-            "error[E0308]: mismatched types\n  --> src/main.rs:5:5",
-            "",
-        );
+        let result =
+            detect_command_not_found("error[E0308]: mismatched types\n  --> src/main.rs:5:5", "");
         assert!(result.is_none());
     }
 
@@ -1006,10 +980,7 @@ difficulty: "easy"
 
     #[test]
     fn test_detect_command_not_found_in_stdout() {
-        let result = detect_command_not_found(
-            "bash: line 1: mycommand: command not found",
-            "",
-        );
+        let result = detect_command_not_found("bash: line 1: mycommand: command not found", "");
         assert!(result.is_some());
     }
 
@@ -1200,12 +1171,8 @@ difficulty: "easy"
 
     #[test]
     fn test_build_script_installs_deps_python() {
-        let script = build_single_command_script(
-            "owner/repo",
-            "abc123",
-            "pytest",
-            &["pytest".to_string()],
-        );
+        let script =
+            build_single_command_script("owner/repo", "abc123", "pytest", &["pytest".to_string()]);
         assert!(script.contains("requirements.txt"));
         assert!(script.contains("setup.py"));
     }

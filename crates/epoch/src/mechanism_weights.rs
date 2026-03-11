@@ -583,7 +583,8 @@ mod tests {
 
     #[test]
     fn test_empty_weights_go_to_burn() {
-        let mech_weights = MechanismWeights::new(1, ChallengeId::new("test-challenge"), vec![], 0.5);
+        let mech_weights =
+            MechanismWeights::new(1, ChallengeId::new("test-challenge"), vec![], 0.5);
 
         // All weight should go to UID 0
         assert_eq!(mech_weights.uids.len(), 1);
@@ -938,7 +939,8 @@ mod tests {
         // (even though it logs a warning)
         let assignments = vec![WeightAssignment::new("hotkey1".to_string(), 1.0)];
 
-        let mech_weights = MechanismWeights::new(1, ChallengeId::new("test-challenge"), assignments, 0.5);
+        let mech_weights =
+            MechanismWeights::new(1, ChallengeId::new("test-challenge"), assignments, 0.5);
 
         // Should have UID 0 since no hotkeys can be resolved
         assert!(mech_weights.uids.contains(&BURN_UID));

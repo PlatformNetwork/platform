@@ -42,10 +42,7 @@ impl SubtensorClient {
     /// Reconnect to Subtensor by creating a fresh client.
     /// Useful when the underlying websocket has died.
     pub async fn reconnect(&mut self) -> Result<()> {
-        info!(
-            "Reconnecting to Subtensor: {}",
-            self.config.endpoint
-        );
+        info!("Reconnecting to Subtensor: {}", self.config.endpoint);
         self.client = None;
         let client = BittensorClient::new(&self.config.endpoint).await?;
         self.client = Some(client);
@@ -82,7 +79,10 @@ impl SubtensorClient {
                     return Err(first_err);
                 }
 
-                info!("Transport error detected, attempting reconnect: {}", first_err);
+                info!(
+                    "Transport error detected, attempting reconnect: {}",
+                    first_err
+                );
                 self.reconnect().await?;
 
                 let client = self

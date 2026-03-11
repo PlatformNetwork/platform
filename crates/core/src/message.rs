@@ -328,9 +328,7 @@ pub enum SudoAction {
     },
 
     /// Remove a challenge entirely
-    RemoveChallenge {
-        challenge_id: ChallengeId,
-    },
+    RemoveChallenge { challenge_id: ChallengeId },
 }
 
 /// Configuration for how weights are distributed on a mechanism
@@ -927,7 +925,9 @@ mod tests {
         let challenge_id = ChallengeId::new("test-challenge");
         let score = Score::new(0.85, 1.0);
 
-        let result = EvaluationResult::new(job_id, challenge_id.clone(),
+        let result = EvaluationResult::new(
+            job_id,
+            challenge_id.clone(),
             "agent123".to_string(),
             score,
             100,
@@ -944,7 +944,8 @@ mod tests {
     fn test_weight_commitment_message() {
         let hotkey = Hotkey([5u8; 32]);
         let challenge_id = ChallengeId::new("test-challenge");
-        let commitment = WeightCommitmentMessage::new(hotkey.clone(), challenge_id.clone(), 10, [0xab; 32]);
+        let commitment =
+            WeightCommitmentMessage::new(hotkey.clone(), challenge_id.clone(), 10, [0xab; 32]);
 
         assert_eq!(commitment.validator, hotkey);
         assert_eq!(commitment.challenge_id, challenge_id);
@@ -966,8 +967,13 @@ mod tests {
                 weight: 0.3,
             },
         ];
-        let reveal =
-            WeightRevealMessage::new(hotkey.clone(), challenge_id.clone(), 10, weights, vec![1, 2, 3, 4]);
+        let reveal = WeightRevealMessage::new(
+            hotkey.clone(),
+            challenge_id.clone(),
+            10,
+            weights,
+            vec![1, 2, 3, 4],
+        );
 
         assert_eq!(reveal.validator, hotkey);
         assert_eq!(reveal.challenge_id, challenge_id);

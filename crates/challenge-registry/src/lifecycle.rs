@@ -277,7 +277,9 @@ mod tests {
         let challenge_id = ChallengeId::new("test");
 
         // Test Registered event
-        let registered_event = LifecycleEvent::Registered { challenge_id: challenge_id.clone() };
+        let registered_event = LifecycleEvent::Registered {
+            challenge_id: challenge_id.clone(),
+        };
         match registered_event {
             LifecycleEvent::Registered { challenge_id: id } => {
                 assert_eq!(id, challenge_id);
@@ -286,7 +288,9 @@ mod tests {
         }
 
         // Test Unregistered event
-        let unregistered_event = LifecycleEvent::Unregistered { challenge_id: challenge_id.clone() };
+        let unregistered_event = LifecycleEvent::Unregistered {
+            challenge_id: challenge_id.clone(),
+        };
         match unregistered_event {
             LifecycleEvent::Unregistered { challenge_id: id } => {
                 assert_eq!(id, challenge_id);

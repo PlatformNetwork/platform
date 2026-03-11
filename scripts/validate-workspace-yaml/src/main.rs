@@ -148,10 +148,7 @@ fn validate_string_array_field(
 }
 
 /// Validates the problem_statement has meaningful content (min 50 chars per VAL-DATASET-007).
-fn validate_problem_statement(
-    value: &Option<Value>,
-    errors: &mut Vec<ValidationError>,
-) {
+fn validate_problem_statement(value: &Option<Value>, errors: &mut Vec<ValidationError>) {
     match value {
         None => {
             errors.push(ValidationError {
@@ -169,10 +166,7 @@ fn validate_problem_statement(
             } else if trimmed.len() < 50 {
                 errors.push(ValidationError {
                     field: "problem_statement".to_string(),
-                    message: format!(
-                        "too short ({} chars, minimum 50 required)",
-                        trimmed.len()
-                    ),
+                    message: format!("too short ({} chars, minimum 50 required)", trimmed.len()),
                 });
             }
         }
@@ -333,7 +327,10 @@ fn main() {
     let yaml_files = find_workspace_yamls(&tasks_dir);
 
     if yaml_files.is_empty() {
-        eprintln!("Error: no workspace.yaml files found in {}", tasks_dir.display());
+        eprintln!(
+            "Error: no workspace.yaml files found in {}",
+            tasks_dir.display()
+        );
         process::exit(1);
     }
 

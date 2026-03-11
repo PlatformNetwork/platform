@@ -115,8 +115,7 @@ pub fn load_task_config(path: &Path) -> Result<TaskConfig, String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-    serde_yaml::from_str(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    serde_yaml::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }
 
 /// Runs a shell command and captures output. Returns (exit_code, stdout, stderr).
@@ -197,17 +196,12 @@ fn build_docker_script(
     script.push_str("cd /workspace\n\n");
 
     // Checkout the specified commit
-    script.push_str(&format!(
-        "git checkout {} 2>&1 || exit 101\n\n",
-        commit
-    ));
+    script.push_str(&format!("git checkout {} 2>&1 || exit 101\n\n", commit));
 
     // Apply patch if provided
     if let Some(patch_content) = patch {
         // Write patch to file and apply
-        let escaped_patch = patch_content
-            .replace('\\', "\\\\")
-            .replace('\'', "'\\''");
+        let escaped_patch = patch_content.replace('\\', "\\\\").replace('\'', "'\\''");
         script.push_str(&format!(
             "cat << 'PATCH_EOF' > /tmp/task.patch\n{}\nPATCH_EOF\n\n",
             escaped_patch
@@ -268,17 +262,20 @@ fn run_in_docker(
 /// Implements dual-commit validation:
 /// 1. Base commit (without patch): fail_to_pass should FAIL, pass_to_pass should PASS
 /// 2. Patched commit (with patch): all tests should PASS
-pub fn validate_task(
-    task: &TaskConfig,
-    config: &ReplayConfig,
-) -> TaskValidationResult {
+pub fn validate_task(task: &TaskConfig, config: &ReplayConfig) -> TaskValidationResult {
     let mut steps = Vec::new();
 
     // ------------------------------------------------------------------
     // Step 1: Run pass_to_pass on base commit (should PASS)
     // ------------------------------------------------------------------
     if !task.PASS_TO_PASS.is_empty() {
-        match run_in_docker(config, &task.repo, &task.base_commit, None, &task.PASS_TO_PASS) {
+        match run_in_docker(
+            config,
+            &task.repo,
+            &task.base_commit,
+            None,
+            &task.PASS_TO_PASS,
+        ) {
             Ok((exit_code, stdout, stderr)) => {
                 // Check for environment errors first
                 if let Some(env_err) = is_environment_error(&stdout, &stderr) {
@@ -339,7 +336,13 @@ pub fn validate_task(
     // ------------------------------------------------------------------
     // Step 2: Run fail_to_pass on base commit (should FAIL)
     // ------------------------------------------------------------------
-    match run_in_docker(config, &task.repo, &task.base_commit, None, &task.FAIL_TO_PASS) {
+    match run_in_docker(
+        config,
+        &task.repo,
+        &task.base_commit,
+        None,
+        &task.FAIL_TO_PASS,
+    ) {
         Ok((exit_code, stdout, stderr)) => {
             if let Some(env_err) = is_environment_error(&stdout, &stderr) {
                 return TaskValidationResult {
@@ -867,19 +870,13 @@ instance_id: "test-1"
 
     #[test]
     fn test_env_error_module_not_found() {
-        let result = is_environment_error(
-            "ModuleNotFoundError: No module named 'pytest'",
-            "",
-        );
+        let result = is_environment_error("ModuleNotFoundError: No module named 'pytest'", "");
         assert!(result.is_some());
     }
 
     #[test]
     fn test_env_error_import_error() {
-        let result = is_environment_error(
-            "ImportError: cannot import name 'missing_module'",
-            "",
-        );
+        let result = is_environment_error("ImportError: cannot import name 'missing_module'", "");
         assert!(result.is_some());
     }
 
@@ -919,12 +916,7 @@ instance_id: "test-1"
 
     #[test]
     fn test_build_script_without_patch() {
-        let script = build_docker_script(
-            "owner/repo",
-            "abc123",
-            None,
-            &["cargo test".to_string()],
-        );
+        let script = build_docker_script("owner/repo", "abc123", None, &["cargo test".to_string()]);
 
         assert!(script.contains("git clone"));
         assert!(script.contains("owner/repo"));
@@ -969,12 +961,7 @@ instance_id: "test-1"
 
     #[test]
     fn test_build_script_exit_codes() {
-        let script = build_docker_script(
-            "owner/repo",
-            "abc123",
-            None,
-            &["cargo test".to_string()],
-        );
+        let script = build_docker_script("owner/repo", "abc123", None, &["cargo test".to_string()]);
 
         // Script should capture exit codes
         assert!(script.contains("CMD_EXIT=$?"));
@@ -996,12 +983,7 @@ instance_id: "test-1"
 
     #[test]
     fn test_build_script_patch_failure_exit_code() {
-        let script = build_docker_script(
-            "owner/repo",
-            "abc123",
-            Some("some patch"),
-            &[],
-        );
+        let script = build_docker_script("owner/repo", "abc123", Some("some patch"), &[]);
         assert!(script.contains("|| exit 102"));
     }
 

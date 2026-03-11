@@ -195,12 +195,7 @@ impl SudoCli {
         Ok(keypair.sign(data).0.to_vec())
     }
 
-    async fn upload_wasm(
-        &self,
-        file: &PathBuf,
-        challenge_id: &str,
-        name: String,
-    ) -> Result<()> {
+    async fn upload_wasm(&self, file: &PathBuf, challenge_id: &str, name: String) -> Result<()> {
         let wasm_bytes = std::fs::read(file).context("Failed to read WASM file")?;
 
         info!(file = %file.display(), size = wasm_bytes.len(), "Uploading WASM module");
@@ -433,7 +428,9 @@ impl SudoCli {
                     match parts[0] {
                         "help" | "?" => {
                             println!("\nCommands:");
-                            println!("  upload <file> <challenge_id> <name>   - Upload WASM module");
+                            println!(
+                                "  upload <file> <challenge_id> <name>   - Upload WASM module"
+                            );
                             println!("  activate <challenge_id>              - Activate challenge");
                             println!(
                                 "  deactivate <challenge_id>            - Deactivate challenge"

@@ -16,7 +16,7 @@ use tracing::{info, warn};
 use wasmtime::{Caller, Linker, Memory};
 
 const MAX_CHAT_REQUEST_SIZE: u64 = 4 * 1024 * 1024;
-const LLM_REQUEST_TIMEOUT_SECS: u64 = 120;
+const LLM_REQUEST_TIMEOUT_SECS: u64 = 600;
 
 pub const HOST_LLM_NAMESPACE: &str = "platform_llm";
 pub const HOST_LLM_CHAT_COMPLETION: &str = "llm_chat_completion";
@@ -68,7 +68,7 @@ impl Default for LlmPolicy {
             enabled: false,
             api_key: None,
             endpoint: "https://llm.chutes.ai/v1/chat/completions".to_string(),
-            max_requests: 10,
+            max_requests: 0,
             allowed_models: Vec::new(),
         }
     }
@@ -179,13 +179,16 @@ fn handle_chat_completion(
         return LlmHostStatus::Disabled.to_i32();
     }
 
-    if requests_made >= max_requests {
+    if max_requests > 0 && requests_made >= max_requests {
         warn!(requests_made, max_requests, "llm proxy: rate limited");
         return LlmHostStatus::RateLimited.to_i32();
     }
 
     if req_ptr < 0 || req_len < 0 || resp_ptr < 0 || resp_len < 0 {
-        warn!(req_ptr, req_len, resp_ptr, resp_len, "llm proxy: invalid pointers");
+        warn!(
+            req_ptr,
+            req_len, resp_ptr, resp_len, "llm proxy: invalid pointers"
+        );
         return LlmHostStatus::InvalidRequest.to_i32();
     }
 
@@ -218,16 +221,21 @@ fn handle_chat_completion(
 
     // Deserialize using the SDK types directly (same serde attributes including
     // skip_serializing_if which bincode respects for serialization layout)
-    let wasm_req: platform_challenge_sdk_wasm::LlmRequest =
-        match bincode::deserialize(&request_bytes) {
-            Ok(r) => r,
-            Err(e) => {
-                let preview: Vec<u8> = request_bytes.iter().take(64).copied().collect();
-                warn!(error = %e, req_len = request_bytes.len(), first_bytes = ?preview, "llm proxy: bincode deserialize failed");
-                return LlmHostStatus::InvalidRequest.to_i32();
-            }
-        };
-    info!("llm proxy: request decoded, model={}, messages={}", wasm_req.model, wasm_req.messages.len());
+    let wasm_req: platform_challenge_sdk_wasm::LlmRequest = match bincode::deserialize(
+        &request_bytes,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let preview: Vec<u8> = request_bytes.iter().take(64).copied().collect();
+            warn!(error = %e, req_len = request_bytes.len(), first_bytes = ?preview, "llm proxy: bincode deserialize failed");
+            return LlmHostStatus::InvalidRequest.to_i32();
+        }
+    };
+    info!(
+        "llm proxy: request decoded, model={}, messages={}",
+        wasm_req.model,
+        wasm_req.messages.len()
+    );
 
     // Validate model against allowed list
     {
@@ -264,7 +272,9 @@ fn handle_chat_completion(
                 .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
                 .send()
                 .map_err(|e| format!("HTTP request failed: {}", e))?;
-            let bytes = resp.bytes().map_err(|e| format!("read body failed: {}", e))?;
+            let bytes = resp
+                .bytes()
+                .map_err(|e| format!("read body failed: {}", e))?;
             Ok(bytes.to_vec())
         })();
         let _ = tx.send(result);
@@ -440,37 +450,54 @@ fn convert_sdk_request(wasm: &platform_challenge_sdk_wasm::LlmRequest) -> SdkReq
     use platform_challenge_sdk_wasm::llm_types::ToolChoice as WasmTC;
     SdkRequest {
         model: wasm.model.clone(),
-        messages: wasm.messages.iter().map(|m| SdkMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-            name: m.name.clone(),
-            tool_calls: m.tool_calls.as_ref().map(|tcs| tcs.iter().map(|tc| SdkToolCall {
-                id: tc.id.clone(),
-                call_type: tc.call_type.clone(),
-                function: SdkFunctionCall { name: tc.function.name.clone(), arguments: tc.function.arguments.clone() },
-            }).collect()),
-            tool_call_id: m.tool_call_id.clone(),
-        }).collect(),
+        messages: wasm
+            .messages
+            .iter()
+            .map(|m| SdkMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+                name: m.name.clone(),
+                tool_calls: m.tool_calls.as_ref().map(|tcs| {
+                    tcs.iter()
+                        .map(|tc| SdkToolCall {
+                            id: tc.id.clone(),
+                            call_type: tc.call_type.clone(),
+                            function: SdkFunctionCall {
+                                name: tc.function.name.clone(),
+                                arguments: tc.function.arguments.clone(),
+                            },
+                        })
+                        .collect()
+                }),
+                tool_call_id: m.tool_call_id.clone(),
+            })
+            .collect(),
         max_tokens: wasm.max_tokens,
         temperature: wasm.temperature,
         top_p: wasm.top_p,
         frequency_penalty: wasm.frequency_penalty,
         presence_penalty: wasm.presence_penalty,
         stop: wasm.stop.clone(),
-        tools: wasm.tools.as_ref().map(|ts| ts.iter().map(|t| SdkTool {
-            tool_type: "function".to_string(),
-            function: SdkFunctionDef {
-                name: t.function.name.clone(),
-                description: t.function.description.clone(),
-                parameters: t.function.parameters.clone(),
-            },
-        }).collect()),
+        tools: wasm.tools.as_ref().map(|ts| {
+            ts.iter()
+                .map(|t| SdkTool {
+                    tool_type: "function".to_string(),
+                    function: SdkFunctionDef {
+                        name: t.function.name.clone(),
+                        description: t.function.description.clone(),
+                        parameters: t.function.parameters.clone(),
+                    },
+                })
+                .collect()
+        }),
         tool_choice: wasm.tool_choice.as_ref().map(|tc| match tc {
             WasmTC::Auto => SdkToolChoice::Auto,
             WasmTC::None => SdkToolChoice::None,
             WasmTC::Required => SdkToolChoice::Required,
             WasmTC::Specific { function } => SdkToolChoice::Specific {
-                function: SdkToolChoiceFunction { name: function.name.clone() },
+                function: SdkToolChoiceFunction {
+                    name: function.name.clone(),
+                },
             },
         }),
         response_format: wasm.response_format.as_ref().map(|rf| SdkResponseFormat {
@@ -576,6 +603,7 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiRespMessage {
     content: Option<String>,
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<OpenAiToolCall>>,
 }
 
@@ -629,21 +657,34 @@ struct SdkUsage {
     total_tokens: u32,
 }
 
-fn parse_openai_to_sdk_response(body: &[u8]) -> Result<platform_challenge_sdk_wasm::LlmResponse, String> {
-    use platform_challenge_sdk_wasm::{LlmResponse, LlmUsage, llm_types::{ToolCall, FunctionCall}};
+fn parse_openai_to_sdk_response(
+    body: &[u8],
+) -> Result<platform_challenge_sdk_wasm::LlmResponse, String> {
+    use platform_challenge_sdk_wasm::{
+        llm_types::{FunctionCall, ToolCall},
+        LlmResponse, LlmUsage,
+    };
 
     let resp: OpenAiResponse =
         serde_json::from_slice(body).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let choice = resp.choices.and_then(|mut c| {
-        if c.is_empty() { None } else { Some(c.remove(0)) }
+        if c.is_empty() {
+            None
+        } else {
+            Some(c.remove(0))
+        }
     });
 
     let (content, tool_calls_raw, finish_reason) = match choice {
         Some(c) => {
             let fr = c.finish_reason;
             match c.message {
-                Some(msg) => (msg.content, msg.tool_calls.unwrap_or_default(), fr),
+                Some(msg) => {
+                    // Prefer content over reasoning_content
+                    let content = msg.content.or(msg.reasoning_content);
+                    (content, msg.tool_calls.unwrap_or_default(), fr)
+                }
                 None => (None, Vec::new(), fr),
             }
         }
@@ -695,7 +736,10 @@ fn parse_openai_response(body: &[u8]) -> Result<SdkResponse, String> {
         Some(c) => {
             let fr = c.finish_reason;
             match c.message {
-                Some(msg) => (msg.content, msg.tool_calls.unwrap_or_default(), fr),
+                Some(msg) => {
+                    let content = msg.content.or(msg.reasoning_content);
+                    (content, msg.tool_calls.unwrap_or_default(), fr)
+                }
                 None => (None, Vec::new(), fr),
             }
         }
@@ -882,7 +926,11 @@ mod tests {
             2048,
         );
         let bytes = bincode::serialize(&req).unwrap();
-        println!("Serialized {} bytes, first 64: {:?}", bytes.len(), &bytes[..64.min(bytes.len())]);
+        println!(
+            "Serialized {} bytes, first 64: {:?}",
+            bytes.len(),
+            &bytes[..64.min(bytes.len())]
+        );
         let decoded: LlmRequest = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.model, "moonshotai/Kimi-K2.5-TEE");
         assert_eq!(decoded.messages.len(), 2);

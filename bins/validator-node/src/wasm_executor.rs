@@ -1220,7 +1220,8 @@ impl WasmChallengeExecutor {
             }
         }
 
-        let result = pi_guard.instance
+        let result = pi_guard
+            .instance
             .call_return_i64("sync")
             .map_err(|e| anyhow::anyhow!("WASM sync call failed: {}", e))?;
 
@@ -1238,7 +1239,8 @@ impl WasmChallengeExecutor {
             });
         }
 
-        let result_data = pi_guard.instance
+        let result_data = pi_guard
+            .instance
             .read_memory(out_ptr as usize, out_len as usize)
             .map_err(|e| anyhow::anyhow!("failed to read WASM memory for sync output: {}", e))?;
 
@@ -1445,7 +1447,12 @@ impl WasmChallengeExecutor {
         block_height: u64,
         epoch: u64,
     ) -> Result<Arc<Mutex<PersistentInstance>>> {
-        let current_version = self.module_versions.read().get(module_path).copied().unwrap_or(0);
+        let current_version = self
+            .module_versions
+            .read()
+            .get(module_path)
+            .copied()
+            .unwrap_or(0);
 
         // Check if we already have a valid persistent instance
         {
@@ -1461,7 +1468,8 @@ impl WasmChallengeExecutor {
         }
 
         // Create a new persistent instance
-        let module = self.load_module(module_path)
+        let module = self
+            .load_module(module_path)
             .context("Failed to load WASM module for persistent instance")?;
 
         let real_now_ms = std::time::SystemTime::now()
@@ -1490,7 +1498,8 @@ impl WasmChallengeExecutor {
             ..Default::default()
         };
 
-        let instance = self.runtime
+        let instance = self
+            .runtime
             .instantiate(&module, instance_config, None)
             .map_err(|e| anyhow::anyhow!("Failed to create persistent WASM instance: {}", e))?;
 
@@ -1500,8 +1509,14 @@ impl WasmChallengeExecutor {
             created_at: Instant::now(),
         }));
 
-        self.persistent_instances.write().insert(module_path.to_string(), Arc::clone(&pi));
-        info!(module = module_path, version = current_version, "persistent WASM instance created");
+        self.persistent_instances
+            .write()
+            .insert(module_path.to_string(), Arc::clone(&pi));
+        info!(
+            module = module_path,
+            version = current_version,
+            "persistent WASM instance created"
+        );
         Ok(pi)
     }
 
@@ -1518,7 +1533,10 @@ impl WasmChallengeExecutor {
         let mut guard = match pi.try_lock() {
             Some(g) => g,
             None => {
-                debug!(module = module_path, "background_tick skipped: instance busy (sync in progress)");
+                debug!(
+                    module = module_path,
+                    "background_tick skipped: instance busy (sync in progress)"
+                );
                 return Ok(());
             }
         };
@@ -1571,7 +1589,12 @@ impl WasmChallengeExecutor {
         *v += 1;
         info!(module = module_path, version = *v, "module version bumped");
         // Drop old persistent instance
-        if self.persistent_instances.write().remove(module_path).is_some() {
+        if self
+            .persistent_instances
+            .write()
+            .remove(module_path)
+            .is_some()
+        {
             info!(module = module_path, "persistent instance dropped");
         }
     }

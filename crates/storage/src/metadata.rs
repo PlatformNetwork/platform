@@ -254,7 +254,9 @@ impl MetadataRegistry {
         })?;
 
         // Update global metadata
-        self.global.challenges.insert(challenge_id.clone(), metadata);
+        self.global
+            .challenges
+            .insert(challenge_id.clone(), metadata);
         self.persist_global()?;
 
         info!("Registered challenge {}", challenge_id);
@@ -890,7 +892,8 @@ mod tests {
         assert_eq!(global.challenge_count(), 0);
 
         let challenge_id = ChallengeId::new("test-challenge");
-        global.challenges.insert(challenge_id.clone(),
+        global.challenges.insert(
+            challenge_id.clone(),
             ChallengeMetadata::new(challenge_id.clone(), serde_json::json!({})),
         );
         assert_eq!(global.challenge_count(), 1);
@@ -922,7 +925,8 @@ mod tests {
     fn test_global_metadata_serialization() {
         let mut global = GlobalMetadata::new("1.0.0".to_string());
         let challenge_id = ChallengeId::new("test-challenge");
-        global.challenges.insert(challenge_id.clone(),
+        global.challenges.insert(
+            challenge_id.clone(),
             ChallengeMetadata::new(challenge_id.clone(), serde_json::json!({})),
         );
 

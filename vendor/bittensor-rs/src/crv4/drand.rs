@@ -130,9 +130,8 @@ pub fn calculate_reveal_round(
         .unwrap()
         .as_secs();
     let target_secs = now_secs.saturating_add(secs_until_ingest);
-    let reveal_round = (target_secs.saturating_sub(DRAND_QUICKNET_GENESIS)
-        / DRAND_ROUND_INTERVAL_SECS)
-        .max(1);
+    let reveal_round =
+        (target_secs.saturating_sub(DRAND_QUICKNET_GENESIS) / DRAND_ROUND_INTERVAL_SECS).max(1);
 
     tracing::info!(
         "CRv4 reveal round calculation: tempo={}, current_block={}, netuid={}, \
@@ -269,8 +268,22 @@ mod tests {
         let reveal_period = 1u64;
         let block_time = 12.0;
 
-        let reveal_1 = calculate_reveal_round(tempo, current_block, netuid, reveal_period, block_time, 24_000_000);
-        let reveal_2 = calculate_reveal_round(tempo, current_block, netuid, reveal_period, block_time, 25_000_000);
+        let reveal_1 = calculate_reveal_round(
+            tempo,
+            current_block,
+            netuid,
+            reveal_period,
+            block_time,
+            24_000_000,
+        );
+        let reveal_2 = calculate_reveal_round(
+            tempo,
+            current_block,
+            netuid,
+            reveal_period,
+            block_time,
+            25_000_000,
+        );
 
         // Should be identical since we use wall-clock, not chain state
         assert_eq!(reveal_1, reveal_2);

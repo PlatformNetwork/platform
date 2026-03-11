@@ -155,7 +155,9 @@ mod state_errors {
     fn test_get_nonexistent_challenge() {
         let sudo = Keypair::generate();
         let state = ChainState::new(sudo.hotkey(), NetworkConfig::default());
-        assert!(state.get_challenge(&ChallengeId::new("test-challenge")).is_none());
+        assert!(state
+            .get_challenge(&ChallengeId::new("test-challenge"))
+            .is_none());
     }
 
     #[test]
@@ -218,7 +220,9 @@ mod storage_errors {
     fn test_load_nonexistent_challenge() {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
-        let loaded = storage.load_challenge(&ChallengeId::new("test-challenge")).unwrap();
+        let loaded = storage
+            .load_challenge(&ChallengeId::new("test-challenge"))
+            .unwrap();
         assert!(loaded.is_none());
     }
 
@@ -235,7 +239,9 @@ mod storage_errors {
     fn test_delete_nonexistent_challenge() {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).unwrap();
-        let deleted = storage.delete_challenge(&ChallengeId::new("test-challenge")).unwrap();
+        let deleted = storage
+            .delete_challenge(&ChallengeId::new("test-challenge"))
+            .unwrap();
         assert!(!deleted);
     }
 

@@ -662,8 +662,7 @@ fn handle_storage_set(
     let challenge_id = storage.challenge_id.clone();
     let backend = Arc::clone(&storage.backend);
 
-    // propose_write broadcasts via P2P for consensus. The actual write happens
-    // in the StorageVote handler after 2f+1 approval.
+    // propose_write writes locally first, then broadcasts via P2P for consensus.
     match backend.propose_write(&challenge_id, &key, &value) {
         Ok(_proposal_id) => {
             caller.data_mut().storage_state.bytes_written += value.len() as u64;

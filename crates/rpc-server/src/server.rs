@@ -335,7 +335,10 @@ async fn challenge_route_handler(
                 .find(|c| c.name == challenge_id);
 
             if let Some(config) = found {
-                (config.challenge_id.0.clone(), Some(config.challenge_id.clone()))
+                (
+                    config.challenge_id.0.clone(),
+                    Some(config.challenge_id.clone()),
+                )
             } else {
                 (challenge_id.clone(), None)
             }
@@ -1242,8 +1245,12 @@ async fn sudo_challenge_handler(
         if request.action == "wasm_upload" {
             if let Some(ref invalidator) = *handler.wasm_cache_invalidator.read() {
                 // Decode wasm bytes again for the invalidator callback
-                let wasm_bytes = request.data.as_ref()
-                    .and_then(|d| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, d).ok())
+                let wasm_bytes = request
+                    .data
+                    .as_ref()
+                    .and_then(|d| {
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, d).ok()
+                    })
                     .unwrap_or_default();
                 invalidator(&request.challenge_id, &wasm_bytes);
                 info!(challenge_id = %request.challenge_id, "WASM cache invalidated after upload");

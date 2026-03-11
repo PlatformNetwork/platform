@@ -62,9 +62,7 @@ use std::time::Instant;
 use tracing::{debug, info, warn};
 
 /// Handler for computing weights in real-time (called by subnet_getWeights)
-pub type GetWeightsHandler = Arc<
-    dyn Fn() -> Vec<(u8, Vec<u16>, Vec<u16>)> + Send + Sync,
->;
+pub type GetWeightsHandler = Arc<dyn Fn() -> Vec<(u8, Vec<u16>, Vec<u16>)> + Send + Sync>;
 
 /// Handler for challenge routes
 pub type ChallengeRouteHandler = Arc<
@@ -1177,7 +1175,10 @@ impl RpcHandler {
                     .find(|c| c.name == challenge_id);
 
                 if let Some(config) = found {
-                    (config.challenge_id.0.clone(), Some(config.challenge_id.clone()))
+                    (
+                        config.challenge_id.0.clone(),
+                        Some(config.challenge_id.clone()),
+                    )
                 } else {
                     // Also check legacy challenges by name
                     let legacy = chain.challenges.values().find(|c| c.name == challenge_id);
@@ -2787,7 +2788,8 @@ mod tests {
 
         {
             let mut cs = handler.chain_state.write();
-            cs.wasm_challenge_configs.insert(challenge_id.clone(), wasm_config);
+            cs.wasm_challenge_configs
+                .insert(challenge_id.clone(), wasm_config);
             cs.register_challenge_routes(
                 challenge_id.clone(),
                 vec![
@@ -2837,7 +2839,8 @@ mod tests {
 
         {
             let mut cs = handler.chain_state.write();
-            cs.wasm_challenge_configs.insert(challenge_id.clone(), wasm_config);
+            cs.wasm_challenge_configs
+                .insert(challenge_id.clone(), wasm_config);
             cs.register_challenge_routes(
                 challenge_id.clone(),
                 vec![platform_core::ChallengeRouteInfo {

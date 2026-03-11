@@ -132,10 +132,7 @@ fn validate_test_commands(value: &Option<Value>, field_name: &str) -> Vec<Issue>
         Some(other) => {
             issues.push(Issue {
                 field: field_name.to_string(),
-                message: format!(
-                    "expected array of strings, got {}",
-                    yaml_type_name(other)
-                ),
+                message: format!("expected array of strings, got {}", yaml_type_name(other)),
             });
         }
     }
@@ -348,7 +345,10 @@ fn main() {
     println!();
 
     if fail_count > 0 {
-        println!("RESULT: FAIL — {} task(s) have test command issues", fail_count);
+        println!(
+            "RESULT: FAIL — {} task(s) have test command issues",
+            fail_count
+        );
         process::exit(1);
     } else {
         println!("RESULT: PASS — all tasks have valid test commands");
@@ -495,7 +495,11 @@ difficulty: "easy"
         let tmp = tempfile::tempdir().unwrap();
         let path = create_temp_task(tmp.path(), "task1", &valid_yaml());
         let result = validate_file(&path);
-        assert!(result.is_valid(), "Expected valid, got: {:?}", result.issues);
+        assert!(
+            result.is_valid(),
+            "Expected valid, got: {:?}",
+            result.issues
+        );
         assert_eq!(result.instance_id.as_deref(), Some("owner__repo-1234"));
     }
 
@@ -618,13 +622,11 @@ PASS_TO_PASS: 42
         assert!(result
             .issues
             .iter()
-            .any(|i| i.field == "FAIL_TO_PASS"
-                && i.message.contains("expected array of strings")));
+            .any(|i| i.field == "FAIL_TO_PASS" && i.message.contains("expected array of strings")));
         assert!(result
             .issues
             .iter()
-            .any(|i| i.field == "PASS_TO_PASS"
-                && i.message.contains("expected array of strings")));
+            .any(|i| i.field == "PASS_TO_PASS" && i.message.contains("expected array of strings")));
     }
 
     // ----- find_workspace_yamls tests -----

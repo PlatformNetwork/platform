@@ -201,7 +201,9 @@ impl ChallengeRegistry {
         name_index.insert(name.clone(), id.clone());
 
         info!(challenge_id = %id, name = %name, "Challenge registered");
-        self.emit_event(LifecycleEvent::Registered { challenge_id: id.clone() });
+        self.emit_event(LifecycleEvent::Registered {
+            challenge_id: id.clone(),
+        });
 
         Ok(id)
     }
@@ -248,7 +250,9 @@ impl ChallengeRegistry {
         name_index.remove(&registered.entry.name);
 
         info!(challenge_id = %id, "Challenge unregistered");
-        self.emit_event(LifecycleEvent::Unregistered { challenge_id: id.clone() });
+        self.emit_event(LifecycleEvent::Unregistered {
+            challenge_id: id.clone(),
+        });
 
         Ok(registered.entry)
     }

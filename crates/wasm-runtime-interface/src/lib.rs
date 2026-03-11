@@ -222,7 +222,7 @@ impl HttpPolicy {
     pub fn development() -> Self {
         Self {
             allowed_schemes: vec![HttpScheme::Https, HttpScheme::Http],
-            allowed_ports: vec![80, 443],
+            allowed_ports: vec![],
             ..Default::default()
         }
     }
@@ -351,7 +351,7 @@ impl RequestLimits {
             max_response_bytes: 4 * 1024 * 1024,
             max_header_bytes: 64 * 1024,
             timeout_ms: 120_000,
-            max_requests: 1024,
+            max_requests: u32::MAX,
             max_redirects: 4,
         }
     }

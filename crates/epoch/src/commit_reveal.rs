@@ -736,10 +736,14 @@ mod tests {
         let validator = Keypair::generate();
         let (commitment, reveal) = create_test_commitment(&validator, epoch, challenge_id.clone());
 
-        manager.commit(epoch, challenge_id.clone(), commitment).unwrap();
+        manager
+            .commit(epoch, challenge_id.clone(), commitment)
+            .unwrap();
         manager.reveal(epoch, challenge_id.clone(), reveal).unwrap();
 
-        let finalized = manager.finalize(epoch, challenge_id.clone(), 0.3, 1).unwrap();
+        let finalized = manager
+            .finalize(epoch, challenge_id.clone(), 0.3, 1)
+            .unwrap();
         assert_eq!(finalized.epoch, epoch);
     }
 
@@ -761,7 +765,9 @@ mod tests {
         // Create states for epochs 0, 1, 2
         for epoch in 0..3 {
             let (commitment, _) = create_test_commitment(&validator, epoch, challenge_id.clone());
-            manager.commit(epoch, challenge_id.clone(), commitment).unwrap();
+            manager
+                .commit(epoch, challenge_id.clone(), commitment)
+                .unwrap();
         }
 
         // Cleanup, keeping only last 1 epoch

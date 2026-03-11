@@ -245,8 +245,7 @@ impl BlockSync {
                             ))
                             .await;
 
-                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs as u64))
-                            .await;
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs as u64)).await;
 
                         match BlockSync::recreate_listener(&rpc_url, &config).await {
                             Ok((new_client, new_listener, new_rx, epoch_info)) => {
@@ -265,8 +264,7 @@ impl BlockSync {
                                 if let Err(e) = new_listener.start(new_client).await {
                                     warn!("Failed to start recreated listener: {}", e);
                                 } else {
-                                    let _ =
-                                        event_tx.send(BlockSyncEvent::Reconnected).await;
+                                    let _ = event_tx.send(BlockSyncEvent::Reconnected).await;
                                 }
                             }
                             Err(e) => {

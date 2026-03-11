@@ -389,7 +389,10 @@ async fn main() -> Result<()> {
         enable_indexing: false,
         ..Default::default()
     };
-    let tracked_storage = TrackedStorage::new(Arc::clone(&local_storage) as Arc<dyn platform_distributed_storage::DistributedStore>, tracked_config);
+    let tracked_storage = TrackedStorage::new(
+        Arc::clone(&local_storage) as Arc<dyn platform_distributed_storage::DistributedStore>,
+        tracked_config,
+    );
     let storage = Arc::new(tracked_storage);
     info!("Distributed storage initialized with compression (audit/indexing disabled)");
 
@@ -874,110 +877,125 @@ async fn main() -> Result<()> {
             let exec = Arc::clone(executor);
             let cs_for_invalidator = Arc::clone(&chain_state);
             let persist_tx_invalidator = persist_trigger_tx.clone();
-            let invalidator: Arc<dyn Fn(&str, &[u8]) + Send + Sync> = Arc::new(move |challenge_id: &str, wasm_bytes: &[u8]| {
-                // Invalidate cache by both name and resolved UUID module_path
-                exec.invalidate_cache(challenge_id);
-                {
-                    let cs = cs_for_invalidator.read();
-                    let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
-                        Some(ChallengeId::from_uuid(uuid))
-                    } else {
-                        cs.wasm_challenge_configs.values()
-                            .find(|c| c.name == challenge_id)
-                            .map(|c| c.challenge_id.clone())
-                    };
-                    if let Some(cid) = resolved {
-                        let module_path = cs.wasm_challenge_configs.get(&cid)
-                            .map(|c| c.module.module_path.clone());
-                        drop(cs);
-                        if let Some(path) = module_path {
-                            if path != challenge_id {
-                                exec.invalidate_cache(&path);
-                            }
-                        }
-                    }
-                }
-                if wasm_bytes.is_empty() {
-                    return;
-                }
-                // Resolve the UUID module_path so compiled module is cached under the
-                // same key the HTTP handler uses for lookup.
-                let cache_key = {
-                    let cs = cs_for_invalidator.read();
-                    let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
-                        Some(ChallengeId::from_uuid(uuid))
-                    } else {
-                        cs.wasm_challenge_configs.values()
-                            .find(|c| c.name == challenge_id)
-                            .map(|c| c.challenge_id.clone())
-                    };
-                    resolved
-                        .and_then(|cid| {
-                            cs_for_invalidator.read()
-                                .wasm_challenge_configs.get(&cid)
-                                .map(|c| c.module.module_path.clone())
-                        })
-                        .unwrap_or_else(|| challenge_id.to_string())
-                };
-                // Reload route definitions from the new WASM bytes
-                match exec.execute_get_routes_from_bytes(
-                    &cache_key,
-                    wasm_bytes,
-                    &wasm_runtime_interface::NetworkPolicy::development(),
-                    &wasm_runtime_interface::SandboxPolicy::default(),
-                ) {
-                    Ok((routes_data, _)) => {
-                        if let Ok(routes) = bincode::deserialize::<Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>>(&routes_data) {
-                            let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes
-                                .iter()
-                                .map(|r| platform_core::ChallengeRouteInfo {
-                                    method: r.method.clone(),
-                                    path: r.path.clone(),
-                                    description: r.description.clone(),
-                                    requires_auth: r.requires_auth,
-                                })
-                                .collect();
-                            let cid = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
-                                platform_core::ChallengeId::from_uuid(uuid)
-                            } else {
-                                // Try name-based lookup, then deterministic hash
-                                let cs_read = cs_for_invalidator.read();
-                                let found = cs_read.wasm_challenge_configs.values()
-                                    .find(|c| c.name == challenge_id)
-                                    .map(|c| c.challenge_id.clone());
-                                drop(cs_read);
-                                found.unwrap_or_else(|| ChallengeId::from_string(challenge_id))
-                            };
-                            {
-                                let mut state = cs_for_invalidator.write();
-                                state.register_challenge_routes(
-                                    cid.clone(),
-                                    route_infos.clone(),
-                                );
-                                // If challenge_id is a human-readable name (not UUID), ensure the
-                                // challenge config uses that name so HTTP name-based routing works.
-                                if uuid::Uuid::parse_str(challenge_id).is_err() {
-                                    let needs_rename = state.wasm_challenge_configs.get(&cid)
-                                        .map(|c| c.name != challenge_id)
-                                        .unwrap_or(false);
-                                    if needs_rename {
-                                        state.rename_challenge(&cid, challenge_id.to_string());
-                                    }
+            let invalidator: Arc<dyn Fn(&str, &[u8]) + Send + Sync> = Arc::new(
+                move |challenge_id: &str, wasm_bytes: &[u8]| {
+                    // Invalidate cache by both name and resolved UUID module_path
+                    exec.invalidate_cache(challenge_id);
+                    {
+                        let cs = cs_for_invalidator.read();
+                        let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
+                            Some(ChallengeId::from_uuid(uuid))
+                        } else {
+                            cs.wasm_challenge_configs
+                                .values()
+                                .find(|c| c.name == challenge_id)
+                                .map(|c| c.challenge_id.clone())
+                        };
+                        if let Some(cid) = resolved {
+                            let module_path = cs
+                                .wasm_challenge_configs
+                                .get(&cid)
+                                .map(|c| c.module.module_path.clone());
+                            drop(cs);
+                            if let Some(path) = module_path {
+                                if path != challenge_id {
+                                    exec.invalidate_cache(&path);
                                 }
-                                info!(
-                                    challenge_id = challenge_id,
-                                    routes_count = route_infos.len(),
-                                    "Reloaded WASM routes after upload"
-                                );
                             }
-                            let _ = persist_tx_invalidator.send("wasm_cache_invalidator");
                         }
                     }
-                    Err(e) => {
-                        warn!(challenge_id = challenge_id, error = %e, "Failed to reload routes after upload");
+                    if wasm_bytes.is_empty() {
+                        return;
                     }
-                }
-            });
+                    // Resolve the UUID module_path so compiled module is cached under the
+                    // same key the HTTP handler uses for lookup.
+                    let cache_key = {
+                        let cs = cs_for_invalidator.read();
+                        let resolved = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
+                            Some(ChallengeId::from_uuid(uuid))
+                        } else {
+                            cs.wasm_challenge_configs
+                                .values()
+                                .find(|c| c.name == challenge_id)
+                                .map(|c| c.challenge_id.clone())
+                        };
+                        resolved
+                            .and_then(|cid| {
+                                cs_for_invalidator
+                                    .read()
+                                    .wasm_challenge_configs
+                                    .get(&cid)
+                                    .map(|c| c.module.module_path.clone())
+                            })
+                            .unwrap_or_else(|| challenge_id.to_string())
+                    };
+                    // Reload route definitions from the new WASM bytes
+                    match exec.execute_get_routes_from_bytes(
+                        &cache_key,
+                        wasm_bytes,
+                        &wasm_runtime_interface::NetworkPolicy::development(),
+                        &wasm_runtime_interface::SandboxPolicy::default(),
+                    ) {
+                        Ok((routes_data, _)) => {
+                            if let Ok(routes) = bincode::deserialize::<
+                                Vec<platform_challenge_sdk_wasm::WasmRouteDefinition>,
+                            >(&routes_data)
+                            {
+                                let route_infos: Vec<platform_core::ChallengeRouteInfo> = routes
+                                    .iter()
+                                    .map(|r| platform_core::ChallengeRouteInfo {
+                                        method: r.method.clone(),
+                                        path: r.path.clone(),
+                                        description: r.description.clone(),
+                                        requires_auth: r.requires_auth,
+                                    })
+                                    .collect();
+                                let cid = if let Ok(uuid) = uuid::Uuid::parse_str(challenge_id) {
+                                    platform_core::ChallengeId::from_uuid(uuid)
+                                } else {
+                                    // Try name-based lookup, then deterministic hash
+                                    let cs_read = cs_for_invalidator.read();
+                                    let found = cs_read
+                                        .wasm_challenge_configs
+                                        .values()
+                                        .find(|c| c.name == challenge_id)
+                                        .map(|c| c.challenge_id.clone());
+                                    drop(cs_read);
+                                    found.unwrap_or_else(|| ChallengeId::from_string(challenge_id))
+                                };
+                                {
+                                    let mut state = cs_for_invalidator.write();
+                                    state.register_challenge_routes(
+                                        cid.clone(),
+                                        route_infos.clone(),
+                                    );
+                                    // If challenge_id is a human-readable name (not UUID), ensure the
+                                    // challenge config uses that name so HTTP name-based routing works.
+                                    if uuid::Uuid::parse_str(challenge_id).is_err() {
+                                        let needs_rename = state
+                                            .wasm_challenge_configs
+                                            .get(&cid)
+                                            .map(|c| c.name != challenge_id)
+                                            .unwrap_or(false);
+                                        if needs_rename {
+                                            state.rename_challenge(&cid, challenge_id.to_string());
+                                        }
+                                    }
+                                    info!(
+                                        challenge_id = challenge_id,
+                                        routes_count = route_infos.len(),
+                                        "Reloaded WASM routes after upload"
+                                    );
+                                }
+                                let _ = persist_tx_invalidator.send("wasm_cache_invalidator");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(challenge_id = challenge_id, error = %e, "Failed to reload routes after upload");
+                        }
+                    }
+                },
+            );
             *rpc_server.rpc_handler().wasm_cache_invalidator.write() = Some(invalidator);
         }
 
@@ -1111,12 +1129,19 @@ async fn main() -> Result<()> {
             // Persist state after startup route registration so routes survive
             // a crash before the first periodic persist tick (60s).
             if let Err(e) = persist_core_state_to_storage(&storage, &chain_state).await {
-                warn!("Failed to persist core state after startup WASM reload: {}", e);
+                warn!(
+                    "Failed to persist core state after startup WASM reload: {}",
+                    e
+                );
             }
 
             // Run sync() on each challenge at startup
             let startup_block = state_manager.apply(|state| state.bittensor_block);
-            let startup_epoch = if startup_block > 0 { startup_block / 360 } else { 0 };
+            let startup_epoch = if startup_block > 0 {
+                startup_block / 360
+            } else {
+                0
+            };
             for (challenge_id, module_path) in &challenges {
                 let mp = if module_path.is_empty() {
                     challenge_id.to_string()
@@ -2502,8 +2527,8 @@ async fn handle_network_event(
                             },
                         );
 
-                        if let Err(e) = p2p_cmd_tx
-                            .try_send(platform_p2p_consensus::P2PCommand::Broadcast(req))
+                        if let Err(e) =
+                            p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(req))
                         {
                             warn!(error = %e, "Failed to send core state request");
                         }
@@ -2898,8 +2923,8 @@ async fn handle_network_event(
                             signature,
                         },
                     );
-                    if let Err(e) = p2p_cmd_tx
-                        .try_send(platform_p2p_consensus::P2PCommand::Broadcast(resp))
+                    if let Err(e) =
+                        p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(resp))
                     {
                         warn!(error = %e, "Failed to send leaderboard response");
                     }
@@ -3032,7 +3057,9 @@ async fn handle_network_event(
                                             "wasm_upload_p2p",
                                             |cs| {
                                                 // Preserve existing config (emission_weight, mechanism_id)
-                                                let existing_config = cs.wasm_challenge_configs.get(&cid)
+                                                let existing_config = cs
+                                                    .wasm_challenge_configs
+                                                    .get(&cid)
                                                     .map(|c| c.config.clone());
                                                 let wasm_config =
                                                     platform_core::WasmChallengeConfig {
@@ -3058,7 +3085,8 @@ async fn handle_network_event(
                                         if let Some(ref executor) = wasm_executor_ref {
                                             let wasm_bytes = update.data.clone();
                                             let executor = executor.clone();
-                                            let challenge_id_for_routes = update.challenge_id.clone();
+                                            let challenge_id_for_routes =
+                                                update.challenge_id.clone();
                                             let challenge_id_str_for_routes =
                                                 challenge_id_str.clone();
                                             let chain_state_for_routes = chain_state.clone();
@@ -3397,8 +3425,8 @@ async fn handle_network_event(
                         }
                     }
 
-                    if let Err(e) = p2p_cmd_tx
-                        .try_send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg))
+                    if let Err(e) =
+                        p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg))
                     {
                         warn!(error = %e, "Failed to broadcast storage vote");
                     }
@@ -3670,8 +3698,8 @@ async fn handle_network_event(
                         },
                     );
 
-                    if let Err(e) = p2p_cmd_tx
-                        .try_send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg))
+                    if let Err(e) =
+                        p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(vote_msg))
                     {
                         warn!(error = %e, "Failed to broadcast state mutation vote");
                     }
@@ -3855,8 +3883,8 @@ async fn handle_network_event(
                         },
                     );
 
-                    if let Err(e) = p2p_cmd_tx
-                        .try_send(platform_p2p_consensus::P2PCommand::Broadcast(response))
+                    if let Err(e) =
+                        p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(response))
                     {
                         warn!(error = %e, "Failed to send core state response");
                     }
@@ -3994,8 +4022,8 @@ async fn handle_network_event(
                         },
                     );
 
-                    if let Err(e) = p2p_cmd_tx
-                        .try_send(platform_p2p_consensus::P2PCommand::Broadcast(req))
+                    if let Err(e) =
+                        p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(req))
                     {
                         warn!(error = %e, "Failed to send storage sync request");
                     }
@@ -4138,8 +4166,13 @@ async fn handle_network_event(
                 }
 
                 let in_bootstrap = state_manager.apply(|s| s.is_in_bootstrap_period());
-                let we_are_bootstrap = keypair.hotkey().to_ss58() == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
-                if in_bootstrap && we_are_bootstrap && resp.responder.to_ss58() != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58 {
+                let we_are_bootstrap = keypair.hotkey().to_ss58()
+                    == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
+                if in_bootstrap
+                    && we_are_bootstrap
+                    && resp.responder.to_ss58()
+                        != platform_core::constants::BOOTSTRAP_VALIDATOR_SS58
+                {
                     debug!(
                         responder = %resp.responder.to_ss58(),
                         "Bootstrap validator ignoring delta sync from non-bootstrap peer"
@@ -4239,7 +4272,8 @@ async fn handle_network_event(
                     let mut skipped = 0u64;
                     let mut max_block = 0u64;
                     let opts = put_options_with_block(state_manager);
-                    let from_bootstrap = resp.responder.to_ss58() == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
+                    let from_bootstrap = resp.responder.to_ss58()
+                        == platform_core::constants::BOOTSTRAP_VALIDATOR_SS58;
 
                     for entry in &resp.entries {
                         // Reject entries with unreasonable version numbers
@@ -4266,7 +4300,11 @@ async fn handle_network_event(
                                 .get(&key, platform_distributed_storage::GetOptions::default())
                                 .await
                             {
-                                Ok(Some(existing)) if existing.metadata.version >= entry.version => false,
+                                Ok(Some(existing))
+                                    if existing.metadata.version >= entry.version =>
+                                {
+                                    false
+                                }
                                 _ => true,
                             }
                         };
@@ -4308,8 +4346,10 @@ async fn handle_network_event(
                                 }
                                 let new_root: [u8; 32] = hasher.finalize().into();
                                 state_manager.apply(|state| {
-                                    state
-                                        .update_challenge_storage_root(resp.challenge_id.clone(), new_root);
+                                    state.update_challenge_storage_root(
+                                        resp.challenge_id.clone(),
+                                        new_root,
+                                    );
                                 });
                                 debug!(
                                     challenge_id = %resp.challenge_id,
@@ -4654,7 +4694,10 @@ fn compute_weights_for_rpc(
     info!(
         "Computed weights for RPC cache: {} mechanisms, {} total entries",
         weights_to_cache.len(),
-        weights_to_cache.iter().map(|(_, u, _)| u.len()).sum::<usize>()
+        weights_to_cache
+            .iter()
+            .map(|(_, u, _)| u.len())
+            .sum::<usize>()
     );
 
     {
@@ -5214,7 +5257,13 @@ async fn process_wasm_evaluations(
             .filter(|(_, record)| {
                 !record.finalized && !record.evaluations.contains_key(&keypair.hotkey())
             })
-            .map(|(id, record)| (id.clone(), record.challenge_id.clone(), record.agent_hash.clone()))
+            .map(|(id, record)| {
+                (
+                    id.clone(),
+                    record.challenge_id.clone(),
+                    record.agent_hash.clone(),
+                )
+            })
             .collect()
     });
 
@@ -5398,8 +5447,7 @@ async fn process_wasm_evaluations(
             signature,
             timestamp,
         });
-        if let Err(e) = p2p_cmd_tx
-            .try_send(platform_p2p_consensus::P2PCommand::Broadcast(eval_msg))
+        if let Err(e) = p2p_cmd_tx.try_send(platform_p2p_consensus::P2PCommand::Broadcast(eval_msg))
         {
             warn!(
                 submission_id = %submission_id,
@@ -5584,7 +5632,8 @@ fn compact_storage_if_needed(db_path: &std::path::Path) -> anyhow::Result<()> {
                 if let Some(ns_end) = key.iter().position(|&b| b == b':') {
                     let ns = &key[..ns_end];
                     let key_part = &key[ns_end + 1..];
-                    let index_key = format!("{}:{}", String::from_utf8_lossy(ns), hex::encode(key_part));
+                    let index_key =
+                        format!("{}:{}", String::from_utf8_lossy(ns), hex::encode(key_part));
                     index_tree.remove(index_key.as_bytes())?;
                 }
                 pruned_count += 1;

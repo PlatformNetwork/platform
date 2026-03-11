@@ -149,7 +149,6 @@ pub struct FunctionDef {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
 pub enum ToolChoice {
     Auto,
     None,
