@@ -145,6 +145,10 @@ pub struct WasmChallengeExecutor {
     module_versions: RwLock<HashMap<String, u64>>,
     persistent_instances: RwLock<HashMap<String, Arc<Mutex<PersistentInstance>>>>,
     dedup_state: RwLock<HashMap<String, Arc<DedupState>>>,
+    /// Cache of last successful get_weights results per challenge.
+    /// Used to return stale-but-valid data when the dedup guard blocks a concurrent call,
+    /// instead of returning an empty Vec that the caller treats as "0 entries → 100% burn".
+    last_good_weights: RwLock<HashMap<String, Vec<platform_challenge_sdk::WeightAssignment>>>,
 }
 
 impl WasmChallengeExecutor {
@@ -173,6 +177,7 @@ impl WasmChallengeExecutor {
             module_versions: RwLock::new(HashMap::new()),
             persistent_instances: RwLock::new(HashMap::new()),
             dedup_state: RwLock::new(HashMap::new()),
+            last_good_weights: RwLock::new(HashMap::new()),
         })
     }
 
@@ -1086,7 +1091,16 @@ impl WasmChallengeExecutor {
         let _guard = match dedup.try_acquire(DedupFlags::GET_WEIGHTS) {
             Some(g) => g,
             None => {
-                debug!(module = module_path, "get_weights skipped: already running");
+                let cache = self.last_good_weights.read();
+                if let Some(cached) = cache.get(module_path) {
+                    info!(
+                        module = module_path,
+                        weight_count = cached.len(),
+                        "get_weights dedup collision: returning cached last-good weights"
+                    );
+                    return Ok(cached.clone());
+                }
+                debug!(module = module_path, "get_weights skipped: already running, no cache available");
                 return Ok(Vec::new());
             }
         };
@@ -1152,6 +1166,11 @@ impl WasmChallengeExecutor {
             execution_time_ms = start.elapsed().as_millis() as u64,
             "WASM get_weights completed"
         );
+
+        if !weights.is_empty() {
+            let mut cache = self.last_good_weights.write();
+            cache.insert(module_path.to_string(), weights.clone());
+        }
 
         Ok(weights)
     }

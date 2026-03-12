@@ -517,8 +517,10 @@ async fn main() -> Result<()> {
         Arc::new(RwLock::new(std::collections::HashMap::new()));
 
     // Connect to Bittensor
-    let subtensor: Option<Arc<Subtensor>>;
+    let mut subtensor: Option<Arc<Subtensor>>;
     let subtensor_signer: Option<Arc<BittensorSigner>>;
+    let subtensor_endpoint_for_reconnect = args.subtensor_endpoint.clone();
+    let subtensor_state_path_for_reconnect: Option<std::path::PathBuf>;
     let mut subtensor_client: Option<SubtensorClient>;
     let bittensor_client_for_metagraph: Option<Arc<BittensorClient>>;
     let mut block_rx: Option<tokio::sync::mpsc::Receiver<BlockSyncEvent>> = None;
@@ -531,6 +533,7 @@ async fn main() -> Result<()> {
             info!("Running in bootnode mode (read-only Bittensor access)");
             subtensor = None;
             subtensor_signer = None;
+            subtensor_state_path_for_reconnect = None;
 
             // Create SubtensorClient for metagraph only
             let mut client = SubtensorClient::new(platform_bittensor::BittensorConfig {
@@ -583,6 +586,7 @@ async fn main() -> Result<()> {
         } else {
             // Full validator mode: requires signing key
             let state_path = data_dir.join("subtensor_state.json");
+            subtensor_state_path_for_reconnect = Some(state_path.clone());
             match Subtensor::with_persistence(&args.subtensor_endpoint, state_path).await {
                 Ok(st) => {
                     let secret = args
@@ -682,6 +686,7 @@ async fn main() -> Result<()> {
         info!("Bittensor disabled");
         subtensor = None;
         subtensor_signer = None;
+        subtensor_state_path_for_reconnect = None;
         subtensor_client = None;
         bittensor_client_for_metagraph = None;
     }
@@ -1298,7 +1303,7 @@ async fn main() -> Result<()> {
 
                 handle_block_event(
                     event,
-                    &subtensor,
+                    &mut subtensor,
                     &subtensor_signer,
                     &subtensor_client,
                     &state_manager,
@@ -1309,6 +1314,8 @@ async fn main() -> Result<()> {
                     &chain_state,
                     &storage,
                     &mut last_weight_submission_epoch,
+                    &subtensor_endpoint_for_reconnect,
+                    &subtensor_state_path_for_reconnect,
                 ).await;
 
                 // On first block after startup, compute weights immediately so
@@ -1339,7 +1346,7 @@ async fn main() -> Result<()> {
                     );
                     handle_block_event(
                         BlockSyncEvent::CommitWindowOpen { epoch, block: block_number },
-                        &subtensor,
+                        &mut subtensor,
                         &subtensor_signer,
                         &subtensor_client,
                         &state_manager,
@@ -1350,6 +1357,8 @@ async fn main() -> Result<()> {
                         &chain_state,
                         &storage,
                         &mut last_weight_submission_epoch,
+                        &subtensor_endpoint_for_reconnect,
+                        &subtensor_state_path_for_reconnect,
                     ).await;
                 }
             }
@@ -4706,9 +4715,42 @@ fn compute_weights_for_rpc(
     }
 }
 
+async fn try_reconnect_subtensor(
+    subtensor: &mut Option<Arc<Subtensor>>,
+    endpoint: &str,
+    state_path: &Option<std::path::PathBuf>,
+) -> bool {
+    info!("Attempting Subtensor RPC reconnection to {}", endpoint);
+    let result = if let Some(sp) = state_path {
+        Subtensor::with_persistence(endpoint, sp.clone()).await
+    } else {
+        Subtensor::new(endpoint).await
+    };
+    match result {
+        Ok(st) => {
+            *subtensor = Some(Arc::new(st));
+            info!("Subtensor RPC reconnected successfully");
+            true
+        }
+        Err(e) => {
+            error!("Subtensor RPC reconnection failed: {}", e);
+            false
+        }
+    }
+}
+
+fn is_transport_error(err_str: &str) -> bool {
+    err_str.contains("connection closed")
+        || err_str.contains("restart required")
+        || err_str.contains("background task")
+        || err_str.contains("transport")
+        || err_str.contains("Connection refused")
+        || err_str.contains("Broken pipe")
+}
+
 async fn handle_block_event(
     event: BlockSyncEvent,
-    subtensor: &Option<Arc<Subtensor>>,
+    subtensor: &mut Option<Arc<Subtensor>>,
     signer: &Option<Arc<BittensorSigner>>,
     client: &Option<SubtensorClient>,
     state_manager: &Arc<StateManager>,
@@ -4719,6 +4761,8 @@ async fn handle_block_event(
     chain_state: &Arc<RwLock<platform_core::ChainState>>,
     storage: &Arc<TrackedStorage>,
     last_weight_submission_epoch: &mut u64,
+    subtensor_endpoint: &str,
+    subtensor_state_path: &Option<std::path::PathBuf>,
 ) {
     match event {
         BlockSyncEvent::NewBlock { block_number, .. } => {
@@ -5149,7 +5193,10 @@ async fn handle_block_event(
                     cs.last_computed_weights = weights_to_submit.clone();
                 }
 
-                for (mechanism_id, uids, weights) in weights_to_submit {
+                let mut needs_reconnect = false;
+                let mut failed_submissions: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
+
+                for (mechanism_id, uids, weights) in &weights_to_submit {
                     info!(
                         "Submitting weights for mechanism {} ({} UIDs)",
                         mechanism_id,
@@ -5159,9 +5206,9 @@ async fn handle_block_event(
                         .set_mechanism_weights(
                             sig,
                             netuid,
-                            mechanism_id,
-                            &uids,
-                            &weights,
+                            *mechanism_id,
+                            uids,
+                            weights,
                             version_key,
                             ExtrinsicWait::Finalized,
                         )
@@ -5185,11 +5232,60 @@ async fn handle_block_event(
                                     mechanism_id, err_str
                                 );
                                 *last_weight_submission_epoch = epoch;
+                            } else if is_transport_error(&err_str) {
+                                error!(
+                                    "Mechanism {} weight submission failed (transport error): {}",
+                                    mechanism_id, e
+                                );
+                                needs_reconnect = true;
+                                failed_submissions.push((*mechanism_id, uids.clone(), weights.clone()));
                             } else {
                                 error!(
                                     "Mechanism {} weight submission failed: {}",
                                     mechanism_id, e
                                 );
+                            }
+                        }
+                    }
+                }
+
+                // Drop immutable borrows of subtensor (st, sig) before reconnecting
+                drop(weights_to_submit);
+
+                if needs_reconnect && !failed_submissions.is_empty() {
+                    if try_reconnect_subtensor(subtensor, subtensor_endpoint, subtensor_state_path).await {
+                        if let (Some(new_st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {
+                            for (mechanism_id, uids, weights) in &failed_submissions {
+                                info!("Retrying weight submission after reconnect for mechanism {}", mechanism_id);
+                                match new_st
+                                    .set_mechanism_weights(
+                                        sig,
+                                        netuid,
+                                        *mechanism_id,
+                                        uids,
+                                        weights,
+                                        version_key,
+                                        ExtrinsicWait::Finalized,
+                                    )
+                                    .await
+                                {
+                                    Ok(resp) if resp.success => {
+                                        info!(
+                                            "Mechanism {} weights submitted after reconnect: {:?}",
+                                            mechanism_id, resp.tx_hash
+                                        );
+                                        *last_weight_submission_epoch = epoch;
+                                    }
+                                    Ok(resp) => {
+                                        warn!("Mechanism {} issue after reconnect: {}", mechanism_id, resp.message);
+                                    }
+                                    Err(e2) => {
+                                        error!(
+                                            "Mechanism {} weight submission failed even after reconnect: {}",
+                                            mechanism_id, e2
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -5239,7 +5335,8 @@ async fn handle_block_event(
             warn!("Bittensor disconnected: {}", reason);
         }
         BlockSyncEvent::Reconnected => {
-            info!("Bittensor reconnected");
+            info!("Bittensor block sync reconnected - also reconnecting Subtensor weight submission client");
+            try_reconnect_subtensor(subtensor, subtensor_endpoint, subtensor_state_path).await;
         }
     }
 }
