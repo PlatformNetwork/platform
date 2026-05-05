@@ -1,9 +1,6 @@
-"""Copied Platform challenge SDK."""
+"""Challenge execution backends."""
 
-from .app_factory import create_challenge_app
-from .config import ChallengeSettings
-from .decorators import public_route
-from .executors.docker import (
+from .docker import (
     DockerExecutor,
     DockerExecutorError,
     DockerLimits,
@@ -13,13 +10,10 @@ from .executors.docker import (
 )
 
 __all__ = [
-    "ChallengeSettings",
     "DockerExecutor",
     "DockerExecutorError",
     "DockerLimits",
     "DockerMount",
     "DockerRunResult",
     "DockerRunSpec",
-    "create_challenge_app",
-    "public_route",
 ]
