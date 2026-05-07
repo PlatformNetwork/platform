@@ -9,8 +9,13 @@ from fastapi.testclient import TestClient
 
 from platform_network.master.app_admin import create_admin_app
 from platform_network.master.app_proxy import create_proxy_app, is_blocked_proxy_path
+from platform_network.master.challenge_dashboard import ChallengeMetrics
 from platform_network.master.registry import ChallengeRegistry
-from platform_network.schemas.challenge import ChallengeCreate, ChallengeStatus
+from platform_network.schemas.challenge import (
+    ChallengeCreate,
+    ChallengeRecord,
+    ChallengeStatus,
+)
 
 
 def _payload(slug: str = "demo") -> dict[str, object]:
@@ -79,6 +84,53 @@ def test_registry_sets_defaults_without_exposing_clear_token() -> None:
     assert response.network == "platform"
     assert response.master_uid == 0
     assert response.challenges[0].emission_percent == Decimal("40.0")
+
+
+def test_challenges_dashboard_svg_includes_all_statuses_without_secrets() -> None:
+    registry = ChallengeRegistry()
+    registry.create(ChallengeCreate(**_payload("active-one")))
+    registry.set_status("active-one", ChallengeStatus.ACTIVE)
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("draft-one"),
+                "name": "Draft <unsafe> & name",
+                "emission_percent": "5.5",
+            }
+        )
+    )
+    client = TestClient(create_admin_app(registry=registry))
+
+    response = client.get("/v1/challenges/dashboard.svg")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    svg = response.text
+    assert "active-one" in svg
+    assert "draft-one" in svg
+    assert "online" in svg
+    assert "offline" in svg
+    assert "N/A" in svg
+    assert "Draft &lt;unsafe&gt; &amp; name" in svg
+    assert "token_hash" not in svg
+    assert "challenge_token" not in svg
+
+
+def test_challenges_dashboard_svg_accepts_future_metrics_provider() -> None:
+    class StaticMetricsProvider:
+        def metrics_for(self, challenge: ChallengeRecord) -> ChallengeMetrics:
+            return ChallengeMetrics(miner_count=7)
+
+    registry = ChallengeRegistry()
+    registry.create(ChallengeCreate(**_payload()))
+    client = TestClient(
+        create_admin_app(registry=registry, metrics_provider=StaticMetricsProvider())
+    )
+
+    response = client.get("/v1/challenges/dashboard.svg")
+
+    assert response.status_code == 200
+    assert ">7</text>" in response.text
 
 
 def test_proxy_blocks_internal_health_and_version_paths() -> None:

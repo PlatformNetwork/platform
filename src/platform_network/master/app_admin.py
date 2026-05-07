@@ -6,9 +6,13 @@ import os
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from platform_network.master.challenge_dashboard import (
+    ChallengeMetricsProvider,
+    render_challenges_dashboard_svg,
+)
 from platform_network.master.registry import (
     ChallengeAlreadyExistsError,
     ChallengeNotFoundError,
@@ -116,6 +120,7 @@ def create_admin_app(
     *,
     registry: ChallengeRegistry | None = None,
     runtime_controller: RuntimeController | None = None,
+    metrics_provider: ChallengeMetricsProvider | None = None,
     admin_token_provider: TokenProvider = load_admin_token_from_environment,
 ) -> FastAPI:
     """Create the private admin/registry FastAPI app."""
@@ -138,6 +143,17 @@ def create_admin_app(
     @app.get("/v1/registry", response_model=RegistryResponse)
     async def get_registry() -> RegistryResponse:
         return challenge_registry.registry_response()
+
+    @app.get("/v1/challenges/dashboard.svg")
+    async def get_challenges_dashboard_svg() -> Response:
+        svg = render_challenges_dashboard_svg(
+            challenge_registry.list(), metrics_provider=metrics_provider
+        )
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post(
         "/v1/admin/challenges",
