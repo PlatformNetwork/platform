@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from platform_network.master.docker_orchestrator import (
-    DEFAULT_DOCKER_SOCKET,
+    DEFAULT_DOCKER_BROKER_URL,
     ChallengeResources,
     ChallengeSpec,
     DockerOrchestrationError,
@@ -109,18 +109,12 @@ def test_orchestrator_client_network_volume_pull_and_env(tmp_path: Path) -> None
     assert paths["api-key"].read_text(encoding="utf-8") == "secret"
 
 
-def test_orchestrator_enables_docker_executor_socket(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    original_exists = Path.exists
-
-    def fake_exists(path: Path) -> bool:
-        if str(path) == DEFAULT_DOCKER_SOCKET:
-            return True
-        return original_exists(path)
-
-    monkeypatch.setattr(Path, "exists", fake_exists)
-    orchestrator = DockerOrchestrator(client=FakeClient(), secret_dir=tmp_path)
+def test_orchestrator_enables_docker_executor_broker(tmp_path: Path) -> None:
+    orchestrator = DockerOrchestrator(
+        client=FakeClient(),
+        secret_dir=tmp_path,
+        docker_broker_url="http://broker:8082",
+    )
     spec = ChallengeSpec(
         slug="agent",
         image="ghcr.io/org/agent:1",
@@ -131,30 +125,13 @@ def test_orchestrator_enables_docker_executor_socket(
     mounts = orchestrator._build_mounts(spec)  # noqa: SLF001
 
     assert env["CHALLENGE_DOCKER_ENABLED"] == "true"
-    assert env["CHALLENGE_DOCKER_BIN"] == "docker"
-    assert DEFAULT_DOCKER_SOCKET in repr(mounts)
-
-
-def test_orchestrator_fails_without_docker_socket(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    original_exists = Path.exists
-
-    def fake_exists(path: Path) -> bool:
-        if str(path) == DEFAULT_DOCKER_SOCKET:
-            return False
-        return original_exists(path)
-
-    monkeypatch.setattr(Path, "exists", fake_exists)
-    orchestrator = DockerOrchestrator(client=FakeClient(), secret_dir=tmp_path)
-    spec = ChallengeSpec(
-        slug="agent",
-        image="ghcr.io/org/agent:1",
-        required_capabilities=("docker_executor",),
+    assert env["CHALLENGE_DOCKER_BACKEND"] == "broker"
+    assert env["CHALLENGE_DOCKER_BROKER_URL"] == "http://broker:8082"
+    assert env["CHALLENGE_DOCKER_BROKER_TOKEN_FILE"] == (
+        "/run/secrets/platform/challenge_token"
     )
-
-    with pytest.raises(DockerOrchestrationError, match="Docker executor requested"):
-        orchestrator._build_mounts(spec)  # noqa: SLF001
+    assert DEFAULT_DOCKER_BROKER_URL == "http://platform-docker-broker:8082"
+    assert "/var/run/docker.sock" not in repr(mounts)
 
 
 def test_orchestrator_validation_and_start(

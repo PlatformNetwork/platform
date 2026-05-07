@@ -38,6 +38,13 @@ class DockerSettings(BaseModel):
     network_name: str = "platform_challenges"
     secret_dir: str = "/var/lib/platform/secrets"
     internal_network: bool = True
+    broker_host: str = "0.0.0.0"
+    broker_port: int = 8082
+    broker_url: str = "http://platform-docker-broker:8082"
+    broker_workspace_dir: str = "/tmp/platform-docker-broker"
+    broker_allowed_images: list[str] = Field(
+        default_factory=lambda: ["platformnetwork/", "ghcr.io/platformnetwork/"]
+    )
 
 
 class SecuritySettings(BaseModel):

@@ -18,6 +18,6 @@ RUN if [ -f pyproject.toml ]; then uv pip install --system -e ".[master]"; fi
 
 VOLUME ["/var/lib/platform"]
 
-EXPOSE 8000 8001
+EXPOSE 8000 8001 8082
 
 CMD ["platform", "master", "run", "--config", "config/master.example.yaml"]

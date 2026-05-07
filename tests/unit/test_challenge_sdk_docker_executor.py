@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,6 +96,65 @@ def test_cleanup_job_uses_labels(monkeypatch: pytest.MonkeyPatch) -> None:
         "label=platform.job=job-1",
     ]
     assert calls[1] == ["docker", "rm", "-f", "abc", "def"]
+
+
+def test_broker_backend_posts_run_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import platform_network.challenge_sdk.executors.docker as module
+
+    (tmp_path / "input.txt").write_text("ok", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "container_name": "agent-job",
+                    "stdout": "ok",
+                    "stderr": "",
+                    "returncode": 0,
+                    "timed_out": False,
+                }
+            ).encode()
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        captured["timeout"] = timeout
+        captured["url"] = request.full_url  # type: ignore[attr-defined]
+        captured["headers"] = dict(request.headers.items())  # type: ignore[attr-defined]
+        captured["payload"] = json.loads(request.data.decode())  # type: ignore[attr-defined]
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    result = DockerExecutor(
+        challenge="agent",
+        backend="broker",
+        broker_url="http://broker",
+        broker_token="tok",
+        allowed_images=("python:",),
+    ).run(
+        DockerRunSpec(
+            image="python:3.12-slim",
+            command=("python", "-V"),
+            mounts=(DockerMount(tmp_path, "/mnt"),),
+            labels={"platform.job": "job-1"},
+        ),
+        timeout_seconds=20,
+    )
+
+    assert result.returncode == 0
+    assert captured["url"] == "http://broker/v1/docker/run"
+    assert captured["headers"]["Authorization"] == "Bearer tok"
+    payload = captured["payload"]
+    assert payload["image"] == "python:3.12-slim"
+    assert payload["mounts"][0]["target"] == "/mnt"
+    assert payload["timeout_seconds"] == 20
 
 
 def test_template_executor_matches_shared_sdk() -> None:

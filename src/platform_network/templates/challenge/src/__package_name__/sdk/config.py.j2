@@ -35,3 +35,7 @@ class ChallengeSettings(BaseSettings):
     docker_read_only: bool = True
     docker_user: str | None = None
     docker_allowed_images: tuple[str, ...] = ()
+    docker_backend: str = "cli"
+    docker_broker_url: str | None = None
+    docker_broker_token: str | None = None
+    docker_broker_token_file: str | None = None

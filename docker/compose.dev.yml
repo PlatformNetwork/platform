@@ -24,6 +24,7 @@ services:
       PLATFORM_DATABASE__URL: postgresql+asyncpg://platform:${PLATFORM_POSTGRES_PASSWORD:?set PLATFORM_POSTGRES_PASSWORD}@postgres:5432/platform
       PLATFORM_DOCKER__NETWORK_NAME: platform_challenges
       PLATFORM_DOCKER__SECRET_DIR: /var/lib/platform/secrets
+      PLATFORM_DOCKER__BROKER_URL: http://platform-docker-broker:8082
       PLATFORM_SECURITY__ADMIN_TOKEN_FILE: /var/lib/platform/secrets/admin_token
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       PLATFORM_MASTER__REGISTRY_STATE_FILE: /var/lib/platform/registry.json
@@ -44,6 +45,31 @@ services:
     networks:
       - platform_backend
       - platform_challenges
+
+  platform-docker-broker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.master
+    environment:
+      PLATFORM_DOCKER__NETWORK_NAME: platform_challenges
+      PLATFORM_DOCKER__SECRET_DIR: /var/lib/platform/secrets
+      PLATFORM_DOCKER__BROKER_HOST: "0.0.0.0"
+      PLATFORM_DOCKER__BROKER_PORT: "8082"
+      PLATFORM_DOCKER__BROKER_WORKSPACE_DIR: /tmp/platform-docker-broker
+      PLATFORM_MASTER__REGISTRY_STATE_FILE: /var/lib/platform/registry.json
+    command: ["platform", "master", "broker", "--config", "config/master.example.yaml"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.platform/secrets:/var/lib/platform/secrets
+      - ./.platform/state:/var/lib/platform
+      - ../config:/app/config:ro
+    depends_on:
+      master:
+        condition: service_started
+    networks:
+      platform_challenges:
+        aliases:
+          - platform-docker-broker
 
   proxy:
     build:

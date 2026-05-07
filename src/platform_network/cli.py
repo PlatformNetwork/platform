@@ -9,6 +9,11 @@ import typer
 from platform_network.config import load_settings
 from platform_network.master.app_admin import create_admin_app
 from platform_network.master.app_proxy import create_proxy_app
+from platform_network.master.docker_broker import (
+    DockerBrokerConfig,
+    DockerBrokerService,
+    create_docker_broker_app,
+)
 from platform_network.master.docker_orchestrator import (
     ChallengeResources,
     ChallengeSpec,
@@ -126,6 +131,7 @@ def master_run(config: Path = typer.Option(Path("config/master.example.yaml"))):
         network_name=settings.docker.network_name,
         secret_dir=settings.docker.secret_dir,
         internal_network=settings.docker.internal_network,
+        docker_broker_url=settings.docker.broker_url,
     )
     admin = create_admin_app(
         registry=registry,
@@ -159,6 +165,33 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
     uvicorn.run(proxy, host=settings.master.proxy_host, port=settings.master.proxy_port)
 
 
+@master_app.command("broker")
+def master_broker(config: Path = typer.Option(Path("config/master.example.yaml"))):
+    settings = load_settings(config)
+    configure_logging(settings.observability.log_json)
+    import uvicorn
+
+    registry = FileChallengeRegistry(
+        settings.master.registry_state_file,
+        secret_dir=settings.docker.secret_dir,
+        master_uid=settings.network.master_uid,
+    )
+    broker = create_docker_broker_app(
+        registry=registry,
+        service=DockerBrokerService(
+            DockerBrokerConfig(
+                workspace_dir=Path(settings.docker.broker_workspace_dir),
+                allowed_images=tuple(settings.docker.broker_allowed_images),
+            )
+        ),
+    )
+    endpoint = f"{settings.docker.broker_host}:{settings.docker.broker_port}"
+    typer.echo(f"Starting Docker broker API on {endpoint}")
+    uvicorn.run(
+        broker, host=settings.docker.broker_host, port=settings.docker.broker_port
+    )
+
+
 @validator_app.command("run")
 def validator_run(config: Path = typer.Option(Path("config/validator.example.yaml"))):
     settings = load_settings(config)
@@ -169,6 +202,7 @@ def validator_run(config: Path = typer.Option(Path("config/validator.example.yam
             network_name=settings.docker.network_name,
             secret_dir=settings.docker.secret_dir,
             internal_network=settings.docker.internal_network,
+            docker_broker_url=settings.docker.broker_url,
         ),
         retry_seconds=settings.validator.registry_retry_seconds,
     )

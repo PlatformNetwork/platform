@@ -1,0 +1,190 @@
+"""Internal Docker broker for challenge-side evaluation containers."""
+
+from __future__ import annotations
+
+import base64
+import secrets
+import tarfile
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Protocol
+
+from fastapi import FastAPI, Header, HTTPException, status
+
+from platform_network.challenge_sdk.executors.docker import (
+    DockerExecutor,
+    DockerExecutorError,
+    DockerLimits,
+    DockerMount,
+    DockerRunSpec,
+)
+from platform_network.schemas.docker_broker import (
+    BrokerCleanupRequest,
+    BrokerCleanupResponse,
+    BrokerMount,
+    BrokerRunRequest,
+    BrokerRunResponse,
+)
+
+
+class BrokerTokenRegistry(Protocol):
+    def get_token(self, slug: str) -> str: ...
+
+
+@dataclass(frozen=True)
+class DockerBrokerConfig:
+    docker_bin: str = "docker"
+    workspace_dir: Path = Path("/tmp/platform-docker-broker")
+    allowed_images: tuple[str, ...] = ("platformnetwork/", "ghcr.io/platformnetwork/")
+    log_limit_bytes: int = 64_000
+
+
+class DockerBrokerService:
+    def __init__(self, config: DockerBrokerConfig | None = None) -> None:
+        self.config = config or DockerBrokerConfig()
+        self.config.workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    def run(self, challenge_slug: str, request: BrokerRunRequest) -> BrokerRunResponse:
+        with TemporaryDirectory(
+            prefix=f"{_safe_fragment(challenge_slug)}-{_safe_fragment(request.job_id)}-",
+            dir=self.config.workspace_dir,
+        ) as workspace:
+            workspace_path = Path(workspace)
+            mounts = [
+                self._materialize_mount(workspace_path, index, mount)
+                for index, mount in enumerate(request.mounts)
+            ]
+            executor = DockerExecutor(
+                challenge=challenge_slug,
+                docker_bin=self.config.docker_bin,
+                allowed_images=self.config.allowed_images,
+                log_limit_bytes=self.config.log_limit_bytes,
+            )
+            labels = {"platform.job": request.job_id, **request.labels}
+            if request.task_id:
+                labels.setdefault("platform.task", request.task_id)
+            result = executor.run(
+                DockerRunSpec(
+                    image=request.image,
+                    command=tuple(request.command),
+                    mounts=tuple(mounts),
+                    workdir=request.workdir,
+                    env=request.env,
+                    labels=labels,
+                    name=executor.container_name(request.job_id, request.task_id),
+                    limits=DockerLimits(**request.limits.model_dump()),
+                ),
+                timeout_seconds=request.timeout_seconds,
+            )
+            return BrokerRunResponse(
+                container_name=result.container_name,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                returncode=result.returncode,
+                timed_out=result.timed_out,
+            )
+
+    def cleanup(
+        self, challenge_slug: str, request: BrokerCleanupRequest
+    ) -> BrokerCleanupResponse:
+        DockerExecutor(
+            challenge=challenge_slug,
+            docker_bin=self.config.docker_bin,
+            allowed_images=self.config.allowed_images,
+            log_limit_bytes=self.config.log_limit_bytes,
+        ).cleanup_job(request.job_id)
+        return BrokerCleanupResponse()
+
+    def _materialize_mount(
+        self, root: Path, index: int, mount: BrokerMount
+    ) -> DockerMount:
+        mount_root = root / f"mount-{index}"
+        mount_root.mkdir(parents=True)
+        archive = base64.b64decode(mount.archive_b64)
+        archive_path = mount_root / "payload.tar.gz"
+        archive_path.write_bytes(archive)
+        with tarfile.open(archive_path, mode="r:gz") as tar:
+            _validate_tar_members(tar)
+            tar.extractall(mount_root, filter="data")
+        archive_path.unlink(missing_ok=True)
+        if mount.source_type == "file":
+            source = mount_root / mount.source_name
+        else:
+            source = mount_root
+        if not source.exists():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"materialized mount source is missing: {mount.target}",
+            )
+        return DockerMount(
+            source=source, target=mount.target, read_only=mount.read_only
+        )
+
+
+def create_docker_broker_app(
+    *,
+    registry: BrokerTokenRegistry,
+    service: DockerBrokerService | None = None,
+) -> FastAPI:
+    broker = service or DockerBrokerService()
+    app = FastAPI(title="Platform Docker Broker", version="1.0")
+
+    @app.get("/health", include_in_schema=False)
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/v1/docker/run", response_model=BrokerRunResponse)
+    def run_container(
+        request: BrokerRunRequest,
+        authorization: str | None = Header(default=None),
+        slug: str | None = Header(default=None, alias="X-Platform-Challenge-Slug"),
+    ) -> BrokerRunResponse:
+        try:
+            return broker.run(
+                _authenticate(registry, slug, authorization),
+                request,
+            )
+        except DockerExecutorError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    @app.post("/v1/docker/cleanup", response_model=BrokerCleanupResponse)
+    def cleanup(
+        request: BrokerCleanupRequest,
+        authorization: str | None = Header(default=None),
+        slug: str | None = Header(default=None, alias="X-Platform-Challenge-Slug"),
+    ) -> BrokerCleanupResponse:
+        return broker.cleanup(
+            _authenticate(registry, slug, authorization),
+            request,
+        )
+
+    return app
+
+
+def _authenticate(
+    registry: BrokerTokenRegistry, slug: str | None, authorization: str | None
+) -> str:
+    if not slug:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing challenge slug")
+    expected = registry.get_token(slug)
+    if not expected:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unknown challenge")
+    expected_header = f"Bearer {expected}"
+    if authorization is None or not secrets.compare_digest(
+        authorization, expected_header
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid broker token")
+    return slug
+
+
+def _validate_tar_members(tar: tarfile.TarFile) -> None:
+    for member in tar.getmembers():
+        path = Path(member.name)
+        if path.is_absolute() or ".." in path.parts:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "unsafe mount archive")
+
+
+def _safe_fragment(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "-" for ch in value.lower()).strip("-")
+    return (safe or "x")[:48]

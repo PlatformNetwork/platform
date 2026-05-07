@@ -14,6 +14,7 @@ docker:
   network_name: platform_challenges
   secret_dir: /var/lib/platform/secrets
   internal_network: true
+  broker_url: http://platform-docker-broker:8082
 
 observability:
   log_json: true

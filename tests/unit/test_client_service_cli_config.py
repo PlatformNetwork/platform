@@ -191,9 +191,11 @@ def test_config_env_security_and_observability(
     config.write_text("network:\n  netuid: 1\n", encoding="utf-8")
     monkeypatch.setenv("PLATFORM_NETWORK__NETUID", "9")
     monkeypatch.setenv("PLATFORM_MASTER__ADMIN_PORT", "9999")
+    monkeypatch.setenv("PLATFORM_DOCKER__BROKER_URL", "http://broker:9999")
     settings = load_settings(config)
     assert settings.network.netuid == 9
     assert settings.master.admin_port == 9999
+    assert settings.docker.broker_url == "http://broker:9999"
     with pytest.raises(FileNotFoundError):
         load_settings(tmp_path / "missing.yaml")
     bad = tmp_path / "bad.yaml"

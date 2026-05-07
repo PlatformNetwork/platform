@@ -26,7 +26,7 @@ DEFAULT_NETWORK_NAME = "platform_challenges"
 DEFAULT_SECRET_DIR = "/var/lib/platform/secrets"
 DEFAULT_SQLITE_PATH = "/data/challenge.sqlite3"
 DEFAULT_SECRET_MOUNT_DIR = "/run/secrets/platform"
-DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
+DEFAULT_DOCKER_BROKER_URL = "http://platform-docker-broker:8082"
 
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -158,6 +158,7 @@ class DockerOrchestrator:
         request_timeout_seconds: float = 5.0,
         health_retries: int = 12,
         health_retry_delay_seconds: float = 2.0,
+        docker_broker_url: str = DEFAULT_DOCKER_BROKER_URL,
     ) -> None:
         self._client = client
         self.network_name = network_name
@@ -167,6 +168,7 @@ class DockerOrchestrator:
         self.request_timeout_seconds = request_timeout_seconds
         self.health_retries = health_retries
         self.health_retry_delay_seconds = health_retry_delay_seconds
+        self.docker_broker_url = docker_broker_url
         self._runtime: dict[str, ChallengeRuntime] = {}
 
     @property
@@ -362,21 +364,6 @@ class DockerOrchestrator:
                     read_only=True,
                 )
             )
-        if "docker_executor" in spec.required_capabilities:
-            socket = Path(DEFAULT_DOCKER_SOCKET)
-            if not socket.exists():
-                raise DockerOrchestrationError(
-                    "Docker executor requested but "
-                    f"{DEFAULT_DOCKER_SOCKET} is unavailable"
-                )
-            mounts.append(
-                Mount(
-                    target=DEFAULT_DOCKER_SOCKET,
-                    source=DEFAULT_DOCKER_SOCKET,
-                    type="bind",
-                    read_only=False,
-                )
-            )
         return mounts
 
     def _build_environment(self, spec: ChallengeSpec) -> dict[str, str]:
@@ -398,7 +385,14 @@ class DockerOrchestrator:
                 )
         if "docker_executor" in spec.required_capabilities:
             environment.setdefault("CHALLENGE_DOCKER_ENABLED", "true")
-            environment.setdefault("CHALLENGE_DOCKER_BIN", "docker")
+            environment.setdefault("CHALLENGE_DOCKER_BACKEND", "broker")
+            environment.setdefault(
+                "CHALLENGE_DOCKER_BROKER_URL", self.docker_broker_url
+            )
+            environment.setdefault(
+                "CHALLENGE_DOCKER_BROKER_TOKEN_FILE",
+                f"{DEFAULT_SECRET_MOUNT_DIR}/challenge_token",
+            )
         return environment
 
     def _write_secret_files(self, spec: ChallengeSpec) -> dict[str, Path]:

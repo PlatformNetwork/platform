@@ -23,6 +23,13 @@ docker:
   network_name: platform_challenges
   secret_dir: /var/lib/platform/secrets
   internal_network: true
+  broker_host: 0.0.0.0
+  broker_port: 8082
+  broker_url: http://platform-docker-broker:8082
+  broker_workspace_dir: /tmp/platform-docker-broker
+  broker_allowed_images:
+    - platformnetwork/
+    - ghcr.io/platformnetwork/
 
 security:
   admin_token_file: /var/lib/platform/secrets/admin_token
