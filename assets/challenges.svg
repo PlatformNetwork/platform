@@ -1,12 +1,13 @@
 <svg width="814" height="220" viewBox="0 0 814 220" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Platform challenge dashboard</title>
-  <desc id="desc">Draft challenge cards for Prism, Agent Challenge, and Data Fabrication with real-time data, offline testmode status, 0% emissions, and clickable GitHub code buttons.</desc>
+  <desc id="desc">Platform challenge dashboard for Prism, Agent Challenge, and Data Fabrication with real-time data, offline testmode status, 0% emissions, and plain GitHub code references.</desc>
   <style>
     .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }
     .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; letter-spacing: -0.5px; }
     .bold { font-weight: 500; }
     .small { font-size: 14px; }
     .smaller { font-size: 12px; }
+    .tiny { font-size: 11px; }
     .glow { paint-order: stroke; }
   </style>
 
@@ -20,7 +21,7 @@
         <path d="M0 .842C0 .377.373 0 .833 0h18.334c.46 0 .833.377.833.842v.421a.838.838 0 0 1-.833.842H.833A.838.838 0 0 1 0 1.263v-.42ZM0 14.737c0-.465.373-.842.833-.842h18.334c.46 0 .833.377.833.842v.42a.838.838 0 0 1-.833.843H.833A.838.838 0 0 1 0 15.158v-.421ZM0 4.632c0-.465.373-.843.833-.843H5c.46 0 .833.377.833.843v.42A.838.838 0 0 1 5 5.896H.833A.838.838 0 0 1 0 5.053v-.421ZM0 8.421c0-.465.373-.842.833-.842H5c.46 0 .833.377.833.842v2.947A.838.838 0 0 1 5 12.21H.833A.838.838 0 0 1 0 11.368V8.421ZM7.083 4.632c0-.465.373-.843.834-.843h4.166c.46 0 .834.377.834.843v.42a.838.838 0 0 1-.834.843H7.917a.838.838 0 0 1-.834-.842v-.421ZM7.083 8.421c0-.465.373-.842.834-.842h4.166c.46 0 .834.377.834.842v2.947a.838.838 0 0 1-.834.842H7.917a.838.838 0 0 1-.834-.842V8.421ZM14.167 4.632c0-.465.373-.843.833-.843h4.167c.46 0 .833.377.833.843v.42a.838.838 0 0 1-.833.843H15a.838.838 0 0 1-.833-.842v-.421ZM14.167 8.421c0-.465.373-.842.833-.842h4.167c.46 0 .833.377.833.842v2.947a.838.838 0 0 1-.833.842H15a.838.838 0 0 1-.833-.842V8.421Z" fill="rgba(236, 72, 153, 1)"/>
       </svg>
     </g>
-    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">Platform Draft Challenge Cards · Real-time data</text>
+    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">Platform Challenge Dashboard · Real-time data</text>
     <g opacity="0.28">
       <rect x="572" y="21" width="4" height="4" rx="1" fill="rgba(236, 72, 153, 1)"/>
       <rect x="584" y="21" width="4" height="4" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
@@ -50,17 +51,15 @@
     <circle cx="18" cy="25" r="4" fill="url(#blueDot)"/>
     <text x="31" y="33" class="sans small bold" fill="#406CC4">Prism</text>
     <rect x="188" y="15" width="6" height="6" rx="6" fill="#61adf4"/>
-    <text x="200" y="24" class="sans smaller" fill="#61adf4">Draft</text>
+    <text x="200" y="24" class="sans smaller" fill="#61adf4">Testmode</text>
     <rect x="18" y="48" width="228" height="6" rx="2" fill="rgba(97,173,244,0.12)"/>
     <rect x="18" y="48" width="6" height="6" rx="2" fill="#61adf4"/>
     <text x="18" y="75" class="sans smaller" fill="#777">Long-form reasoning benchmark for</text>
     <text x="18" y="91" class="sans smaller" fill="#777">multi-step prompts, chain-of-thought</text>
     <text x="18" y="107" class="sans smaller" fill="#777">evaluation, and answer quality checks.</text>
     <text x="18" y="128" class="mono smaller bold" fill="#406CC4">offline · testmode · emission 0%</text>
-    <a href="https://github.com/PlatformNetwork/platform/tree/v3" target="_blank">
-      <rect x="18" y="136" width="118" height="18" rx="4" fill="rgba(64,108,196,0.10)" stroke="#406CC4" stroke-opacity="0.35"/>
-      <text x="29" y="149" class="sans smaller bold" fill="#406CC4">View GitHub code</text>
-    </a>
+    <rect x="18" y="136" width="228" height="18" rx="4" fill="rgba(64,108,196,0.10)" stroke="#406CC4" stroke-opacity="0.35"/>
+    <text x="26" y="149" class="sans tiny bold" fill="#406CC4">Code at PlatformNetwork/prism</text>
   </g>
   <g transform="translate(274,58)">
     <rect x="0.5" y="0.5" width="264" height="160" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
@@ -68,17 +67,15 @@
     <circle cx="18" cy="25" r="4" fill="url(#purpleDot)"/>
     <text x="31" y="33" class="sans small bold" fill="#7B58C9">Agent Challenge</text>
     <rect x="188" y="15" width="6" height="6" rx="6" fill="#cf54fc"/>
-    <text x="200" y="24" class="sans smaller" fill="#cf54fc">Draft</text>
+    <text x="200" y="24" class="sans smaller" fill="#cf54fc">Testmode</text>
     <rect x="18" y="48" width="228" height="6" rx="2" fill="rgba(207,84,252,0.12)"/>
     <rect x="18" y="48" width="6" height="6" rx="2" fill="#cf54fc"/>
     <text x="18" y="75" class="sans smaller" fill="#777">Autonomous-agent task suite for</text>
     <text x="18" y="91" class="sans smaller" fill="#777">planning, tool use, execution traces,</text>
     <text x="18" y="107" class="sans smaller" fill="#777">and reliable mission completion.</text>
     <text x="18" y="128" class="mono smaller bold" fill="#7B58C9">offline · testmode · emission 0%</text>
-    <a href="https://github.com/PlatformNetwork/platform/tree/v3" target="_blank">
-      <rect x="18" y="136" width="118" height="18" rx="4" fill="rgba(123,88,201,0.10)" stroke="#7B58C9" stroke-opacity="0.35"/>
-      <text x="29" y="149" class="sans smaller bold" fill="#7B58C9">View GitHub code</text>
-    </a>
+    <rect x="18" y="136" width="228" height="18" rx="4" fill="rgba(123,88,201,0.10)" stroke="#7B58C9" stroke-opacity="0.35"/>
+    <text x="26" y="149" class="sans tiny bold" fill="#7B58C9">Code at PlatformNetwork/agent-challenge</text>
   </g>
   <g transform="translate(548,58)">
     <rect x="0.5" y="0.5" width="264" height="160" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
@@ -86,17 +83,15 @@
     <circle cx="18" cy="25" r="4" fill="url(#redDot)"/>
     <text x="31" y="33" class="sans small bold" fill="#BA473E">Data Fabrication</text>
     <rect x="188" y="15" width="6" height="6" rx="6" fill="#ff7a35"/>
-    <text x="200" y="24" class="sans smaller" fill="#ff7a35">Draft</text>
+    <text x="200" y="24" class="sans smaller" fill="#ff7a35">Testmode</text>
     <rect x="18" y="48" width="228" height="6" rx="2" fill="rgba(255,122,53,0.12)"/>
     <rect x="18" y="48" width="6" height="6" rx="2" fill="#ff7a35"/>
     <text x="18" y="75" class="sans smaller" fill="#777">Synthetic-data pipeline challenge for</text>
     <text x="18" y="91" class="sans smaller" fill="#777">usefulness, integrity, coverage, and</text>
     <text x="18" y="107" class="sans smaller" fill="#777">dataset generation quality scoring.</text>
     <text x="18" y="128" class="mono smaller bold" fill="#BA473E">offline · testmode · emission 0%</text>
-    <a href="https://github.com/PlatformNetwork/platform/tree/v3" target="_blank">
-      <rect x="18" y="136" width="118" height="18" rx="4" fill="rgba(186,71,62,0.10)" stroke="#BA473E" stroke-opacity="0.35"/>
-      <text x="29" y="149" class="sans smaller bold" fill="#BA473E">View GitHub code</text>
-    </a>
+    <rect x="18" y="136" width="228" height="18" rx="4" fill="rgba(186,71,62,0.10)" stroke="#BA473E" stroke-opacity="0.35"/>
+    <text x="26" y="149" class="sans tiny bold" fill="#BA473E">Code at PlatformNetwork/data-fabrication</text>
   </g>
 
 
