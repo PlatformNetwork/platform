@@ -14,7 +14,7 @@
 
 ![Platform Banner](https://raw.githubusercontent.com/PlatformNetwork/platform/main/assets/banner.jpg)
 
-![Live challenge board](https://raw.githubusercontent.com/PlatformNetwork/platform/main/assets/challenges.svg)
+![Live challenge board](https://raw.githubusercontent.com/PlatformNetwork/platform/v3/assets/challenges.svg)
 
 Track the active challenge lineup at a glance. The board is designed to be refreshed from the live Platform admin endpoint: `/v1/challenges/dashboard.svg`.
 

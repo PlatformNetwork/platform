@@ -1,99 +1,136 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc">
-<title>Platform challenge dashboard</title>
-<desc>Registered challenges with status, miners and emissions</desc>
-<defs>
-<linearGradient id="page" x1="0" x2="1" y1="0" y2="1">
-<stop offset="0%" stop-color="#020617"/>
-<stop offset="48%" stop-color="#0f172a"/>
-<stop offset="100%" stop-color="#164e63"/>
-</linearGradient>
-<radialGradient id="glow" cx="50%" cy="0%" r="70%">
-<stop offset="0%" stop-color="#38bdf8" stop-opacity="0.42"/>
-<stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
-</radialGradient>
-<linearGradient id="heroCard" x1="0" x2="1" y1="0" y2="1">
-<stop offset="0%" stop-color="#ffffff" stop-opacity="0.98"/>
-<stop offset="100%" stop-color="#ecfeff" stop-opacity="0.92"/>
-</linearGradient>
-<filter id="cardShadow" x="-5%" y="-15%" width="110%" height="140%">
-<feDropShadow dx="0" dy="22" stdDeviation="18" flood-color="#000000" flood-opacity="0.24"/>
-</filter>
-<filter id="rowShadow" x="-4%" y="-40%" width="108%" height="190%">
-<feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/>
-</filter>
-</defs>
-<style>
-text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-.title{font-size:30px;font-weight:850;fill:#0f172a}
-.summary{font-size:14px;fill:#475569}
-.kpiLabel{font-size:11px;font-weight:800;fill:#64748b;letter-spacing:.08em}
-.kpiValue{font-size:22px;font-weight:850;fill:#0f172a}
-.head{font-size:11px;font-weight:850;fill:#cbd5e1;letter-spacing:.10em}
-.cell{font-size:14px;fill:#1e293b}
-.small{font-size:12px;fill:#64748b}
-.strong{font-weight:750}
-.muted{fill:#64748b}
-.pill{font-size:12px;font-weight:850}
-.number{font-weight:700}
-.emptyIcon{font-size:20px;font-weight:850;fill:#0284c7}
-.emptyTitle{font-size:18px;font-weight:850;fill:#0f172a}
-.emptyText{font-size:13px;fill:#64748b}
-</style>
-<rect width="100%" height="100%" rx="38" fill="url(#page)"/>
-<rect width="100%" height="100%" rx="38" fill="url(#glow)"/>
-<rect x="24" y="24" width="1072" height="382" rx="34" fill="#f8fafc" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.16"/>
-<circle cx="900" cy="72" r="92" fill="#22d3ee" opacity="0.16"/>
-<circle cx="84" cy="332" r="120" fill="#818cf8" opacity="0.12"/>
-<rect x="34" y="34" width="1052" height="96" rx="30" fill="url(#heroCard)" filter="url(#cardShadow)"/>
-<text id="title" x="64" y="76" class="title">Platform challenges</text>
-<text id="desc" x="64" y="100" class="summary">3 challenges · 0 active · 0% emissions · refreshable</text>
-<rect x="612" y="54" width="86" height="56" rx="18" fill="#eff6ff"/>
-<text x="632" y="76" class="kpiValue">3</text>
-<text x="632" y="96" class="kpiLabel">TOTAL</text>
-<rect x="714" y="54" width="86" height="56" rx="18" fill="#dcfce7"/>
-<text x="734" y="76" class="kpiValue">0</text>
-<text x="734" y="96" class="kpiLabel">ACTIVE</text>
-<rect x="816" y="54" width="112" height="56" rx="18" fill="#ecfeff"/>
-<text x="836" y="76" class="kpiValue">0%</text>
-<text x="836" y="96" class="kpiLabel">EMISSIONS</text>
-<rect x="34" y="150" width="1052" height="38" rx="19" fill="#ffffff" fill-opacity="0.14" stroke="#ffffff" stroke-opacity="0.12"/>
-<text x="84" y="174" class="head">Challenge</text>
-<text x="580" y="174" class="head">Status</text>
-<text x="706" y="174" class="head">Online</text>
-<text x="830" y="174" class="head">Miners</text>
-<text x="950" y="174" class="head">Emissions</text>
-<rect x="34" y="181" width="1052" height="58" rx="24" fill="#ffffff" fill-opacity="0.94" filter="url(#rowShadow)"/>
-<circle cx="62" cy="210" r="12" fill="#f1f5f9"/>
-<circle cx="62" cy="210" r="5" fill="#94a3b8"/>
-<text x="84" y="204" class="cell strong">Agent Challenge</text>
-<text x="84" y="224" class="small muted">agent-challenge · Benchmark autonomous agents on practical execution tasks.</text>
-<rect x="562" y="198" width="96" height="24" rx="12" fill="#f1f5f9"/>
-<text x="580" y="215" class="pill" fill="#94a3b8">draft</text>
-<rect x="688" y="198" width="86" height="24" rx="12" fill="#f1f5f9"/>
-<text x="706" y="215" class="pill" fill="#64748b">offline</text>
-<text x="830" y="215" class="cell number">N/A</text>
-<text x="950" y="215" class="cell number">0%</text>
-<rect x="34" y="249" width="1052" height="58" rx="24" fill="#ffffff" fill-opacity="0.94" filter="url(#rowShadow)"/>
-<circle cx="62" cy="278" r="12" fill="#f1f5f9"/>
-<circle cx="62" cy="278" r="5" fill="#94a3b8"/>
-<text x="84" y="272" class="cell strong">Data Fabrication</text>
-<text x="84" y="292" class="small muted">data-fabrication · Score synthetic data pipelines for usefulness and integrity.</text>
-<rect x="562" y="266" width="96" height="24" rx="12" fill="#f1f5f9"/>
-<text x="580" y="283" class="pill" fill="#94a3b8">draft</text>
-<rect x="688" y="266" width="86" height="24" rx="12" fill="#f1f5f9"/>
-<text x="706" y="283" class="pill" fill="#64748b">offline</text>
-<text x="830" y="283" class="cell number">N/A</text>
-<text x="950" y="283" class="cell number">0%</text>
-<rect x="34" y="317" width="1052" height="58" rx="24" fill="#ffffff" fill-opacity="0.94" filter="url(#rowShadow)"/>
-<circle cx="62" cy="346" r="12" fill="#f1f5f9"/>
-<circle cx="62" cy="346" r="5" fill="#94a3b8"/>
-<text x="84" y="340" class="cell strong">Prism</text>
-<text x="84" y="360" class="small muted">prism · Evaluate reasoning quality across multi-step prompts.</text>
-<rect x="562" y="334" width="96" height="24" rx="12" fill="#f1f5f9"/>
-<text x="580" y="351" class="pill" fill="#94a3b8">draft</text>
-<rect x="688" y="334" width="86" height="24" rx="12" fill="#f1f5f9"/>
-<text x="706" y="351" class="pill" fill="#64748b">offline</text>
-<text x="830" y="351" class="cell number">N/A</text>
-<text x="950" y="351" class="cell number">0%</text>
+<svg width="814" height="318" viewBox="0 0 814 318" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Platform challenge dashboard</title>
+  <desc id="desc">Preview challenge lineup showing Prism, Agent Challenge, and Data Fabrication at zero percent emissions.</desc>
+  <style>
+    .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; letter-spacing: -0.5px; }
+    .bold { font-weight: 500; }
+    .medium { font-size: 16px; }
+    .small { font-size: 14px; }
+    .smaller { font-size: 12px; }
+    .pre { white-space: pre; }
+    .glow { paint-order: stroke; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="813" height="317" fill="rgba(0, 0, 0, 0)"/>
+
+  <g>
+    <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
+    <g transform="translate(10,16)">
+      <svg width="20" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M0 .842C0 .377.373 0 .833 0h18.334c.46 0 .833.377.833.842v.421a.838.838 0 0 1-.833.842H.833A.838.838 0 0 1 0 1.263v-.42ZM0 14.737c0-.465.373-.842.833-.842h18.334c.46 0 .833.377.833.842v.42a.838.838 0 0 1-.833.843H.833A.838.838 0 0 1 0 15.158v-.421ZM0 4.632c0-.465.373-.843.833-.843H5c.46 0 .833.377.833.843v.42A.838.838 0 0 1 5 5.896H.833A.838.838 0 0 1 0 5.053v-.421ZM0 8.421c0-.465.373-.842.833-.842H5c.46 0 .833.377.833.842v2.947A.838.838 0 0 1 5 12.21H.833A.838.838 0 0 1 0 11.368V8.421ZM7.083 4.632c0-.465.373-.843.834-.843h4.166c.46 0 .834.377.834.843v.42a.838.838 0 0 1-.834.843H7.917a.838.838 0 0 1-.834-.842v-.421ZM7.083 8.421c0-.465.373-.842.834-.842h4.166c.46 0 .834.377.834.842v2.947a.838.838 0 0 1-.834.842H7.917a.838.838 0 0 1-.834-.842V8.421ZM14.167 4.632c0-.465.373-.843.833-.843h4.167c.46 0 .833.377.833.843v.42a.838.838 0 0 1-.833.843H15a.838.838 0 0 1-.833-.842v-.421ZM14.167 8.421c0-.465.373-.842.833-.842h4.167c.46 0 .833.377.833.842v2.947a.838.838 0 0 1-.833.842H15a.838.838 0 0 1-.833-.842V8.421Z" fill="rgba(236, 72, 153, 1)"/>
+      </svg>
+    </g>
+    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">3 Platform Challenges Ready to Launch</text>
+    <g opacity="0.45">
+      <rect x="533.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="542.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="551.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="560.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="569.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="578.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="587.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="596.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="605.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="614.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="623.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="632.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="641.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="650.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="659.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="668.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="677.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="686.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="695.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="704.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="713.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="722.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="731.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="740.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="749.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="758.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="767.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="776.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="785.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
+      <rect x="794.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+    </g>
+  </g>
+
+  <g transform="translate(0,58)">
+    <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
+    <text x="10" y="24" class="sans small bold" fill="#406CC4">0% Prism Emission</text>
+    <text x="10" y="56" class="mono smaller bold" fill="#777">reasoning quality</text>
+    <text x="254" y="56" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">preview</text>
+  </g>
+  <g transform="translate(274,58)">
+    <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
+    <text x="10" y="24" class="sans small bold" fill="#7B58C9">0% Agent Challenge</text>
+    <text x="10" y="56" class="mono smaller bold" fill="#777">autonomous execution</text>
+    <text x="254" y="56" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">preview</text>
+  </g>
+  <g transform="translate(548,58)">
+    <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
+    <text x="10" y="24" class="sans small bold" fill="#BA473E">0% Data Fabrication</text>
+    <text x="10" y="56" class="mono smaller bold" fill="#777">synthetic data integrity</text>
+    <text x="254" y="56" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">preview</text>
+  </g>
+
+  <g transform="translate(0,138)">
+    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
+    <circle cx="18" cy="25" r="8" fill="url(#blueDot)"/>
+    <text x="34" y="33" class="sans small bold" fill="#406CC4">Prism</text>
+    <rect x="190" y="15" width="10" height="10" rx="10" fill="#61adf4"/>
+    <text x="205" y="24" class="sans smaller" fill="#61adf4">Draft</text>
+    <rect x="18" y="55" width="228" height="12" rx="3" fill="rgba(97,173,244,0.12)"/>
+    <rect x="18" y="55" width="8" height="12" rx="3" fill="#61adf4"/>
+    <text x="18" y="92" class="sans smaller" fill="#777">Multi-step prompt reasoning</text>
+    <text x="18" y="108" class="mono smaller bold" fill="#406CC4">miners N/A · emission 0%</text>
+  </g>
+  <g transform="translate(274,138)">
+    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
+    <circle cx="18" cy="25" r="8" fill="url(#purpleDot)"/>
+    <text x="34" y="33" class="sans small bold" fill="#7B58C9">Agent Challenge</text>
+    <rect x="190" y="15" width="10" height="10" rx="10" fill="#cf54fc"/>
+    <text x="205" y="24" class="sans smaller" fill="#cf54fc">Draft</text>
+    <rect x="18" y="55" width="228" height="12" rx="3" fill="rgba(207,84,252,0.12)"/>
+    <rect x="18" y="55" width="8" height="12" rx="3" fill="#cf54fc"/>
+    <text x="18" y="92" class="sans smaller" fill="#777">Practical agent execution tasks</text>
+    <text x="18" y="108" class="mono smaller bold" fill="#7B58C9">miners N/A · emission 0%</text>
+  </g>
+  <g transform="translate(548,138)">
+    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
+    <circle cx="18" cy="25" r="8" fill="url(#redDot)"/>
+    <text x="34" y="33" class="sans small bold" fill="#BA473E">Data Fabrication</text>
+    <rect x="190" y="15" width="10" height="10" rx="10" fill="#ff7a35"/>
+    <text x="205" y="24" class="sans smaller" fill="#ff7a35">Draft</text>
+    <rect x="18" y="55" width="228" height="12" rx="3" fill="rgba(255,122,53,0.12)"/>
+    <rect x="18" y="55" width="8" height="12" rx="3" fill="#ff7a35"/>
+    <text x="18" y="92" class="sans smaller" fill="#777">Useful synthetic data pipelines</text>
+    <text x="18" y="108" class="mono smaller bold" fill="#BA473E">miners N/A · emission 0%</text>
+  </g>
+
+  <g transform="translate(0,270)">
+    <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(255,255,255,0.4)"/>
+    <g transform="translate(10,16)">
+      <svg width="18" height="16" viewBox="0 0 18 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M9.79536 12.9717C9.46851 13.1766 9.19498 13.3364 9.00063 13.4464C7.83951 12.7896 6.74227 12.0258 5.72321 11.1649C3.88319 9.59824 2.24091 7.56228 2.24091 5.37382C2.24091 3.541 3.7425 2.24091 5.17164 2.24091C6.62529 2.24091 7.80981 3.19682 8.34062 4.78784C8.38708 4.92624 8.47567 5.04631 8.59397 5.13138C8.71226 5.21645 8.85429 5.26222 9 5.26222C9.14571 5.26222 9.28774 5.21645 9.40603 5.13138C9.52433 5.04631 9.61292 4.92624 9.65929 4.7881C10.1902 3.1968 11.374 2.24091 12.8284 2.24091C14.2575 2.24091 15.7591 3.541 15.7591 5.37382C15.7591 7.56237 14.1167 9.5984 12.2766 11.1651C11.3775 11.9307 10.4748 12.5468 9.79536 12.9717Z" fill="url(#heartFill)" stroke="url(#heartFill)" stroke-width="0.5"/>
+      </svg>
+    </g>
+    <text x="36" y="29" class="sans small bold" fill="#487B41">Refreshable live board · /v1/challenges/dashboard.svg · no secrets exposed</text>
+  </g>
+
+  <defs>
+    <linearGradient id="blueDot" x1="18" y1="17" x2="18" y2="33" gradientUnits="userSpaceOnUse"><stop stop-color="#00BCF7"/><stop offset=".729" stop-color="#326CE5"/></linearGradient>
+    <linearGradient id="purpleDot" x1="18" y1="17" x2="18" y2="33" gradientUnits="userSpaceOnUse"><stop stop-color="#CE5AFF"/><stop offset="1" stop-color="#7C64BD"/></linearGradient>
+    <linearGradient id="redDot" x1="18" y1="17" x2="18" y2="33" gradientUnits="userSpaceOnUse"><stop stop-color="#ff553a"/><stop offset="1" stop-color="#cd2e31"/></linearGradient>
+    <linearGradient id="heartFill" x1="9" y1="1" x2="9" y2="14.784" gradientUnits="userSpaceOnUse"><stop stop-color="#36C5F0"/><stop offset="0.729167" stop-color="#55BA3C"/></linearGradient>
+  </defs>
 </svg>
