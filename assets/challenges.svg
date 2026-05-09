@@ -1,6 +1,6 @@
-<svg width="814" height="318" viewBox="0 0 814 318" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="814" height="348" viewBox="0 0 814 348" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Platform challenge dashboard</title>
-  <desc id="desc">Preview challenge lineup showing Prism, Agent Challenge, and Data Fabrication at zero percent emissions.</desc>
+  <desc id="desc">Testmode challenge lineup showing Prism, Agent Challenge, and Data Fabrication with 0% emissions, offline status, and longer challenge descriptions.</desc>
   <style>
     .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }
     .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; letter-spacing: -0.5px; }
@@ -8,11 +8,12 @@
     .medium { font-size: 16px; }
     .small { font-size: 14px; }
     .smaller { font-size: 12px; }
+    .tiny { font-size: 11px; }
     .pre { white-space: pre; }
     .glow { paint-order: stroke; }
   </style>
 
-  <rect x="0.5" y="0.5" width="813" height="317" fill="rgba(0, 0, 0, 0)"/>
+  <rect x="0.5" y="0.5" width="813" height="347" fill="rgba(0, 0, 0, 0)"/>
 
   <g>
     <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
@@ -22,101 +23,100 @@
         <path d="M0 .842C0 .377.373 0 .833 0h18.334c.46 0 .833.377.833.842v.421a.838.838 0 0 1-.833.842H.833A.838.838 0 0 1 0 1.263v-.42ZM0 14.737c0-.465.373-.842.833-.842h18.334c.46 0 .833.377.833.842v.42a.838.838 0 0 1-.833.843H.833A.838.838 0 0 1 0 15.158v-.421ZM0 4.632c0-.465.373-.843.833-.843H5c.46 0 .833.377.833.843v.42A.838.838 0 0 1 5 5.896H.833A.838.838 0 0 1 0 5.053v-.421ZM0 8.421c0-.465.373-.842.833-.842H5c.46 0 .833.377.833.842v2.947A.838.838 0 0 1 5 12.21H.833A.838.838 0 0 1 0 11.368V8.421ZM7.083 4.632c0-.465.373-.843.834-.843h4.166c.46 0 .834.377.834.843v.42a.838.838 0 0 1-.834.843H7.917a.838.838 0 0 1-.834-.842v-.421ZM7.083 8.421c0-.465.373-.842.834-.842h4.166c.46 0 .834.377.834.842v2.947a.838.838 0 0 1-.834.842H7.917a.838.838 0 0 1-.834-.842V8.421ZM14.167 4.632c0-.465.373-.843.833-.843h4.167c.46 0 .833.377.833.843v.42a.838.838 0 0 1-.833.843H15a.838.838 0 0 1-.833-.842v-.421ZM14.167 8.421c0-.465.373-.842.833-.842h4.167c.46 0 .833.377.833.842v2.947a.838.838 0 0 1-.833.842H15a.838.838 0 0 1-.833-.842V8.421Z" fill="rgba(236, 72, 153, 1)"/>
       </svg>
     </g>
-    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">3 Platform Challenges Ready to Launch</text>
-    <g opacity="0.45">
-      <rect x="533.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="542.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="551.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="560.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="569.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="578.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="587.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="596.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="605.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="614.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="623.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="632.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="641.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="650.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="659.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="668.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="677.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="686.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="695.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="704.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="713.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="722.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="731.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="740.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="749.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="758.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="767.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
-      <rect x="776.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="785.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 0.18)"/>
-      <rect x="794.5" y="20" width="8" height="8" rx="1.5" fill="rgba(236, 72, 153, 1)"/>
+    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">3 Platform Challenges · Testmode · 0% Emissions</text>
+    <g opacity="0.32">
+      <rect x="550" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="561" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="572" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="583" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="594" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="605" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="616" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="627" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="638" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="649" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="660" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="671" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="682" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="693" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="704" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="715" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="726" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="737" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="748" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="759" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="770" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
+      <rect x="781" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
+      <rect x="792" y="21" width="5" height="5" rx="1" fill="rgba(236, 72, 153, 1)"/>
     </g>
   </g>
 
   <g transform="translate(0,58)">
     <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
     <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
-    <text x="10" y="24" class="sans small bold" fill="#406CC4">0% Prism Emission</text>
-    <text x="10" y="56" class="mono smaller bold" fill="#777">reasoning quality</text>
-    <text x="254" y="56" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">preview</text>
+    <text x="10" y="24" class="sans small bold" fill="#406CC4">Prism · 0% emission</text>
+    <text x="10" y="48" class="mono smaller bold" fill="#777">offline · testmode</text>
+    <text x="254" y="48" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">not live</text>
   </g>
   <g transform="translate(274,58)">
     <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
     <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
-    <text x="10" y="24" class="sans small bold" fill="#7B58C9">0% Agent Challenge</text>
-    <text x="10" y="56" class="mono smaller bold" fill="#777">autonomous execution</text>
-    <text x="254" y="56" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">preview</text>
+    <text x="10" y="24" class="sans small bold" fill="#7B58C9">Agent Challenge · 0% emission</text>
+    <text x="10" y="48" class="mono smaller bold" fill="#777">offline · testmode</text>
+    <text x="254" y="48" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">not live</text>
   </g>
   <g transform="translate(548,58)">
     <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
     <rect x="0.5" y="0.5" width="264" height="70" rx="4.5" stroke="rgba(255,255,255,0.3)"/>
-    <text x="10" y="24" class="sans small bold" fill="#BA473E">0% Data Fabrication</text>
-    <text x="10" y="56" class="mono smaller bold" fill="#777">synthetic data integrity</text>
-    <text x="254" y="56" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">preview</text>
+    <text x="10" y="24" class="sans small bold" fill="#BA473E">Data Fabrication · 0% emission</text>
+    <text x="10" y="48" class="mono smaller bold" fill="#777">offline · testmode</text>
+    <text x="254" y="48" text-anchor="end" class="mono smaller bold" fill="#CF3E3E">not live</text>
   </g>
 
   <g transform="translate(0,138)">
-    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
-    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
-    <circle cx="18" cy="25" r="8" fill="url(#blueDot)"/>
+    <rect x="0.5" y="0.5" width="264" height="150" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="150" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
+    <circle cx="18" cy="25" r="7" fill="url(#blueDot)"/>
     <text x="34" y="33" class="sans small bold" fill="#406CC4">Prism</text>
-    <rect x="190" y="15" width="10" height="10" rx="10" fill="#61adf4"/>
-    <text x="205" y="24" class="sans smaller" fill="#61adf4">Draft</text>
-    <rect x="18" y="55" width="228" height="12" rx="3" fill="rgba(97,173,244,0.12)"/>
-    <rect x="18" y="55" width="8" height="12" rx="3" fill="#61adf4"/>
-    <text x="18" y="92" class="sans smaller" fill="#777">Multi-step prompt reasoning</text>
-    <text x="18" y="108" class="mono smaller bold" fill="#406CC4">miners N/A · emission 0%</text>
+    <rect x="176" y="15" width="10" height="10" rx="10" fill="#61adf4"/>
+    <text x="191" y="24" class="sans smaller" fill="#61adf4">Testmode</text>
+    <rect x="18" y="48" width="228" height="7" rx="2" fill="rgba(97,173,244,0.12)"/>
+    <rect x="18" y="48" width="7" height="7" rx="2" fill="#61adf4"/>
+    <text x="18" y="76" class="sans smaller" fill="#777">Long-form reasoning benchmark for</text>
+    <text x="18" y="92" class="sans smaller" fill="#777">multi-step prompts, chain-of-thought</text>
+    <text x="18" y="108" class="sans smaller" fill="#777">evaluation, and answer quality checks.</text>
+    <text x="18" y="132" class="mono smaller bold" fill="#406CC4">offline · testmode · emission 0%</text>
   </g>
   <g transform="translate(274,138)">
-    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
-    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
-    <circle cx="18" cy="25" r="8" fill="url(#purpleDot)"/>
+    <rect x="0.5" y="0.5" width="264" height="150" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="150" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
+    <circle cx="18" cy="25" r="7" fill="url(#purpleDot)"/>
     <text x="34" y="33" class="sans small bold" fill="#7B58C9">Agent Challenge</text>
-    <rect x="190" y="15" width="10" height="10" rx="10" fill="#cf54fc"/>
-    <text x="205" y="24" class="sans smaller" fill="#cf54fc">Draft</text>
-    <rect x="18" y="55" width="228" height="12" rx="3" fill="rgba(207,84,252,0.12)"/>
-    <rect x="18" y="55" width="8" height="12" rx="3" fill="#cf54fc"/>
-    <text x="18" y="92" class="sans smaller" fill="#777">Practical agent execution tasks</text>
-    <text x="18" y="108" class="mono smaller bold" fill="#7B58C9">miners N/A · emission 0%</text>
+    <rect x="176" y="15" width="10" height="10" rx="10" fill="#cf54fc"/>
+    <text x="191" y="24" class="sans smaller" fill="#cf54fc">Testmode</text>
+    <rect x="18" y="48" width="228" height="7" rx="2" fill="rgba(207,84,252,0.12)"/>
+    <rect x="18" y="48" width="7" height="7" rx="2" fill="#cf54fc"/>
+    <text x="18" y="76" class="sans smaller" fill="#777">Autonomous-agent task suite for</text>
+    <text x="18" y="92" class="sans smaller" fill="#777">planning, tool use, execution traces,</text>
+    <text x="18" y="108" class="sans smaller" fill="#777">and reliable mission completion.</text>
+    <text x="18" y="132" class="mono smaller bold" fill="#7B58C9">offline · testmode · emission 0%</text>
   </g>
   <g transform="translate(548,138)">
-    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
-    <rect x="0.5" y="0.5" width="264" height="120" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
-    <circle cx="18" cy="25" r="8" fill="url(#redDot)"/>
+    <rect x="0.5" y="0.5" width="264" height="150" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
+    <rect x="0.5" y="0.5" width="264" height="150" rx="4.5" fill="rgba(255,255,255,0.0)" stroke="rgba(255,255,255,0.3)"/>
+    <circle cx="18" cy="25" r="7" fill="url(#redDot)"/>
     <text x="34" y="33" class="sans small bold" fill="#BA473E">Data Fabrication</text>
-    <rect x="190" y="15" width="10" height="10" rx="10" fill="#ff7a35"/>
-    <text x="205" y="24" class="sans smaller" fill="#ff7a35">Draft</text>
-    <rect x="18" y="55" width="228" height="12" rx="3" fill="rgba(255,122,53,0.12)"/>
-    <rect x="18" y="55" width="8" height="12" rx="3" fill="#ff7a35"/>
-    <text x="18" y="92" class="sans smaller" fill="#777">Useful synthetic data pipelines</text>
-    <text x="18" y="108" class="mono smaller bold" fill="#BA473E">miners N/A · emission 0%</text>
+    <rect x="176" y="15" width="10" height="10" rx="10" fill="#ff7a35"/>
+    <text x="191" y="24" class="sans smaller" fill="#ff7a35">Testmode</text>
+    <rect x="18" y="48" width="228" height="7" rx="2" fill="rgba(255,122,53,0.12)"/>
+    <rect x="18" y="48" width="7" height="7" rx="2" fill="#ff7a35"/>
+    <text x="18" y="76" class="sans smaller" fill="#777">Synthetic-data pipeline challenge for</text>
+    <text x="18" y="92" class="sans smaller" fill="#777">usefulness, integrity, coverage, and</text>
+    <text x="18" y="108" class="sans smaller" fill="#777">dataset generation quality scoring.</text>
+    <text x="18" y="132" class="mono smaller bold" fill="#BA473E">offline · testmode · emission 0%</text>
   </g>
 
-  <g transform="translate(0,270)">
+  <g transform="translate(0,300)">
     <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(0,0,0,0.15)"/>
     <rect x="0.5" y="0.5" width="813" height="47" rx="4.5" stroke="rgba(255,255,255,0.4)"/>
     <g transform="translate(10,16)">
@@ -124,13 +124,13 @@
         <path d="M9.79536 12.9717C9.46851 13.1766 9.19498 13.3364 9.00063 13.4464C7.83951 12.7896 6.74227 12.0258 5.72321 11.1649C3.88319 9.59824 2.24091 7.56228 2.24091 5.37382C2.24091 3.541 3.7425 2.24091 5.17164 2.24091C6.62529 2.24091 7.80981 3.19682 8.34062 4.78784C8.38708 4.92624 8.47567 5.04631 8.59397 5.13138C8.71226 5.21645 8.85429 5.26222 9 5.26222C9.14571 5.26222 9.28774 5.21645 9.40603 5.13138C9.52433 5.04631 9.61292 4.92624 9.65929 4.7881C10.1902 3.1968 11.374 2.24091 12.8284 2.24091C14.2575 2.24091 15.7591 3.541 15.7591 5.37382C15.7591 7.56237 14.1167 9.5984 12.2766 11.1651C11.3775 11.9307 10.4748 12.5468 9.79536 12.9717Z" fill="url(#heartFill)" stroke="url(#heartFill)" stroke-width="0.5"/>
       </svg>
     </g>
-    <text x="36" y="29" class="sans small bold" fill="#487B41">Refreshable live board · /v1/challenges/dashboard.svg · no secrets exposed</text>
+    <text x="36" y="29" class="sans small bold" fill="#487B41">Refreshable live board · /v1/challenges/dashboard.svg · all preview challenges are in testmode</text>
   </g>
 
   <defs>
-    <linearGradient id="blueDot" x1="18" y1="17" x2="18" y2="33" gradientUnits="userSpaceOnUse"><stop stop-color="#00BCF7"/><stop offset=".729" stop-color="#326CE5"/></linearGradient>
-    <linearGradient id="purpleDot" x1="18" y1="17" x2="18" y2="33" gradientUnits="userSpaceOnUse"><stop stop-color="#CE5AFF"/><stop offset="1" stop-color="#7C64BD"/></linearGradient>
-    <linearGradient id="redDot" x1="18" y1="17" x2="18" y2="33" gradientUnits="userSpaceOnUse"><stop stop-color="#ff553a"/><stop offset="1" stop-color="#cd2e31"/></linearGradient>
+    <linearGradient id="blueDot" x1="18" y1="18" x2="18" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#00BCF7"/><stop offset=".729" stop-color="#326CE5"/></linearGradient>
+    <linearGradient id="purpleDot" x1="18" y1="18" x2="18" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#CE5AFF"/><stop offset="1" stop-color="#7C64BD"/></linearGradient>
+    <linearGradient id="redDot" x1="18" y1="18" x2="18" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#ff553a"/><stop offset="1" stop-color="#cd2e31"/></linearGradient>
     <linearGradient id="heartFill" x1="9" y1="1" x2="9" y2="14.784" gradientUnits="userSpaceOnUse"><stop stop-color="#36C5F0"/><stop offset="0.729167" stop-color="#55BA3C"/></linearGradient>
   </defs>
 </svg>
