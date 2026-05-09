@@ -1,6 +1,6 @@
 <svg width="814" height="220" viewBox="0 0 814 220" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Platform challenge dashboard</title>
-  <desc id="desc">Draft challenge cards for Prism, Agent Challenge, and Data Fabrication with offline testmode status, 0% emissions, and clickable GitHub code buttons.</desc>
+  <desc id="desc">Draft challenge cards for Prism, Agent Challenge, and Data Fabrication with real-time data, offline testmode status, 0% emissions, and clickable GitHub code buttons.</desc>
   <style>
     .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }
     .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; letter-spacing: -0.5px; }
@@ -20,7 +20,7 @@
         <path d="M0 .842C0 .377.373 0 .833 0h18.334c.46 0 .833.377.833.842v.421a.838.838 0 0 1-.833.842H.833A.838.838 0 0 1 0 1.263v-.42ZM0 14.737c0-.465.373-.842.833-.842h18.334c.46 0 .833.377.833.842v.42a.838.838 0 0 1-.833.843H.833A.838.838 0 0 1 0 15.158v-.421ZM0 4.632c0-.465.373-.843.833-.843H5c.46 0 .833.377.833.843v.42A.838.838 0 0 1 5 5.896H.833A.838.838 0 0 1 0 5.053v-.421ZM0 8.421c0-.465.373-.842.833-.842H5c.46 0 .833.377.833.842v2.947A.838.838 0 0 1 5 12.21H.833A.838.838 0 0 1 0 11.368V8.421ZM7.083 4.632c0-.465.373-.843.834-.843h4.166c.46 0 .834.377.834.843v.42a.838.838 0 0 1-.834.843H7.917a.838.838 0 0 1-.834-.842v-.421ZM7.083 8.421c0-.465.373-.842.834-.842h4.166c.46 0 .834.377.834.842v2.947a.838.838 0 0 1-.834.842H7.917a.838.838 0 0 1-.834-.842V8.421ZM14.167 4.632c0-.465.373-.843.833-.843h4.167c.46 0 .833.377.833.843v.42a.838.838 0 0 1-.833.843H15a.838.838 0 0 1-.833-.842v-.421ZM14.167 8.421c0-.465.373-.842.833-.842h4.167c.46 0 .833.377.833.842v2.947a.838.838 0 0 1-.833.842H15a.838.838 0 0 1-.833-.842V8.421Z" fill="rgba(236, 72, 153, 1)"/>
       </svg>
     </g>
-    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">Platform Draft Challenge Cards · Testmode · 0% Emissions</text>
+    <text x="38" y="29" class="sans small bold glow" fill="rgba(236, 72, 153, 1)" stroke-width="0.5">Platform Draft Challenge Cards · Real-time data</text>
     <g opacity="0.28">
       <rect x="572" y="21" width="4" height="4" rx="1" fill="rgba(236, 72, 153, 1)"/>
       <rect x="584" y="21" width="4" height="4" rx="1" fill="rgba(236, 72, 153, 0.22)"/>
