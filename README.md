@@ -183,3 +183,9 @@ Current validation suite:
 - `pytest`
 - `docker compose config`
 - rendered challenge template tests
+
+---
+
+## License
+
+Apache-2.0
