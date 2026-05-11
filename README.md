@@ -165,8 +165,7 @@ platform/
   alembic/                   # PostgreSQL migrations
   config/                    # YAML example configs
   docker/                    # Dockerfiles and dev compose
-  docs/                      # Project documentation
-  plan/                      # Detailed design plan
+  docs/                      # Project documentation and design notes
   tests/                     # Unit/runtime validation tests
 ```
 
