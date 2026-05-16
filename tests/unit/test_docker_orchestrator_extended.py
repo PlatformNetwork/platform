@@ -142,7 +142,7 @@ def test_orchestrator_enables_docker_executor_broker(tmp_path: Path) -> None:
     assert env["CHALLENGE_DOCKER_BACKEND"] == "broker"
     assert env["CHALLENGE_DOCKER_BROKER_URL"] == "http://broker:8082"
     assert env["CHALLENGE_DOCKER_BROKER_TOKEN_FILE"] == (
-        "/run/secrets/platform/challenge_token"
+        "/run/secrets/platform/docker_broker_token"
     )
     assert DEFAULT_DOCKER_BROKER_URL == "http://platform-docker-broker:8082"
     assert "/var/run/docker.sock" not in repr(mounts)

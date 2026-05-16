@@ -116,6 +116,7 @@ def _to_challenge_spec(request: GpuChallengeSpecRequest) -> ChallengeSpec:
         image=request.image,
         version=request.version,
         challenge_token=request.challenge_token,
+        docker_broker_token=request.docker_broker_token,
         env=request.env,
         secrets=request.secrets,
         resources=ChallengeResources(

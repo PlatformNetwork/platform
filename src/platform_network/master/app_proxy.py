@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from posixpath import normpath
+from typing import Any
 from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
-from platform_network.master.registry import ChallengeNotFoundError, ChallengeRegistry
-from platform_network.schemas.challenge import ChallengeStatus
+from platform_network.bittensor.metagraph_cache import MetagraphCache
+from platform_network.master.registry import ChallengeNotFoundError
+from platform_network.schemas.challenge import ChallengeRecord, ChallengeStatus
+from platform_network.security.miner_auth import (
+    MinerAuthError,
+    MinerNonceStore,
+    MinerUploadVerifier,
+    NonceReplayError,
+)
 
 SENSITIVE_REQUEST_HEADERS = {
     "authorization",
@@ -21,6 +30,14 @@ SENSITIVE_REQUEST_HEADERS = {
     "x-platform-challenge-token",
     "x-platform-internal-token",
     "x-platform-shared-token",
+    "x-hotkey",
+    "x-signature",
+    "x-nonce",
+    "x-timestamp",
+    "x-platform-verified-hotkey",
+    "x-platform-verified-uid",
+    "x-platform-verified-nonce",
+    "x-platform-request-hash",
 }
 
 HOP_BY_HOP_HEADERS = {
@@ -38,6 +55,7 @@ BLOCKED_EXACT_PATHS = {"/health", "/version"}
 
 
 ClientFactory = Callable[[], AbstractAsyncContextManager[httpx.AsyncClient]]
+ChallengeTokenProvider = Callable[[str], str]
 
 
 def is_blocked_proxy_path(path: str) -> bool:
@@ -87,6 +105,50 @@ def _target_url(base_url: str, path: str, query: str) -> str:
     return url
 
 
+def _challenge_token_provider(registry: Any) -> ChallengeTokenProvider:
+    def provider(slug: str) -> str:
+        get_token = getattr(registry, "get_token", None)
+        if callable(get_token):
+            return str(get_token(slug))
+        return ""
+
+    return provider
+
+
+async def _resolve_value(value):  # type: ignore[no-untyped-def]
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _resolve_challenge(registry: Any, value: str) -> ChallengeRecord:
+    try:
+        return await _resolve_value(registry.get(value))
+    except ChallengeNotFoundError:
+        matches = [
+            item
+            for item in await _resolve_value(registry.list())
+            if item.name.lower() == value.lower()
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        raise
+
+
+async def _active_challenge(registry: Any, value: str) -> ChallengeRecord:
+    try:
+        challenge = await _resolve_challenge(registry, value)
+    except ChallengeNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found"
+        ) from exc
+    if challenge.status != ChallengeStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found"
+        )
+    return challenge
+
+
 @asynccontextmanager
 async def _default_client_factory() -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
@@ -95,8 +157,17 @@ async def _default_client_factory() -> AsyncIterator[httpx.AsyncClient]:
 
 def create_proxy_app(
     *,
-    registry: ChallengeRegistry | None = None,
+    registry: Any,
     client_factory: ClientFactory = _default_client_factory,
+    miner_verifier: MinerUploadVerifier | None = None,
+    nonce_store: MinerNonceStore | None = None,
+    metagraph_cache: MetagraphCache | None = None,
+    challenge_token_provider: ChallengeTokenProvider | None = None,
+    netuid: int = 0,
+    upload_signature_ttl_seconds: int = 300,
+    upload_nonce_ttl_seconds: int = 86_400,
+    upload_max_body_bytes: int = 2_000_000,
+    upload_require_registered_hotkey: bool = True,
 ) -> FastAPI:
     """Create the public proxy FastAPI app.
 
@@ -104,7 +175,30 @@ def create_proxy_app(
     """
 
     app = FastAPI(title="Platform Network Challenge Proxy", version="1.0")
-    challenge_registry = registry or ChallengeRegistry()
+    challenge_registry = registry
+    token_provider = challenge_token_provider or _challenge_token_provider(
+        challenge_registry
+    )
+    if miner_verifier is None and nonce_store is None:
+        raise ValueError("nonce_store or miner_verifier is required")
+    if miner_verifier is None and metagraph_cache is None:
+        raise ValueError("metagraph_cache or miner_verifier is required")
+    if miner_verifier is None:
+        assert nonce_store is not None
+        assert metagraph_cache is not None
+        verifier = MinerUploadVerifier(
+            netuid=netuid,
+            nonce_store=nonce_store,
+            metagraph_cache=metagraph_cache,
+            ttl_seconds=upload_signature_ttl_seconds,
+            require_registered_hotkey=upload_require_registered_hotkey,
+        )
+    else:
+        verifier = miner_verifier
+
+    @app.get("/health", include_in_schema=False)
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
 
     async def proxy_request(slug: str, path: str, request: Request) -> Response:
         if is_blocked_proxy_path(path):
@@ -113,17 +207,7 @@ def create_proxy_app(
                 detail="Proxy path is not allowed",
             )
 
-        try:
-            challenge = challenge_registry.get(slug)
-        except ChallengeNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found"
-            ) from exc
-
-        if challenge.status != ChallengeStatus.ACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found"
-            )
+        challenge = await _active_challenge(challenge_registry, slug)
 
         body = await request.body()
         headers = _forward_headers(request)
@@ -150,6 +234,100 @@ def create_proxy_app(
             media_type=upstream.headers.get("content-type"),
         )
 
+    async def bridge_upload(challenge_name: str, request: Request) -> Response:
+        challenge = await _active_challenge(challenge_registry, challenge_name)
+        body = await request.body()
+        if len(body) > upload_max_body_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Submission too large",
+            )
+        try:
+            identity = await verifier.verify(
+                method=request.method,
+                path=request.url.path,
+                headers=request.headers,
+                body=body,
+                challenge_slug=challenge.slug,
+            )
+        except NonceReplayError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except MinerAuthError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+
+        token = token_provider(challenge.slug)
+        if not token:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, "Challenge token is unavailable"
+            )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Platform-Challenge-Slug": challenge.slug,
+            "X-Platform-Verified-Hotkey": identity.hotkey,
+            "X-Platform-Verified-Nonce": identity.nonce,
+            "X-Platform-Request-Hash": identity.body_hash,
+            "Content-Type": request.headers.get(
+                "content-type", "application/octet-stream"
+            ),
+            "Accept": "application/json",
+        }
+        if identity.uid is not None:
+            headers["X-Platform-Verified-Uid"] = str(identity.uid)
+        filename = request.headers.get("x-submission-filename")
+        if filename:
+            headers["X-Submission-Filename"] = filename
+        url = _target_url(
+            challenge.internal_base_url,
+            "/internal/v1/bridge/submissions",
+            request.url.query,
+        )
+        try:
+            async with client_factory() as client:
+                upstream = await client.post(url, content=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail="Challenge unavailable"
+            ) from exc
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=_response_headers(upstream),
+            media_type=upstream.headers.get("content-type"),
+        )
+
+    async def bridge_status(
+        challenge_name: str, submission_id: str, request: Request
+    ) -> Response:
+        challenge = await _active_challenge(challenge_registry, challenge_name)
+        url = _target_url(
+            challenge.internal_base_url,
+            f"/v1/submissions/{submission_id}",
+            request.url.query,
+        )
+        try:
+            async with client_factory() as client:
+                upstream = await client.get(url, headers=_forward_headers(request))
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail="Challenge unavailable"
+            ) from exc
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=_response_headers(upstream),
+            media_type=upstream.headers.get("content-type"),
+        )
+
+    @app.post("/v1/challenges/{challenge_name}/submissions")
+    async def upload_submission(challenge_name: str, request: Request) -> Response:
+        return await bridge_upload(challenge_name, request)
+
+    @app.get("/v1/challenges/{challenge_name}/submissions/{submission_id}")
+    async def bridge_submission_status(
+        challenge_name: str, submission_id: str, request: Request
+    ) -> Response:
+        return await bridge_status(challenge_name, submission_id, request)
+
     @app.api_route(
         "/challenges/{slug}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
@@ -165,7 +343,5 @@ def create_proxy_app(
         return await proxy_request(slug, path, request)
 
     app.state.challenge_registry = challenge_registry
+    app.state.miner_upload_verifier = verifier
     return app
-
-
-app = create_proxy_app()

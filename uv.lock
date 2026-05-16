@@ -1569,6 +1569,9 @@ dev = [
     { name = "ruff" },
     { name = "types-docker" },
 ]
+master = [
+    { name = "bittensor" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1576,6 +1579,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "bittensor", marker = "extra == 'bittensor'", specifier = ">=9" },
+    { name = "bittensor", marker = "extra == 'master'", specifier = ">=9" },
     { name = "docker", specifier = ">=7.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },

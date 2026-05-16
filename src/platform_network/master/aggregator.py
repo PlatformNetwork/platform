@@ -54,6 +54,8 @@ def aggregate_challenge_weights(
         uid = hotkey_to_uid.get(hotkey)
         if uid is None:
             continue
+        if uid == 0:
+            continue
         uid_scores[uid] += weight
         kept_hotkeys[hotkey] = weight
 

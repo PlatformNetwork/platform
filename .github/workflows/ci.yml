@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Ruff
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Mypy
+        run: uv run mypy src
+      - name: Tests
+        run: uv run pytest
+      - name: Compose config
+        run: docker compose -f docker/compose.yml config
+
+  compose-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start master and proxy
+        run: |
+          docker compose -f docker/compose.yml up -d --build master-admin master-proxy platform-docker-broker
+          docker compose -f docker/compose.yml ps
+      - name: Wait for health
+        run: |
+          for url in http://localhost:8000/health http://localhost:8080/health http://localhost:8000/v1/registry; do
+            for i in $(seq 1 60); do
+              if curl -fsS "$url"; then
+                break
+              fi
+              if [ "$i" = "60" ]; then
+                docker compose -f docker/compose.yml logs
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+          broker_id=$(docker compose -f docker/compose.yml ps -q platform-docker-broker)
+          for i in $(seq 1 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' "$broker_id")
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$i" = "60" ]; then
+              docker compose -f docker/compose.yml logs platform-docker-broker
+              exit 1
+            fi
+            sleep 2
+          done
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f docker/compose.yml logs
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker/compose.yml down -v

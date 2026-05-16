@@ -23,6 +23,10 @@ class MasterSettings(BaseModel):
     challenge_timeout_seconds: float = 10.0
     challenge_retries: int = 3
     registry_state_file: str = "/var/lib/platform/registry.json"
+    upload_signature_ttl_seconds: int = 300
+    upload_nonce_ttl_seconds: int = 86_400
+    upload_max_body_bytes: int = 2_000_000
+    upload_require_registered_hotkey: bool = True
 
 
 class ValidatorSettings(BaseModel):
@@ -31,7 +35,7 @@ class ValidatorSettings(BaseModel):
 
 
 class DatabaseSettings(BaseModel):
-    url: str = "postgresql+asyncpg://platform:platform@localhost:5432/platform"
+    url: str = "sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3"
 
 
 class DockerSettings(BaseModel):
@@ -58,17 +62,6 @@ class GpuServerSettings(BaseModel):
     timeout_seconds: float = 30.0
 
 
-class WeightsSettings(BaseModel):
-    primary_url: str | None = None
-    fallback_token: str | None = None
-    fallback_token_file: str | None = None
-    signing_secret: str | None = None
-    signing_secret_file: str | None = None
-    max_age_seconds: int = 600
-    fallback_enabled: bool = False
-    latest_weights_file: str = "/var/lib/platform/latest_weights.json"
-
-
 class SecuritySettings(BaseModel):
     admin_token: str | None = None
     admin_token_file: str | None = None
@@ -87,6 +80,5 @@ class Settings(BaseModel):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     docker: DockerSettings = Field(default_factory=DockerSettings)
     gpu_servers: list[GpuServerSettings] = Field(default_factory=list)
-    weights: WeightsSettings = Field(default_factory=WeightsSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)

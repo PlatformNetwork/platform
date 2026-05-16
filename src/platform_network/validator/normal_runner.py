@@ -8,6 +8,7 @@ from platform_network.master.docker_orchestrator import (
     ChallengeResources,
     ChallengeSpec,
 )
+from platform_network.schemas.challenge import ChallengeStatus
 from platform_network.validator.registry_client import RegistryClient
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ class NormalValidatorRunner:
     async def run_once(self) -> None:
         registry = await self.registry_client.fetch_registry()
         for challenge in registry.challenges:
+            if challenge.status != ChallengeStatus.ACTIVE:
+                continue
             spec = ChallengeSpec(
                 slug=challenge.slug,
                 image=challenge.image,

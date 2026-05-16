@@ -19,34 +19,26 @@ class BittensorRuntime:
     weight_setter: WeightSetter
 
 
-def _load_bittensor(*, required: bool) -> Any | None:
+def _load_bittensor() -> Any:
     try:
         return importlib.import_module("bittensor")
     except ImportError as exc:
-        if required:
-            raise BittensorDependencyError(
-                "Install the bittensor extra to submit weights: "
-                "`pip install 'platform-network[bittensor]'`."
-            ) from exc
-        return None
+        raise BittensorDependencyError(
+            "Install the bittensor extra to submit weights: "
+            "`pip install 'platform-network[bittensor]'`."
+        ) from exc
 
 
-def create_bittensor_runtime(
-    settings: Settings, *, dry_run: bool = True
-) -> BittensorRuntime:
-    bittensor = _load_bittensor(required=not dry_run)
-    subtensor = None
-    wallet = None
-    if bittensor is not None:
-        subtensor_kwargs = {}
-        if settings.network.chain_endpoint:
-            subtensor_kwargs["network"] = settings.network.chain_endpoint
-        subtensor = bittensor.Subtensor(**subtensor_kwargs)
-        if not dry_run:
-            wallet = bittensor.Wallet(
-                name=settings.network.wallet_name,
-                hotkey=settings.network.wallet_hotkey,
-            )
+def create_bittensor_runtime(settings: Settings) -> BittensorRuntime:
+    bittensor = _load_bittensor()
+    subtensor_kwargs = {}
+    if settings.network.chain_endpoint:
+        subtensor_kwargs["network"] = settings.network.chain_endpoint
+    subtensor = bittensor.Subtensor(**subtensor_kwargs)
+    wallet = bittensor.Wallet(
+        name=settings.network.wallet_name,
+        hotkey=settings.network.wallet_hotkey,
+    )
 
     return BittensorRuntime(
         metagraph_cache=MetagraphCache(
@@ -55,7 +47,7 @@ def create_bittensor_runtime(
             subtensor=subtensor,
         ),
         weight_setter=WeightSetter(
-            subtensor=None if dry_run else subtensor,
+            subtensor=subtensor,
             wallet=wallet,
             netuid=settings.network.netuid,
         ),

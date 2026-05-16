@@ -97,6 +97,7 @@ def _from_challenge_spec(
         image=spec.image,
         version=spec.version,
         challenge_token=spec.challenge_token,
+        docker_broker_token=spec.docker_broker_token,
         env=spec.env,
         secrets=spec.secrets,
         resources=GpuChallengeResources(

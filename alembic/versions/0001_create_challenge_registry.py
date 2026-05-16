@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -19,24 +18,22 @@ down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-challenge_status = postgresql.ENUM(
+challenge_status = sa.Enum(
     "active",
     "inactive",
     "disabled",
     "draft",
     name="challenge_status",
-    create_type=False,
+    native_enum=False,
 )
 
 
 def upgrade() -> None:
     """Apply the migration."""
 
-    challenge_status.create(op.get_bind(), checkfirst=True)
-
     op.create_table(
         "challenges",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("slug", sa.Text(), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
@@ -48,8 +45,8 @@ def upgrade() -> None:
         sa.Column("api_version", sa.Text(), server_default="1.0", nullable=False),
         sa.Column(
             "metadata",
-            postgresql.JSONB(astext_type=sa.Text()),
-            server_default=sa.text("'{}'::jsonb"),
+            sa.JSON(),
+            server_default=sa.text("'{}'"),
             nullable=False,
         ),
         sa.Column(
@@ -74,8 +71,8 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_images",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("registry", sa.Text(), nullable=False),
         sa.Column("repository", sa.Text(), nullable=False),
         sa.Column("tag", sa.Text(), nullable=False),
@@ -95,10 +92,12 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_auth",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("token_hash", sa.Text(), nullable=False),
         sa.Column("token_hint", sa.Text(), nullable=True),
+        sa.Column("broker_token_hash", sa.Text(), nullable=True),
+        sa.Column("broker_token_hint", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -117,8 +116,8 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_resources",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("key", sa.Text(), nullable=False),
         sa.Column("value", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -141,8 +140,8 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_volumes",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("mount_path", sa.Text(), nullable=False),
         sa.Column("type", sa.Text(), nullable=False),
@@ -166,8 +165,8 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_secrets",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("mount_path", sa.Text(), nullable=False),
         sa.Column("source_path", sa.Text(), nullable=False),
@@ -191,11 +190,11 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_env",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("key", sa.Text(), nullable=False),
         sa.Column("value_encrypted", sa.Text(), nullable=False),
-        sa.Column("is_secret", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("is_secret", sa.Boolean(), server_default="0", nullable=False),
         sa.ForeignKeyConstraint(
             ["challenge_id"],
             ["challenges.id"],
@@ -213,8 +212,8 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_capabilities",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("version", sa.Text(), nullable=True),
         sa.ForeignKeyConstraint(
@@ -237,10 +236,10 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_routes",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("public_prefix", sa.Text(), nullable=False),
-        sa.Column("proxy_enabled", sa.Boolean(), server_default="true", nullable=False),
+        sa.Column("proxy_enabled", sa.Boolean(), server_default="1", nullable=False),
         sa.ForeignKeyConstraint(
             ["challenge_id"],
             ["challenges.id"],
@@ -261,8 +260,8 @@ def upgrade() -> None:
 
     op.create_table(
         "challenge_health_events",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("challenge_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("challenge_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("status", sa.Text(), nullable=False),
         sa.Column("version", sa.Text(), nullable=True),
         sa.Column("message", sa.Text(), nullable=True),
@@ -326,4 +325,3 @@ def downgrade() -> None:
     op.drop_index("ix_challenges_status", table_name="challenges")
     op.drop_index("ix_challenges_slug_status", table_name="challenges")
     op.drop_table("challenges")
-    challenge_status.drop(op.get_bind(), checkfirst=True)

@@ -17,7 +17,7 @@ master:
   registry_state_file: /var/lib/platform/registry.json
 
 database:
-  url: postgresql+asyncpg://platform:CHANGE_ME@localhost:5432/platform
+  url: sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3
 
 docker:
   network_name: platform_challenges

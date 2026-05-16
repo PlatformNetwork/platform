@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
+from platform_network.db.migrations import upgrade
+from platform_network.db.session import create_engine, create_session_factory
 from platform_network.master.registry import (
     ChallengeAlreadyExistsError,
     ChallengeNotFoundError,
     ChallengeRegistry,
+    DatabaseChallengeRegistry,
     FileChallengeRegistry,
     default_internal_base_url,
     default_public_proxy_base_path,
@@ -68,6 +72,20 @@ def test_registry_update_views_and_errors() -> None:
     assert public.public_proxy_base_path == "/challenges/demo-case"
 
 
+def test_image_digest_round_trip() -> None:
+    registry = ChallengeRegistry()
+    record, _token = registry.create(
+        ChallengeCreate(
+            slug="digest-demo",
+            name="Digest",
+            image="ghcr.io/platformnetwork/demo@sha256:abc123",
+            version="1.0.0",
+        )
+    )
+
+    assert record.image == "ghcr.io/platformnetwork/demo@sha256:abc123"
+
+
 def test_file_registry_handles_missing_and_invalid_state(tmp_path: Path) -> None:
     state = tmp_path / "registry.json"
     registry = FileChallengeRegistry(state)
@@ -84,4 +102,55 @@ def test_file_registry_handles_missing_and_invalid_state(tmp_path: Path) -> None
 
     reloaded = FileChallengeRegistry(state)
     assert reloaded.get("demo").slug == "demo"
-    assert reloaded.get_token("missing") == ""
+    with pytest.raises(RuntimeError, match="token file is missing"):
+        reloaded.get_token("missing")
+
+    broker_path = tmp_path / "demo_docker_broker_token"
+    broker_path.unlink()
+    with pytest.raises(RuntimeError, match="broker token file is missing"):
+        reloaded.get_broker_token("demo")
+    assert not broker_path.exists()
+
+
+def test_database_registry_uses_sqlite_source_of_truth(tmp_path: Path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'master.sqlite3'}"
+    upgrade(Path(__file__).resolve().parents[2] / "alembic.ini", db_url)
+
+    async def run() -> None:
+        engine = create_engine(db_url)
+        registry = DatabaseChallengeRegistry(
+            create_session_factory(engine),
+            secret_dir=tmp_path / "secrets",
+            master_uid=3,
+        )
+
+        draft, challenge_token = await registry.create(payload("draft-demo"))
+        inactive_payload = payload("inactive-demo").model_dump()
+        inactive_payload["status"] = ChallengeStatus.INACTIVE
+        inactive_payload["internal_base_url"] = "http://custom:8000"
+        inactive, _ = await registry.create(ChallengeCreate(**inactive_payload))
+
+        assert draft.broker_token_hint
+        assert challenge_token
+        assert registry.get_token("draft-demo") != registry.get_broker_token(
+            "draft-demo"
+        )
+        assert (tmp_path / "secrets" / "draft-demo_challenge_token").is_file()
+        assert (tmp_path / "secrets" / "draft-demo_docker_broker_token").is_file()
+
+        response = await registry.registry_response()
+        assert response.master_uid == 3
+        assert [challenge.slug for challenge in response.challenges] == [
+            "inactive-demo"
+        ]
+        assert response.challenges[0].internal_base_url == "http://custom:8000"
+        assert inactive.status == ChallengeStatus.INACTIVE
+
+        digest_payload = payload("digest-demo").model_dump()
+        digest_payload["image"] = "ghcr.io/platformnetwork/demo:1.0@sha256:abc123"
+        digest, _ = await registry.create(ChallengeCreate(**digest_payload))
+        assert digest.image == "ghcr.io/platformnetwork/demo:1.0@sha256:abc123"
+
+        await engine.dispose()
+
+    asyncio.run(run())

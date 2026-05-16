@@ -35,7 +35,7 @@ dev = [
   "mypy>=1.10",
   "types-docker>=7.1"
 ]
-master = []
+master = ["bittensor>=9"]
 validator = []
 
 [project.scripts]

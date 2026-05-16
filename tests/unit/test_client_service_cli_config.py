@@ -168,7 +168,7 @@ async def test_master_weight_service_and_validator_runner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_master_weight_service_uses_fallback_when_capability_blocked() -> None:
+async def test_master_weight_service_fails_when_capability_blocked() -> None:
     class Cache:
         def get(self) -> dict[str, int]:
             return {"hk": 5}
@@ -183,16 +183,6 @@ async def test_master_weight_service_uses_fallback_when_capability_blocked() -> 
     class Checker:
         def check(self, resources) -> CapabilityDecision:
             return CapabilityDecision(False, "gpu_server_unknown")
-
-    class Fallback:
-        async def get_weights(
-            self, *, slug: str, emission_percent: float
-        ) -> ChallengeWeightsResult:
-            return ChallengeWeightsResult(
-                slug=slug,
-                emission_percent=emission_percent,
-                weights={"hk": 1.0},
-            )
 
     challenge = RegistryChallenge(
         slug="gpu-demo",
@@ -214,13 +204,11 @@ async def test_master_weight_service_uses_fallback_when_capability_blocked() -> 
         metagraph_cache=Cache(),  # type: ignore[arg-type]
         weight_setter=setter,  # type: ignore[arg-type]
         capability_checker=Checker(),  # type: ignore[arg-type]
-        fallback_client=Fallback(),  # type: ignore[arg-type]
     )
 
-    final = await service.run_epoch([challenge], {})
-
-    assert final.uids == [5]
-    assert setter.calls == [([5], [1.0])]
+    with pytest.raises(RuntimeError, match="cannot run"):
+        await service.run_epoch([challenge], {})
+    assert setter.calls == []
 
 
 @pytest.mark.asyncio
@@ -301,15 +289,13 @@ def test_bittensor_cache_and_setter() -> None:
     assert cache.get() == {"a": 0, "b": 1}
     assert cache.get(force=True) == {"a": 0, "b": 1}
     result = WeightSetter(subtensor=subtensor, wallet="wallet", netuid=12).set_weights(
-        [0], [1.0]
+        [1], [1.0]
     )
     assert result["ok"] is True
-    assert (
+    with pytest.raises(ValueError, match="empty weights"):
         WeightSetter(subtensor=subtensor, wallet="wallet", netuid=12).set_weights(
             [], []
-        )["skipped"]
-        is True
-    )
+        )
 
 
 def test_cli_create_and_runtime_controller(tmp_path: Path) -> None:
@@ -413,29 +399,29 @@ def test_cli_master_weights_once_wires_bittensor_runtime(
                 weights={"hk": 2.0},
             )
 
-    def create_runtime(settings, *, dry_run: bool):
+    def create_runtime(settings):
         created_runtime["netuid"] = settings.network.netuid
         created_runtime["chain_endpoint"] = settings.network.chain_endpoint
         created_runtime["wallet_name"] = settings.network.wallet_name
         created_runtime["wallet_hotkey"] = settings.network.wallet_hotkey
-        created_runtime["dry_run"] = dry_run
         return SimpleNamespace(metagraph_cache=Cache(), weight_setter=Setter())
 
     monkeypatch.setattr(cli_module, "create_bittensor_runtime", create_runtime)
     monkeypatch.setattr(cli_module, "ChallengeClient", Client)
+    monkeypatch.setattr(cli_module, "_run_startup_migrations", lambda _settings: None)
+    monkeypatch.setattr(cli_module, "_master_registry", lambda _settings: registry)
 
     result = CliRunner().invoke(
         app, ["master", "weights", "--config", str(config), "--once"]
     )
 
     assert result.exit_code == 0
-    assert "dry-run: computed 1 weights" in result.output
+    assert "submit: computed 1 weights" in result.output
     assert created_runtime == {
         "netuid": 12,
         "chain_endpoint": "ws://chain",
         "wallet_name": "wallet",
         "wallet_hotkey": "hotkey",
-        "dry_run": True,
         "client_kwargs": {"timeout_seconds": 1.5, "retries": 2},
     }
     assert setter_calls == [([7], [1.0])]
@@ -472,7 +458,7 @@ def test_cli_master_weights_loop_uses_epoch_interval(
         def __init__(self, **kwargs: object) -> None:
             pass
 
-    def create_runtime(settings, *, dry_run: bool):
+    def create_runtime(settings):
         return SimpleNamespace(metagraph_cache=Cache(), weight_setter=Setter())
 
     async def run_loop(interval_seconds: int, callback):
@@ -482,6 +468,15 @@ def test_cli_master_weights_loop_uses_epoch_interval(
     monkeypatch.setattr(cli_module, "create_bittensor_runtime", create_runtime)
     monkeypatch.setattr(cli_module, "ChallengeClient", Client)
     monkeypatch.setattr(cli_module, "run_epoch_loop", run_loop)
+    monkeypatch.setattr(cli_module, "_run_startup_migrations", lambda _settings: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_master_registry",
+        lambda settings: FileChallengeRegistry(
+            settings.master.registry_state_file,
+            secret_dir=settings.docker.secret_dir,
+        ),
+    )
 
     result = CliRunner().invoke(app, ["master", "weights", "--config", str(config)])
 
@@ -557,7 +552,7 @@ def test_cli_gpu_server_commands_call_admin(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls[1] == ("GET", "/v1/admin/gpu-servers", None)
 
 
-def test_registry_client_with_mock_transport() -> None:
+def test_registry_client_with_asgi_transport() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,

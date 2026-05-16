@@ -20,6 +20,7 @@ class GpuChallengeSpecRequest(BaseModel):
     image: str
     version: str | None = None
     challenge_token: str | None = None
+    docker_broker_token: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
     resources: GpuChallengeResources = Field(default_factory=GpuChallengeResources)

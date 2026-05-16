@@ -1,27 +1,11 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: platform
-      POSTGRES_USER: platform
-      POSTGRES_PASSWORD: ${PLATFORM_POSTGRES_PASSWORD:?set PLATFORM_POSTGRES_PASSWORD}
-    volumes:
-      - platform_postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - platform_backend
-
   master:
     build:
       context: ..
       dockerfile: docker/Dockerfile.master
     environment:
-      DATABASE_URL: postgresql+asyncpg://platform:${PLATFORM_POSTGRES_PASSWORD:?set PLATFORM_POSTGRES_PASSWORD}@postgres:5432/platform
-      PLATFORM_DATABASE__URL: postgresql+asyncpg://platform:${PLATFORM_POSTGRES_PASSWORD:?set PLATFORM_POSTGRES_PASSWORD}@postgres:5432/platform
+      DATABASE_URL: sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3
+      PLATFORM_DATABASE__URL: sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3
       PLATFORM_DOCKER__NETWORK_NAME: platform_challenges
       PLATFORM_DOCKER__SECRET_DIR: /var/lib/platform/secrets
       PLATFORM_DOCKER__BROKER_URL: http://platform-docker-broker:8082
@@ -31,12 +15,11 @@ services:
       PLATFORM_MASTER__ADMIN_PORT: "8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - platform_db:/var/lib/platform-db
       - ./.platform/secrets:/var/lib/platform/secrets
       - ./.platform/state:/var/lib/platform
       - ../config:/app/config:ro
     depends_on:
-      postgres:
-        condition: service_healthy
       otel-collector:
         condition: service_started
     ports:
@@ -60,6 +43,7 @@ services:
     command: ["platform", "master", "broker", "--config", "config/master.example.yaml"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - platform_db:/var/lib/platform-db
       - ./.platform/secrets:/var/lib/platform/secrets
       - ./.platform/state:/var/lib/platform
       - ../config:/app/config:ro
@@ -76,12 +60,15 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.master
     environment:
+      PLATFORM_DATABASE__URL: sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3
       PLATFORM_DOCKER__NETWORK_NAME: platform_challenges
       PLATFORM_MASTER__REGISTRY_STATE_FILE: /var/lib/platform/registry.json
       PLATFORM_MASTER__PROXY_PORT: "8080"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     command: ["platform", "master", "proxy", "--config", "config/master.example.yaml"]
     volumes:
+      - platform_db:/var/lib/platform-db
+      - ./.platform/secrets:/var/lib/platform/secrets
       - ./.platform/state:/var/lib/platform
       - ../config:/app/config:ro
     depends_on:
@@ -107,7 +94,7 @@ services:
       - platform_backend
 
 volumes:
-  platform_postgres:
+  platform_db:
 
 networks:
   platform_backend:

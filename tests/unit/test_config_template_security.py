@@ -46,6 +46,18 @@ def test_load_settings_gpu_servers(tmp_path: Path) -> None:
     assert server.timeout_seconds == 12
 
 
+def test_load_settings_parses_complex_env(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "PLATFORM_DOCKER__BROKER_ALLOWED_IMAGES",
+        '["platformnetwork/","ghcr.io/platformnetwork/"]',
+    )
+
+    assert load_settings().docker.broker_allowed_images == [
+        "platformnetwork/",
+        "ghcr.io/platformnetwork/",
+    ]
+
+
 def test_render_challenge_template(tmp_path: Path) -> None:
     out = tmp_path / "challenge"
     files = render_challenge_template(

@@ -6,12 +6,31 @@ import hashlib
 import json
 import secrets
 import stat
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
+
+from platform_network.db.models import (
+    Challenge,
+    ChallengeAuth,
+    ChallengeCapability,
+    ChallengeEnv,
+    ChallengeImage,
+    ChallengeResource,
+    ChallengeSecret,
+    ChallengeVolume,
+)
+from platform_network.db.models import (
+    ChallengeStatus as DbChallengeStatus,
+)
+from platform_network.db.session import session_scope
 from platform_network.schemas.challenge import (
     ChallengeAdminView,
     ChallengeCreate,
@@ -79,6 +98,8 @@ class ChallengeRegistry:
         self.api_version = api_version
         self.master_uid = master_uid
         self._records: dict[str, ChallengeRecord] = {}
+        self._tokens: dict[str, str] = {}
+        self._broker_tokens: dict[str, str] = {}
         self._lock = RLock()
 
     def create(self, payload: ChallengeCreate) -> tuple[ChallengeRecord, str]:
@@ -89,6 +110,7 @@ class ChallengeRegistry:
                 raise ChallengeAlreadyExistsError(payload.slug)
 
             token = secrets.token_urlsafe(32)
+            broker_token = secrets.token_urlsafe(32)
             volumes = dict(payload.volumes)
             volumes.setdefault("sqlite", default_sqlite_volume_name(payload.slug))
 
@@ -102,6 +124,8 @@ class ChallengeRegistry:
                 status=payload.status,
                 token_hash=_hash_token(token),
                 token_hint=_token_hint(token),
+                broker_token_hash=_hash_token(broker_token),
+                broker_token_hint=_token_hint(broker_token),
                 description=payload.description,
                 api_version=payload.api_version,
                 internal_base_url=payload.internal_base_url
@@ -117,6 +141,8 @@ class ChallengeRegistry:
                 updated_at=now,
             )
             self._records[payload.slug] = record
+            self._tokens[payload.slug] = token
+            self._broker_tokens[payload.slug] = broker_token
             return record, token
 
     def update(self, slug: str, payload: ChallengeUpdate) -> ChallengeRecord:
@@ -166,7 +192,8 @@ class ChallengeRegistry:
             master_uid=self.master_uid,
             challenges=[
                 record_to_registry_view(record)
-                for record in self.list(active_only=True)
+                for record in self.list()
+                if record.status != ChallengeStatus.DRAFT
             ],
         )
 
@@ -175,6 +202,22 @@ class ChallengeRegistry:
         if record is None:
             raise ChallengeNotFoundError(slug)
         return record
+
+    def get_token(self, slug: str) -> str:
+        """Return a clear challenge token for local runtime wiring."""
+
+        token = self._tokens.get(slug)
+        if not token:
+            raise RuntimeError(f"Challenge token for {slug!r} is unavailable")
+        return token
+
+    def get_broker_token(self, slug: str) -> str:
+        """Return a clear Docker broker token for local runtime wiring."""
+
+        token = self._broker_tokens.get(slug)
+        if not token:
+            raise RuntimeError(f"Docker broker token for {slug!r} is unavailable")
+        return token
 
 
 class FileChallengeRegistry(ChallengeRegistry):
@@ -200,6 +243,7 @@ class FileChallengeRegistry(ChallengeRegistry):
     def create(self, payload: ChallengeCreate) -> tuple[ChallengeRecord, str]:
         record, token = super().create(payload)
         self._write_token(record.slug, token)
+        self._write_broker_token(record.slug, super().get_broker_token(record.slug))
         self._save()
         return record, token
 
@@ -237,15 +281,30 @@ class FileChallengeRegistry(ChallengeRegistry):
     def get_token(self, slug: str) -> str:
         path = self._token_path(slug)
         if not path.is_file():
-            return ""
+            raise RuntimeError(f"Challenge token file is missing for {slug!r}")
+        return path.read_text(encoding="utf-8").strip()
+
+    def get_broker_token(self, slug: str) -> str:
+        path = self._broker_token_path(slug)
+        if not path.is_file():
+            raise RuntimeError(f"Docker broker token file is missing for {slug!r}")
         return path.read_text(encoding="utf-8").strip()
 
     def _token_path(self, slug: str) -> Path:
         return self.secret_dir / f"{slug}_challenge_token"
 
+    def _broker_token_path(self, slug: str) -> Path:
+        return self.secret_dir / f"{slug}_docker_broker_token"
+
     def _write_token(self, slug: str, token: str) -> None:
         self.secret_dir.mkdir(parents=True, exist_ok=True)
         path = self._token_path(slug)
+        path.write_text(token, encoding="utf-8")
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def _write_broker_token(self, slug: str, token: str) -> None:
+        self.secret_dir.mkdir(parents=True, exist_ok=True)
+        path = self._broker_token_path(slug)
         path.write_text(token, encoding="utf-8")
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
@@ -260,10 +319,134 @@ class FileChallengeRegistry(ChallengeRegistry):
         self.state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+class DatabaseChallengeRegistry:
+    """SQLite/SQLAlchemy-backed challenge registry used by master runtimes."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        secret_dir: str | Path,
+        network: str = "platform",
+        api_version: str = "1.0",
+        master_uid: int = 0,
+    ) -> None:
+        self.session_factory = session_factory
+        self.secret_dir = Path(secret_dir)
+        self.network = network
+        self.api_version = api_version
+        self.master_uid = master_uid
+
+    async def create(self, payload: ChallengeCreate) -> tuple[ChallengeRecord, str]:
+        token = secrets.token_urlsafe(32)
+        broker_token = secrets.token_urlsafe(32)
+        async with session_scope(self.session_factory) as session:
+            existing = await self._get_model(session, payload.slug, required=False)
+            if existing is not None:
+                raise ChallengeAlreadyExistsError(payload.slug)
+            model = _model_from_payload(payload, token, broker_token)
+            session.add(model)
+            await session.flush()
+            await session.refresh(model)
+            await self._load_relationships(session, model)
+            record = _record_from_model(model)
+        self._write_token(payload.slug, token)
+        self._write_broker_token(payload.slug, broker_token)
+        return record, token
+
+    async def update(self, slug: str, payload: ChallengeUpdate) -> ChallengeRecord:
+        async with session_scope(self.session_factory) as session:
+            model = await self._get_model(session, slug)
+            assert model is not None
+            updates = payload.model_dump(exclude_unset=True)
+            if not updates:
+                return _record_from_model(model)
+            _apply_model_updates(model, updates)
+            await session.flush()
+            await self._load_relationships(session, model)
+            return _record_from_model(model)
+
+    async def set_status(self, slug: str, status: ChallengeStatus) -> ChallengeRecord:
+        return await self.update(slug, ChallengeUpdate(status=status))
+
+    async def get(self, slug: str) -> ChallengeRecord:
+        async with session_scope(self.session_factory) as session:
+            model = await self._get_model(session, slug)
+            assert model is not None
+            return _record_from_model(model)
+
+    async def list(self, *, active_only: bool = False) -> list[ChallengeRecord]:
+        async with session_scope(self.session_factory) as session:
+            query = select(Challenge).order_by(Challenge.slug).options(*_LOAD_OPTIONS)
+            if active_only:
+                query = query.where(Challenge.status == DbChallengeStatus.ACTIVE)
+            result = await session.execute(query)
+            return [_record_from_model(model) for model in result.scalars().all()]
+
+    async def registry_response(self) -> RegistryResponse:
+        records = await self.list()
+        return RegistryResponse(
+            network=self.network,
+            api_version=self.api_version,
+            master_uid=self.master_uid,
+            challenges=[
+                record_to_registry_view(record)
+                for record in records
+                if record.status != ChallengeStatus.DRAFT
+            ],
+        )
+
+    def get_token(self, slug: str) -> str:
+        path = self._token_path(slug)
+        if not path.is_file():
+            raise RuntimeError(f"Challenge token file is missing for {slug!r}")
+        return path.read_text(encoding="utf-8").strip()
+
+    def get_broker_token(self, slug: str) -> str:
+        path = self._broker_token_path(slug)
+        if not path.is_file():
+            raise RuntimeError(f"Docker broker token file is missing for {slug!r}")
+        return path.read_text(encoding="utf-8").strip()
+
+    async def _get_model(
+        self, session: AsyncSession, slug: str, *, required: bool = True
+    ) -> Challenge | None:
+        result = await session.execute(
+            select(Challenge).where(Challenge.slug == slug).options(*_LOAD_OPTIONS)
+        )
+        model = result.scalar_one_or_none()
+        if model is None and required:
+            raise ChallengeNotFoundError(slug)
+        return model
+
+    async def _load_relationships(
+        self, session: AsyncSession, model: Challenge
+    ) -> None:
+        await session.refresh(model, attribute_names=_RELATIONSHIP_NAMES)
+
+    def _token_path(self, slug: str) -> Path:
+        return self.secret_dir / f"{slug}_challenge_token"
+
+    def _broker_token_path(self, slug: str) -> Path:
+        return self.secret_dir / f"{slug}_docker_broker_token"
+
+    def _write_token(self, slug: str, token: str) -> None:
+        self.secret_dir.mkdir(parents=True, exist_ok=True)
+        path = self._token_path(slug)
+        path.write_text(token, encoding="utf-8")
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def _write_broker_token(self, slug: str, token: str) -> None:
+        self.secret_dir.mkdir(parents=True, exist_ok=True)
+        path = self._broker_token_path(slug)
+        path.write_text(token, encoding="utf-8")
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
 def record_to_admin_view(record: ChallengeRecord) -> ChallengeAdminView:
     """Convert internal metadata to an admin-safe response model."""
 
-    data = record.model_dump(exclude={"token_hash"})
+    data = record.model_dump(exclude={"token_hash", "broker_token_hash"})
     return ChallengeAdminView(**data)
 
 
@@ -284,4 +467,211 @@ def record_to_registry_view(record: ChallengeRecord) -> RegistryChallenge:
         volumes=dict(record.volumes),
         env=dict(record.env),
         secrets=list(record.secrets),
+    )
+
+
+_RELATIONSHIP_NAMES = [
+    "image",
+    "auth",
+    "resources",
+    "volumes",
+    "secrets",
+    "env",
+    "capabilities",
+    "routes",
+]
+
+_LOAD_OPTIONS = tuple(
+    selectinload(getattr(Challenge, relationship_name))
+    for relationship_name in _RELATIONSHIP_NAMES
+)
+
+
+def _split_image(image: str) -> tuple[str, str, str, str | None]:
+    image_without_digest, digest_sep, digest = image.partition("@")
+    slash_index = image_without_digest.rfind("/")
+    colon_index = image_without_digest.rfind(":")
+    has_tag = colon_index > slash_index
+    image_name = image_without_digest[:colon_index] if has_tag else image_without_digest
+    tag = image_without_digest[colon_index + 1 :] if has_tag else ""
+    if not digest_sep:
+        tag = tag or "latest"
+    registry, slash, repository = image_name.partition("/")
+    if not slash:
+        return "docker.io", registry, tag, digest or None
+    if "." not in registry and ":" not in registry and registry != "localhost":
+        return "docker.io", image_name, tag, digest or None
+    return registry, repository, tag, digest or None
+
+
+def _join_image(image: ChallengeImage | None) -> str:
+    if image is None:
+        return ""
+    prefix = "" if image.registry_name == "docker.io" else f"{image.registry_name}/"
+    reference = f"{prefix}{image.repository}"
+    if image.tag:
+        reference = f"{reference}:{image.tag}"
+    if image.digest:
+        return f"{reference}@{image.digest}"
+    return reference
+
+
+def _model_from_payload(
+    payload: ChallengeCreate, token: str, broker_token: str
+) -> Challenge:
+    registry, repository, tag, digest = _split_image(payload.image)
+    volumes = dict(payload.volumes)
+    volumes.setdefault("sqlite", default_sqlite_volume_name(payload.slug))
+    metadata = dict(payload.metadata)
+    if payload.internal_base_url:
+        metadata["internal_base_url"] = payload.internal_base_url
+    model = Challenge(
+        id=uuid.uuid4(),
+        slug=payload.slug,
+        name=payload.name,
+        description=payload.description,
+        status=DbChallengeStatus(payload.status.value),
+        emission_percent=payload.emission_percent,
+        version=payload.version,
+        api_version=payload.api_version,
+        metadata_=metadata,
+        image=ChallengeImage(
+            id=uuid.uuid4(),
+            registry_name=registry,
+            repository=repository,
+            tag=tag,
+            digest=digest,
+        ),
+        auth=ChallengeAuth(
+            id=uuid.uuid4(),
+            token_hash=_hash_token(token),
+            token_hint=_token_hint(token),
+            broker_token_hash=_hash_token(broker_token),
+            broker_token_hint=_token_hint(broker_token),
+        ),
+        resources=[
+            ChallengeResource(id=uuid.uuid4(), key=key, value=value)
+            for key, value in payload.resources.items()
+        ],
+        volumes=[
+            ChallengeVolume(
+                id=uuid.uuid4(),
+                name=name,
+                mount_path=value,
+                type="volume",
+            )
+            for name, value in volumes.items()
+        ],
+        secrets=[
+            ChallengeSecret(
+                id=uuid.uuid4(),
+                name=name,
+                mount_path=f"/run/secrets/platform/{name}",
+                source_path=name,
+            )
+            for name in payload.secrets
+        ],
+        env=[
+            ChallengeEnv(id=uuid.uuid4(), key=key, value_encrypted=value)
+            for key, value in payload.env.items()
+        ],
+        capabilities=[
+            ChallengeCapability(id=uuid.uuid4(), name=name)
+            for name in payload.required_capabilities
+        ],
+    )
+    return model
+
+
+def _apply_model_updates(model: Challenge, updates: dict[str, Any]) -> None:
+    if "name" in updates:
+        model.name = updates["name"]
+    if "description" in updates:
+        model.description = updates["description"]
+    if "status" in updates:
+        model.status = DbChallengeStatus(str(updates["status"]))
+    if "emission_percent" in updates:
+        model.emission_percent = updates["emission_percent"]
+    if "version" in updates:
+        model.version = updates["version"]
+    if "api_version" in updates:
+        model.api_version = updates["api_version"]
+    if "metadata" in updates:
+        model.metadata_ = dict(updates["metadata"] or {})
+    if "internal_base_url" in updates:
+        metadata = dict(model.metadata_ or {})
+        if updates["internal_base_url"]:
+            metadata["internal_base_url"] = updates["internal_base_url"]
+        else:
+            metadata.pop("internal_base_url", None)
+        model.metadata_ = metadata
+    if "image" in updates:
+        registry, repository, tag, digest = _split_image(updates["image"])
+        model.image = ChallengeImage(
+            id=uuid.uuid4(),
+            registry_name=registry,
+            repository=repository,
+            tag=tag,
+            digest=digest,
+        )
+    if "resources" in updates:
+        model.resources = [
+            ChallengeResource(id=uuid.uuid4(), key=key, value=value)
+            for key, value in (updates["resources"] or {}).items()
+        ]
+    if "volumes" in updates:
+        volumes = dict(updates["volumes"] or {})
+        volumes.setdefault("sqlite", default_sqlite_volume_name(model.slug))
+        model.volumes = [
+            ChallengeVolume(id=uuid.uuid4(), name=name, mount_path=value, type="volume")
+            for name, value in volumes.items()
+        ]
+    if "env" in updates:
+        model.env = [
+            ChallengeEnv(id=uuid.uuid4(), key=key, value_encrypted=value)
+            for key, value in (updates["env"] or {}).items()
+        ]
+    if "secrets" in updates:
+        model.secrets = [
+            ChallengeSecret(
+                id=uuid.uuid4(),
+                name=name,
+                mount_path=f"/run/secrets/platform/{name}",
+                source_path=name,
+            )
+            for name in (updates["secrets"] or [])
+        ]
+    if "required_capabilities" in updates:
+        model.capabilities = [
+            ChallengeCapability(id=uuid.uuid4(), name=name)
+            for name in (updates["required_capabilities"] or [])
+        ]
+
+
+def _record_from_model(model: Challenge) -> ChallengeRecord:
+    return ChallengeRecord(
+        slug=model.slug,
+        name=model.name,
+        image=_join_image(model.image),
+        version=model.version,
+        emission_percent=Decimal(model.emission_percent),
+        status=ChallengeStatus(str(model.status.value)),
+        token_hash=model.auth.token_hash if model.auth else "",
+        token_hint=(model.auth.token_hint if model.auth else "") or "",
+        broker_token_hash=model.auth.broker_token_hash if model.auth else None,
+        broker_token_hint=model.auth.broker_token_hint if model.auth else None,
+        description=model.description,
+        api_version=model.api_version,
+        internal_base_url=dict(model.metadata_ or {}).get(
+            "internal_base_url", default_internal_base_url(model.slug)
+        ),
+        public_proxy_base_path=default_public_proxy_base_path(model.slug),
+        required_capabilities=[capability.name for capability in model.capabilities],
+        resources={resource.key: resource.value for resource in model.resources},
+        volumes={volume.name: volume.mount_path for volume in model.volumes},
+        env={item.key: item.value_encrypted for item in model.env},
+        secrets=[secret.name for secret in model.secrets],
+        metadata=dict(model.metadata_ or {}),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
     )

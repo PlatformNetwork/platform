@@ -85,6 +85,8 @@ class ChallengeRecord(BaseModel):
     status: ChallengeStatus
     token_hash: str
     token_hint: str
+    broker_token_hash: str | None = None
+    broker_token_hint: str | None = None
     description: str | None = None
     api_version: str = "1.0"
     internal_base_url: str
@@ -111,6 +113,7 @@ class ChallengeAdminView(BaseModel):
     emission_percent: Decimal
     status: ChallengeStatus
     token_hint: str
+    broker_token_hint: str | None = None
     description: str | None = None
     api_version: str
     internal_base_url: str
@@ -130,6 +133,7 @@ class ChallengeCreateResponse(BaseModel):
 
     challenge: ChallengeAdminView
     challenge_token: str = Field(..., min_length=1)
+    docker_broker_token: str = Field(..., min_length=1)
 
 
 class RegistryChallenge(BaseModel):

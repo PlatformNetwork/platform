@@ -112,6 +112,7 @@ class ChallengeSpec:
     image: str
     version: str | None = None
     challenge_token: str | None = None
+    docker_broker_token: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
     resources: ChallengeResources = field(default_factory=ChallengeResources)
@@ -152,6 +153,8 @@ class ChallengeSpec:
         secrets = dict(self.secrets)
         if self.challenge_token is not None:
             secrets["challenge_token"] = self.challenge_token
+        if self.docker_broker_token is not None:
+            secrets["docker_broker_token"] = self.docker_broker_token
         return secrets
 
 
@@ -427,7 +430,7 @@ class DockerOrchestrator:
             )
             environment.setdefault(
                 "CHALLENGE_DOCKER_BROKER_TOKEN_FILE",
-                f"{DEFAULT_SECRET_MOUNT_DIR}/challenge_token",
+                f"{DEFAULT_SECRET_MOUNT_DIR}/docker_broker_token",
             )
         return environment
 

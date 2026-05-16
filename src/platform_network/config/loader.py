@@ -9,7 +9,16 @@ import yaml  # type: ignore[import-untyped]
 from platform_network.config.settings import Settings
 
 
-def _set_nested(data: dict[str, Any], path: list[str], value: str) -> None:
+def _parse_env_value(value: str) -> Any:
+    stripped = value.strip()
+    if stripped.startswith(("[", "{")):
+        parsed = yaml.safe_load(stripped)
+        if isinstance(parsed, list | dict):
+            return parsed
+    return value
+
+
+def _set_nested(data: dict[str, Any], path: list[str], value: Any) -> None:
     node = data
     for part in path[:-1]:
         node = node.setdefault(part, {})
@@ -21,7 +30,7 @@ def _apply_env(data: dict[str, Any], prefix: str = "PLATFORM_") -> dict[str, Any
         if not key.startswith(prefix):
             continue
         raw = key[len(prefix) :].lower()
-        _set_nested(data, raw.split("__"), value)
+        _set_nested(data, raw.split("__"), _parse_env_value(value))
     return data
 
 

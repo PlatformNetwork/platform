@@ -27,7 +27,7 @@ class MetagraphCache:
 
     def refresh(self) -> dict[str, int]:
         if self.subtensor is None:
-            return self.hotkey_to_uid
+            raise RuntimeError("Subtensor is required to refresh metagraph")
         metagraph = self.subtensor.metagraph(self.netuid)
         hotkeys = list(getattr(metagraph, "hotkeys", []))
         return self.update_from_hotkeys(hotkeys)

@@ -10,6 +10,7 @@ import typer
 from platform_network.bittensor.factory import create_bittensor_runtime
 from platform_network.bittensor.validator_loop import run_epoch_loop
 from platform_network.config import load_settings
+from platform_network.db.session import create_engine, create_session_factory
 from platform_network.gpu.agent import GpuAgentService, create_gpu_agent_app
 from platform_network.gpu.capabilities import ResourceCapabilityChecker
 from platform_network.gpu.client import GpuAgentClient
@@ -29,18 +30,14 @@ from platform_network.master.docker_orchestrator import (
     DockerOrchestrator,
 )
 from platform_network.master.registry import (
-    FileChallengeRegistry,
+    DatabaseChallengeRegistry,
     record_to_registry_view,
 )
 from platform_network.master.service import MasterWeightService
-from platform_network.master.weight_fallback import (
-    FallbackWeightClient,
-    LatestWeightsStore,
-    SignedWeightsService,
-)
 from platform_network.observability.logging import configure_logging
 from platform_network.schemas.weights import FinalWeights
 from platform_network.security.admin_auth import read_secret
+from platform_network.security.miner_auth import SqlAlchemyMinerNonceStore
 from platform_network.template_engine import (
     ChallengeTemplateContext,
     render_challenge_template,
@@ -56,7 +53,6 @@ db_app = typer.Typer(help="Database helpers")
 registry_app = typer.Typer(help="Registry helpers")
 gpu_app = typer.Typer(help="Run GPU server agents")
 gpu_server_app = typer.Typer(help="Manage validator GPU servers")
-weights_app = typer.Typer(help="Manage validator weights")
 app.add_typer(master_app, name="master")
 app.add_typer(validator_app, name="validator")
 app.add_typer(challenge_app, name="challenge")
@@ -64,8 +60,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(registry_app, name="registry")
 app.add_typer(gpu_app, name="gpu-agent")
 app.add_typer(gpu_server_app, name="gpu-server")
-app.add_typer(weights_app, name="weights")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _admin_token(config: Path) -> str:
@@ -104,26 +99,29 @@ def _admin_request(
 class DockerRuntimeController:
     def __init__(
         self,
-        registry: FileChallengeRegistry,
+        registry: Any,
         orchestrator: Any,
     ) -> None:
         self.registry = registry
         self.orchestrator = orchestrator
 
-    def _spec(self, slug: str) -> ChallengeSpec:
-        record = self.registry.get(slug)
+    async def _spec(self, slug: str) -> ChallengeSpec:
+        record = await _resolve(self.registry.get(slug))
+        get_broker_token = getattr(self.registry, "get_broker_token", None)
+        broker_token = get_broker_token(slug) if callable(get_broker_token) else None
         return ChallengeSpec(
             slug=record.slug,
             image=record.image,
             version=record.version,
             challenge_token=self.registry.get_token(slug),
+            docker_broker_token=broker_token,
             env=record.env,
             resources=ChallengeResources.from_mapping(record.resources),
             required_capabilities=tuple(record.required_capabilities),
         )
 
     async def pull(self, slug: str):
-        spec = self._spec(slug)
+        spec = await self._spec(slug)
         if hasattr(self.orchestrator, "pull_challenge"):
             self.orchestrator.pull_challenge(spec)
         else:
@@ -136,7 +134,7 @@ class DockerRuntimeController:
         }
 
     async def restart(self, slug: str):
-        runtime = self.orchestrator.restart_challenge(self._spec(slug))
+        runtime = self.orchestrator.restart_challenge(await self._spec(slug))
         return {
             "slug": slug,
             "operation": "restart",
@@ -154,10 +152,30 @@ class DockerRuntimeController:
         }
 
 
-def _master_registry(settings) -> FileChallengeRegistry:
-    return FileChallengeRegistry(
-        settings.master.registry_state_file,
+async def _resolve(value):
+    import inspect
+
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _run_startup_migrations(settings) -> None:
+    from platform_network.db.migrations import upgrade
+
+    upgrade(PROJECT_ROOT / "alembic.ini", database_url=settings.database.url)
+
+
+def _master_session_factory(settings):
+    engine = create_engine(settings.database.url)
+    return create_session_factory(engine)
+
+
+def _master_registry(settings, session_factory=None) -> DatabaseChallengeRegistry:
+    return DatabaseChallengeRegistry(
+        session_factory or _master_session_factory(settings),
         secret_dir=settings.docker.secret_dir,
+        network=settings.network.name,
         master_uid=settings.network.master_uid,
     )
 
@@ -201,41 +219,11 @@ def _challenge_orchestrator(settings) -> ChallengeOrchestratorRouter:
     )
 
 
-def _fallback_client(settings) -> FallbackWeightClient | None:
-    weights = settings.weights
-    if not weights.fallback_enabled or not weights.primary_url:
-        return None
-    token = read_secret(weights.fallback_token, weights.fallback_token_file)
-    signing_secret = read_secret(weights.signing_secret, weights.signing_secret_file)
-    if not token or not signing_secret:
-        raise typer.BadParameter("Fallback weights token and signing secret required")
-    return FallbackWeightClient(
-        primary_url=weights.primary_url,
-        token=token,
-        signing_secret=signing_secret,
-        max_age_seconds=weights.max_age_seconds,
-        timeout_seconds=settings.master.challenge_timeout_seconds,
-    )
-
-
-def _weights_service(settings) -> SignedWeightsService | None:
-    signing_secret = read_secret(
-        settings.weights.signing_secret,
-        settings.weights.signing_secret_file,
-    )
-    if not signing_secret:
-        return None
-    return SignedWeightsService(
-        store=LatestWeightsStore(settings.weights.latest_weights_file),
-        signing_secret=signing_secret,
-    )
-
-
 async def _run_master_weight_epoch(
     service: MasterWeightService,
-    registry: FileChallengeRegistry,
+    registry: Any,
 ) -> FinalWeights:
-    records = registry.list(active_only=True)
+    records = await _resolve(registry.list(active_only=True))
     challenges = [record_to_registry_view(record) for record in records]
     tokens = {record.slug: registry.get_token(record.slug) for record in records}
     return await service.run_epoch(challenges, tokens)
@@ -247,20 +235,17 @@ def master_run(config: Path = typer.Option(Path("config/master.example.yaml"))):
     configure_logging(settings.observability.log_json)
     import uvicorn
 
-    registry = _master_registry(settings)
+    _run_startup_migrations(settings)
+    session_factory = _master_session_factory(settings)
+    registry = _master_registry(settings, session_factory)
     orchestrator = _challenge_orchestrator(settings)
     admin = create_admin_app(
         registry=registry,
         runtime_controller=DockerRuntimeController(registry, orchestrator),
         gpu_registry=_gpu_registry(settings),
-        weights_service=_weights_service(settings),
         admin_token_provider=lambda: read_secret(
             settings.security.admin_token,
             settings.security.admin_token_file,
-        ),
-        weights_token_provider=lambda: read_secret(
-            settings.weights.fallback_token,
-            settings.weights.fallback_token_file,
         ),
     )
     endpoint = f"{settings.master.admin_host}:{settings.master.admin_port}"
@@ -274,9 +259,24 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
     configure_logging(settings.observability.log_json)
     import uvicorn
 
-    registry = _master_registry(settings)
+    _run_startup_migrations(settings)
+    engine = create_engine(settings.database.url)
+    session_factory = create_session_factory(engine)
+    registry = _master_registry(settings, session_factory)
+    runtime = create_bittensor_runtime(settings)
+    nonce_store = SqlAlchemyMinerNonceStore(
+        session_factory,
+        ttl_seconds=settings.master.upload_nonce_ttl_seconds,
+    )
     proxy = create_proxy_app(
         registry=registry,
+        metagraph_cache=runtime.metagraph_cache,
+        nonce_store=nonce_store,
+        netuid=settings.network.netuid,
+        upload_signature_ttl_seconds=settings.master.upload_signature_ttl_seconds,
+        upload_nonce_ttl_seconds=settings.master.upload_nonce_ttl_seconds,
+        upload_max_body_bytes=settings.master.upload_max_body_bytes,
+        upload_require_registered_hotkey=settings.master.upload_require_registered_hotkey,
     )
     endpoint = f"{settings.master.proxy_host}:{settings.master.proxy_port}"
     typer.echo(f"Starting proxy API on {endpoint}")
@@ -289,6 +289,7 @@ def master_broker(config: Path = typer.Option(Path("config/master.example.yaml")
     configure_logging(settings.observability.log_json)
     import uvicorn
 
+    _run_startup_migrations(settings)
     registry = _master_registry(settings)
     broker = create_docker_broker_app(
         registry=registry,
@@ -404,52 +405,16 @@ def gpu_server_health(
     _admin_post(config, f"/v1/admin/gpu-servers/{server_id}/health")
 
 
-@weights_app.command("fallback-status")
-def weights_fallback_status(
-    config: Path = typer.Option(Path("config/validator.example.yaml")),
-):
-    settings = load_settings(config)
-    status = "enabled" if settings.weights.fallback_enabled else "disabled"
-    typer.echo(
-        {
-            "status": status,
-            "primary_url": settings.weights.primary_url,
-            "max_age_seconds": settings.weights.max_age_seconds,
-        }
-    )
-
-
-@weights_app.command("fetch-primary")
-def weights_fetch_primary(
-    challenge: str = typer.Option(..., "--challenge"),
-    emission_percent: float = typer.Option(1.0),
-    config: Path = typer.Option(Path("config/validator.example.yaml")),
-):
-    settings = load_settings(config)
-    client = _fallback_client(settings)
-    if client is None:
-        raise typer.BadParameter("Fallback weights are not enabled")
-
-    async def run() -> None:
-        result = await client.get_weights(
-            slug=challenge,
-            emission_percent=emission_percent,
-        )
-        typer.echo(result.model_dump_json())
-
-    asyncio.run(run())
-
-
 @master_app.command("weights")
 def master_weights(
     config: Path = typer.Option(Path("config/master.example.yaml")),
     once: bool = typer.Option(False, "--once/--loop"),
-    dry_run: bool = typer.Option(True, "--dry-run/--submit"),
 ):
     settings = load_settings(config)
     configure_logging(settings.observability.log_json)
+    _run_startup_migrations(settings)
     registry = _master_registry(settings)
-    runtime = create_bittensor_runtime(settings, dry_run=dry_run)
+    runtime = create_bittensor_runtime(settings)
     gpu_registry = _gpu_registry(settings)
     service = MasterWeightService(
         metagraph_cache=runtime.metagraph_cache,
@@ -461,15 +426,11 @@ def master_weights(
         capability_checker=ResourceCapabilityChecker(
             {server.id: server for server in gpu_registry.list()}
         ),
-        fallback_client=_fallback_client(settings),
     )
-    weights_store = LatestWeightsStore(settings.weights.latest_weights_file)
 
     async def epoch() -> None:
         final = await _run_master_weight_epoch(service, registry)
-        weights_store.write_final(final)
-        mode = "dry-run" if dry_run else "submit"
-        typer.echo(f"{mode}: computed {len(final.uids)} weights")
+        typer.echo(f"submit: computed {len(final.uids)} weights")
 
     if once:
         asyncio.run(epoch())

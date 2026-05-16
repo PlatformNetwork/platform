@@ -51,7 +51,7 @@ def test_bittensor_runtime_uses_configured_network_and_wallet(
         SimpleNamespace(Subtensor=Subtensor, Wallet=Wallet),
     )
 
-    runtime = create_bittensor_runtime(_settings(tmp_path), dry_run=False)
+    runtime = create_bittensor_runtime(_settings(tmp_path))
 
     assert runtime.metagraph_cache.netuid == 42
     assert runtime.metagraph_cache.ttl_seconds == 5
@@ -62,35 +62,10 @@ def test_bittensor_runtime_uses_configured_network_and_wallet(
     ]
 
 
-def test_bittensor_runtime_dry_run_does_not_create_wallet(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-
-    class Subtensor:
-        def __init__(self, **kwargs: object) -> None:
-            calls.append("subtensor")
-
-    class Wallet:
-        def __init__(self, **kwargs: object) -> None:
-            calls.append("wallet")
-
-    monkeypatch.setitem(
-        sys.modules,
-        "bittensor",
-        SimpleNamespace(Subtensor=Subtensor, Wallet=Wallet),
-    )
-
-    runtime = create_bittensor_runtime(_settings(tmp_path), dry_run=True)
-
-    assert calls == ["subtensor"]
-    assert runtime.weight_setter.subtensor is None
-
-
 def test_bittensor_runtime_requires_dependency_for_submit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(sys.modules, "bittensor", None)
 
     with pytest.raises(BittensorDependencyError):
-        create_bittensor_runtime(_settings(tmp_path), dry_run=False)
+        create_bittensor_runtime(_settings(tmp_path))

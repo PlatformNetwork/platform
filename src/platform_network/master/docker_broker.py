@@ -32,7 +32,7 @@ from platform_network.schemas.docker_broker import (
 
 
 class BrokerTokenRegistry(Protocol):
-    def get_token(self, slug: str) -> str: ...
+    def get_broker_token(self, slug: str) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -141,9 +141,26 @@ class DockerBrokerService:
             tar.extractall(mount_root, filter="data")
         archive_path.unlink(missing_ok=True)
         if mount.source_type == "file":
-            source = mount_root / mount.source_name
-        else:
+            source_name = Path(mount.source_name)
+            if source_name.is_absolute() or ".." in source_name.parts:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"unsafe mount source: {mount.target}",
+                )
+            source = (mount_root / source_name).resolve()
+            resolved_root = mount_root.resolve()
+            if resolved_root not in source.parents and source != resolved_root:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"unsafe mount source: {mount.target}",
+                )
+        elif mount.source_type == "directory":
             source = mount_root
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unsupported mount source type: {mount.target}",
+            )
         if not source.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -210,7 +227,7 @@ def _authenticate(
 ) -> str:
     if not slug:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing challenge slug")
-    expected = registry.get_token(slug)
+    expected = registry.get_broker_token(slug)
     if not expected:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unknown challenge")
     expected_header = f"Bearer {expected}"

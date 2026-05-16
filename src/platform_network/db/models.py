@@ -9,17 +9,18 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Enum,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -88,7 +89,7 @@ class Challenge(Base, TimestampMixin):
     )
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
-        JSONB,
+        JSON,
         nullable=False,
         default=dict,
         server_default="{}",
@@ -182,6 +183,8 @@ class ChallengeAuth(Base):
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
     token_hint: Mapped[str | None] = mapped_column(Text)
+    broker_token_hash: Mapped[str | None] = mapped_column(Text)
+    broker_token_hint: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -288,7 +291,7 @@ class ChallengeEnv(Base):
     key: Mapped[str] = mapped_column(Text, nullable=False)
     value_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     is_secret: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
+        Boolean, nullable=False, default=False, server_default="0"
     )
 
     challenge: Mapped[Challenge] = relationship(back_populates="env")
@@ -340,7 +343,7 @@ class ChallengeRoute(Base):
     )
     public_prefix: Mapped[str] = mapped_column(Text, nullable=False)
     proxy_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default="1"
     )
 
     challenge: Mapped[Challenge] = relationship(back_populates="routes")
@@ -375,3 +378,32 @@ class ChallengeHealthEvent(Base):
     )
 
     challenge: Mapped[Challenge] = relationship(back_populates="health_events")
+
+
+class MinerRequestNonce(Base):
+    """Replay protection for signed miner uploads accepted by the proxy."""
+
+    __tablename__ = "miner_request_nonces"
+    __table_args__ = (
+        UniqueConstraint(
+            "netuid",
+            "challenge_slug",
+            "hotkey",
+            "nonce",
+            name="uq_miner_request_nonces_scope",
+        ),
+        Index("ix_miner_request_nonces_created_at", "created_at"),
+        Index("ix_miner_request_nonces_hotkey", "hotkey"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    challenge_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+    body_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

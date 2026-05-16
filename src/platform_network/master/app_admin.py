@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import html
+import inspect
+from typing import Any
 
 from fastapi import (
     Depends,
     FastAPI,
     Header,
     HTTPException,
-    Query,
     Request,
     Response,
     status,
@@ -29,10 +30,8 @@ from platform_network.master.admin.auth import (
 )
 from platform_network.master.admin.gpu_registry import (
     GpuServerRegistry,
-    InMemoryGpuServerRegistry,
 )
 from platform_network.master.admin.runtime import (
-    NoopRuntimeController,
     RuntimeController,
 )
 from platform_network.master.challenge_dashboard import (
@@ -42,10 +41,8 @@ from platform_network.master.challenge_dashboard import (
 from platform_network.master.registry import (
     ChallengeAlreadyExistsError,
     ChallengeNotFoundError,
-    ChallengeRegistry,
     record_to_admin_view,
 )
-from platform_network.master.weight_fallback import SignedWeightsService
 from platform_network.schemas.challenge import (
     ChallengeAdminView,
     ChallengeCreate,
@@ -62,7 +59,6 @@ from platform_network.schemas.gpu_server import (
     GpuServerUpdate,
     GpuServerView,
 )
-from platform_network.schemas.weight_fallback import SignedWeightsResponse
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -75,21 +71,41 @@ def _not_found(slug: str) -> HTTPException:
 
 def create_admin_app(
     *,
-    registry: ChallengeRegistry | None = None,
-    runtime_controller: RuntimeController | None = None,
-    gpu_registry: GpuServerRegistry | None = None,
-    weights_service: SignedWeightsService | None = None,
+    registry: Any,
+    runtime_controller: RuntimeController,
+    gpu_registry: GpuServerRegistry,
     metrics_provider: ChallengeMetricsProvider | None = None,
     admin_token_provider: TokenProvider = load_admin_token_from_environment,
-    weights_token_provider: TokenProvider | None = None,
 ) -> FastAPI:
     """Create the private admin/registry FastAPI app."""
 
     app = FastAPI(title="Platform Network Admin API", version="1.0")
-    challenge_registry = registry or ChallengeRegistry()
-    controller = runtime_controller or NoopRuntimeController()
-    gpu_servers = gpu_registry or InMemoryGpuServerRegistry()
-    weights_token = weights_token_provider or admin_token_provider
+    challenge_registry = registry
+    controller = runtime_controller
+    gpu_servers = gpu_registry
+
+    async def resolve(value):  # type: ignore[no-untyped-def]
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    async def registry_get(slug: str):
+        return await resolve(challenge_registry.get(slug))
+
+    async def registry_list():
+        return await resolve(challenge_registry.list())
+
+    async def registry_create(payload: ChallengeCreate):
+        return await resolve(challenge_registry.create(payload))
+
+    async def registry_update(slug: str, payload: ChallengeUpdate):
+        return await resolve(challenge_registry.update(slug, payload))
+
+    async def registry_set_status(slug: str, status_value: ChallengeStatus):
+        return await resolve(challenge_registry.set_status(slug, status_value))
+
+    async def registry_response():
+        return await resolve(challenge_registry.registry_response())
 
     async def require_admin(
         x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
@@ -104,12 +120,16 @@ def create_admin_app(
 
     @app.get("/v1/registry", response_model=RegistryResponse)
     async def get_registry() -> RegistryResponse:
-        return challenge_registry.registry_response()
+        return await registry_response()
+
+    @app.get("/health", include_in_schema=False)
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
 
     @app.get("/v1/challenges/dashboard.svg")
     async def get_challenges_dashboard_svg() -> Response:
         svg = render_challenges_dashboard_svg(
-            challenge_registry.list(), metrics_provider=metrics_provider
+            await registry_list(), metrics_provider=metrics_provider
         )
         return Response(
             content=svg,
@@ -124,7 +144,6 @@ def create_admin_app(
             "<ul>"
             "<li><a href='/admin/challenges'>Challenges</a></li>"
             "<li><a href='/admin/gpu-servers'>GPU servers</a></li>"
-            "<li><a href='/admin/fallback'>Fallback weights</a></li>"
             "</ul>"
         )
         return Response(content=content, media_type="text/html")
@@ -138,7 +157,7 @@ def create_admin_app(
             f"<td>{html.escape(record.image)}</td>"
             f"<td>{html.escape(str(record.resources))}</td>"
             "</tr>"
-            for record in challenge_registry.list()
+            for record in await registry_list()
         )
         return Response(
             content=f"<h1>Challenges</h1><table>{rows}</table>",
@@ -167,14 +186,6 @@ def create_admin_app(
             media_type="text/html",
         )
 
-    @app.get("/admin/fallback", dependencies=[Depends(require_admin)])
-    async def admin_fallback() -> Response:
-        status_text = "configured" if weights_service is not None else "not configured"
-        return Response(
-            content=f"<h1>Fallback weights</h1><p>{status_text}</p>",
-            media_type="text/html",
-        )
-
     @app.post(
         "/v1/admin/challenges",
         response_model=ChallengeCreateResponse,
@@ -183,14 +194,25 @@ def create_admin_app(
     )
     async def create_challenge(payload: ChallengeCreate) -> ChallengeCreateResponse:
         try:
-            record, token = challenge_registry.create(payload)
+            record, token = await registry_create(payload)
         except ChallengeAlreadyExistsError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Challenge '{payload.slug}' already exists",
             ) from exc
+        broker_token = ""
+        get_broker_token = getattr(challenge_registry, "get_broker_token", None)
+        if callable(get_broker_token):
+            broker_token = await resolve(get_broker_token(record.slug))
+        if not broker_token:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "Docker broker token is unavailable",
+            )
         return ChallengeCreateResponse(
-            challenge=record_to_admin_view(record), challenge_token=token
+            challenge=record_to_admin_view(record),
+            challenge_token=token,
+            docker_broker_token=broker_token,
         )
 
     @app.get(
@@ -200,7 +222,7 @@ def create_admin_app(
     )
     async def get_challenge(slug: str) -> ChallengeAdminView:
         try:
-            return record_to_admin_view(challenge_registry.get(slug))
+            return record_to_admin_view(await registry_get(slug))
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
 
@@ -213,7 +235,7 @@ def create_admin_app(
         slug: str, payload: ChallengeUpdate
     ) -> ChallengeAdminView:
         try:
-            return record_to_admin_view(challenge_registry.update(slug, payload))
+            return record_to_admin_view(await registry_update(slug, payload))
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
 
@@ -225,7 +247,7 @@ def create_admin_app(
     async def activate_challenge(slug: str) -> ChallengeAdminView:
         try:
             return record_to_admin_view(
-                challenge_registry.set_status(slug, ChallengeStatus.ACTIVE)
+                await registry_set_status(slug, ChallengeStatus.ACTIVE)
             )
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
@@ -238,7 +260,7 @@ def create_admin_app(
     async def deactivate_challenge(slug: str) -> ChallengeAdminView:
         try:
             return record_to_admin_view(
-                challenge_registry.set_status(slug, ChallengeStatus.INACTIVE)
+                await registry_set_status(slug, ChallengeStatus.INACTIVE)
             )
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
@@ -359,29 +381,9 @@ def create_admin_app(
             return GpuServerHealth(id=server_id, status="error", detail=str(exc))
         return GpuServerHealth(id=server_id, status="ok")
 
-    @app.get(
-        "/v1/weights/latest",
-        response_model=SignedWeightsResponse,
-    )
-    async def latest_weights(
-        challenge_slug: str | None = Query(default=None),
-        authorization: str | None = Header(default=None),
-    ) -> SignedWeightsResponse:
-        expected = await resolve_token(weights_token)
-        provided = ""
-        if authorization and authorization.startswith("Bearer "):
-            provided = authorization.removeprefix("Bearer ").strip()
-        if not constant_time_match(provided, expected):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unauthorized")
-        if weights_service is None:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, "latest weights are not configured"
-            )
-        return weights_service.latest(challenge_slug)
-
     async def _runtime_operation(slug: str, operation: str) -> RuntimeOperationResponse:
         try:
-            challenge_registry.get(slug)
+            await registry_get(slug)
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
 
@@ -424,6 +426,3 @@ def create_admin_app(
     app.state.runtime_controller = controller
     app.state.gpu_registry = gpu_servers
     return app
-
-
-app = create_admin_app()

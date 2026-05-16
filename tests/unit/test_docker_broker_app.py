@@ -16,7 +16,7 @@ from platform_network.schemas.docker_broker import BrokerListResponse
 
 
 class Registry:
-    def get_token(self, slug: str) -> str:
+    def get_broker_token(self, slug: str) -> str:
         return "tok" if slug == "agent" else ""
 
 
@@ -109,6 +109,46 @@ def test_broker_rejects_disallowed_image(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "Docker image is not allowed" in response.text
+
+
+def test_broker_rejects_unsafe_file_mount_source(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "input.txt").write_text("ok", encoding="utf-8")
+    app = create_docker_broker_app(
+        registry=Registry(),
+        service=DockerBrokerService(
+            DockerBrokerConfig(
+                docker_bin="true",
+                workspace_dir=tmp_path / "work",
+                allowed_images=("python:",),
+            )
+        ),
+    )
+    response = TestClient(app).post(
+        "/v1/docker/run",
+        headers={
+            "authorization": "Bearer tok",
+            "x-platform-challenge-slug": "agent",
+        },
+        json={
+            "job_id": "job-1",
+            "image": "python:3.12-slim",
+            "command": ["python", "-V"],
+            "mounts": [
+                {
+                    "target": "/workspace/forge",
+                    "source_type": "file",
+                    "source_name": "/var/run/docker.sock",
+                    "archive_b64": _archive_dir(src),
+                }
+            ],
+            "timeout_seconds": 10,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "unsafe mount source" in response.text
 
 
 def test_broker_list_is_scoped_to_authenticated_challenge(tmp_path: Path) -> None:

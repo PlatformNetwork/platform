@@ -77,40 +77,9 @@ def _shorten(value: str, limit: int) -> str:
     return f"{value[: max(0, limit - 1)].rstrip()}…"
 
 
-def _mock_challenges() -> list[DashboardChallenge]:
-    return [
-        DashboardChallenge(
-            slug="prism",
-            name="Prism",
-            description="Evaluate reasoning quality across multi-step prompts.",
-            emission_percent=Decimal("0"),
-            status=ChallengeStatus.DRAFT,
-            source="preview",
-        ),
-        DashboardChallenge(
-            slug="agent-challenge",
-            name="Agent Challenge",
-            description="Benchmark autonomous agents on practical execution tasks.",
-            emission_percent=Decimal("0"),
-            status=ChallengeStatus.DRAFT,
-            source="preview",
-        ),
-        DashboardChallenge(
-            slug="data-fabrication",
-            name="Data Fabrication",
-            description="Score synthetic data pipelines for usefulness and integrity.",
-            emission_percent=Decimal("0"),
-            status=ChallengeStatus.DRAFT,
-            source="preview",
-        ),
-    ]
-
-
 def _to_dashboard_challenges(
     challenges: list[ChallengeRecord],
 ) -> list[DashboardChallenge]:
-    if not challenges:
-        return _mock_challenges()
     return [
         DashboardChallenge(
             slug=challenge.slug,
@@ -150,6 +119,21 @@ def render_challenges_dashboard_svg(
     )
 
     rows: list[str] = []
+    if not sorted_challenges:
+        rows.append(
+            "\n".join(
+                [
+                    f'<rect x="{table_x}" y="{header_height + 8}" '
+                    f'width="{table_width}" height="96" rx="28" '
+                    'fill="#ffffff" fill-opacity="0.94" filter="url(#rowShadow)"/>',
+                    f'<text x="{table_x + 40}" y="{header_height + 48}" '
+                    'class="emptyTitle">No registered challenges</text>',
+                    f'<text x="{table_x + 40}" y="{header_height + 72}" '
+                    'class="emptyText">Create a challenge to populate this '
+                    "dashboard.</text>",
+                ]
+            )
+        )
     for index, challenge in enumerate(sorted_challenges):
         y = header_height + index * row_height
         status = str(challenge.status)
