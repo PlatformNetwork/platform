@@ -552,6 +552,60 @@ def test_cli_gpu_server_commands_call_admin(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls[1] == ("GET", "/v1/admin/gpu-servers", None)
 
 
+def test_cli_k8s_server_commands_call_admin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def admin_request(
+        config: Path,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        calls.append((method, path, payload))
+
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+    monkeypatch.setattr(cli_module, "_admin_request", admin_request)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "k8s-server",
+            "add-kubeconfig",
+            "k8s-a",
+            "--kubeconfig-file",
+            str(kubeconfig),
+            "--api-url",
+            "https://k8s-a",
+            "--namespace",
+            "platform-gpu",
+            "--gpu-count",
+            "2",
+            "--label",
+            "region=eu",
+            "--no-verify-tls",
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == "/v1/admin/kubernetes-targets"
+    assert calls[0][2]["id"] == "k8s-a"  # type: ignore[index]
+    assert calls[0][2]["kubeconfig_file"] == str(kubeconfig)  # type: ignore[index]
+    assert calls[0][2]["labels"] == {"region": "eu"}  # type: ignore[index]
+    assert calls[0][2]["verify_tls"] is False  # type: ignore[index]
+
+    result = runner.invoke(app, ["k8s-server", "list"])
+    assert result.exit_code == 0
+    assert calls[1] == ("GET", "/v1/admin/kubernetes-targets", None)
+
+    result = runner.invoke(app, ["k8s-server", "health", "k8s-a"])
+    assert result.exit_code == 0
+    assert calls[2] == ("POST", "/v1/admin/kubernetes-targets/k8s-a/health", None)
+
+
 def test_registry_client_with_asgi_transport() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

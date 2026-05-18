@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-admin
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    platform.component: "admin"
+  ports:
+    - name: http
+      port: {{ .Values.masterAdmin.port }}
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-proxy
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    platform.component: "proxy"
+  ports:
+    - name: http
+      port: {{ .Values.masterProxy.port }}
+      targetPort: http
+{{- if .Values.broker.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-broker
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    platform.component: "broker"
+  ports:
+    - name: http
+      port: {{ .Values.broker.port }}
+      targetPort: http
+{{- end }}
+{{- if .Values.kubernetesAgent.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-k8s-agent
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    platform.component: "k8s-agent"
+  ports:
+    - name: http
+      port: {{ .Values.kubernetesAgent.port }}
+      targetPort: http
+{{- end }}

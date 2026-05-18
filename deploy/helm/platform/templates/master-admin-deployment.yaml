@@ -1,0 +1,1 @@
+{{- include "platform.deployment" (dict "root" . "name" "admin" "replicas" .Values.masterAdmin.replicas "port" .Values.masterAdmin.port "resources" .Values.masterAdmin.resources "automountToken" true "command" (list "platform" "master" "run" "--config" "config/master.kubernetes.yaml")) }}

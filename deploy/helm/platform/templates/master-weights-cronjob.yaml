@@ -1,0 +1,74 @@
+{{- if .Values.weights.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "platform.fullname" . }}-weights
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "weights"
+spec:
+  schedule: {{ .Values.weights.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "platform.labels" . | nindent 12 }}
+            platform.component: "weights"
+        spec:
+          serviceAccountName: {{ .Values.kubernetes.serviceAccount }}
+          automountServiceAccountToken: false
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: Never
+          securityContext:
+            {{- include "platform.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: weights
+              image: {{ include "platform.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - platform
+                - master
+                - weights
+                - --config
+                - config/master.kubernetes.yaml
+                - --once
+              env:
+                - name: PLATFORM_DATABASE__URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.urlSecret.name }}
+                      key: {{ .Values.database.urlSecret.key }}
+              volumeMounts:
+                - name: config
+                  mountPath: /app/config/master.kubernetes.yaml
+                  subPath: master.yaml
+                  readOnly: true
+                - name: data
+                  mountPath: /var/lib/platform
+                - name: secrets
+                  mountPath: /var/lib/platform/secrets
+                  readOnly: true
+              securityContext:
+                {{- include "platform.containerSecurityContext" . | nindent 16 }}
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "platform.fullname" . }}-config
+            - name: data
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ include "platform.fullname" . }}-data
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+            - name: secrets
+              secret:
+                secretName: {{ .Values.security.existingSecret }}
+{{- end }}

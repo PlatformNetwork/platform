@@ -1,0 +1,82 @@
+{{- if .Values.kubernetesAgent.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.fullname" . }}-k8s-agent
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "k8s-agent"
+spec:
+  replicas: {{ .Values.kubernetesAgent.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      platform.component: "k8s-agent"
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" . | nindent 8 }}
+        platform.component: "k8s-agent"
+    spec:
+      serviceAccountName: {{ .Values.kubernetes.serviceAccount }}
+      automountServiceAccountToken: true
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- include "platform.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: k8s-agent
+          image: {{ include "platform.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - platform
+            - k8s-agent
+            - run
+            - --config
+            - config/master.kubernetes.yaml
+            - --token-file
+            - /var/lib/platform/secrets/{{ .Values.kubernetesAgent.tokenKey }}
+            - --port
+            - {{ .Values.kubernetesAgent.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.kubernetesAgent.port }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/master.kubernetes.yaml
+              subPath: master.yaml
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/platform
+            - name: secrets
+              mountPath: /var/lib/platform/secrets
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.kubernetesAgent.resources | nindent 12 }}
+          securityContext:
+            {{- include "platform.containerSecurityContext" . | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "platform.fullname" . }}-config
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "platform.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: secrets
+          secret:
+            secretName: {{ .Values.security.existingSecret }}
+{{- end }}

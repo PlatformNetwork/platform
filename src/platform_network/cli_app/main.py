@@ -16,6 +16,8 @@ from platform_network.gpu.capabilities import ResourceCapabilityChecker
 from platform_network.gpu.client import GpuAgentClient
 from platform_network.gpu.registry import FileGpuServerRegistry
 from platform_network.gpu.router import ChallengeOrchestratorRouter
+from platform_network.kubernetes.agent import create_kubernetes_agent_app
+from platform_network.kubernetes.registry import FileKubernetesTargetRegistry
 from platform_network.master.app_admin import create_admin_app
 from platform_network.master.app_proxy import create_proxy_app
 from platform_network.master.challenge_client import ChallengeClient
@@ -29,6 +31,12 @@ from platform_network.master.docker_orchestrator import (
     ChallengeSpec,
     DockerOrchestrator,
 )
+from platform_network.master.kubernetes_broker import (
+    KubernetesBrokerRouterService,
+    KubernetesBrokerService,
+    create_kubernetes_broker_app,
+)
+from platform_network.master.kubernetes_orchestrator import KubernetesTargetRouter
 from platform_network.master.registry import (
     DatabaseChallengeRegistry,
     record_to_registry_view,
@@ -53,6 +61,8 @@ db_app = typer.Typer(help="Database helpers")
 registry_app = typer.Typer(help="Registry helpers")
 gpu_app = typer.Typer(help="Run GPU server agents")
 gpu_server_app = typer.Typer(help="Manage validator GPU servers")
+k8s_server_app = typer.Typer(help="Manage Kubernetes targets")
+k8s_agent_app = typer.Typer(help="Run Kubernetes target agents")
 app.add_typer(master_app, name="master")
 app.add_typer(validator_app, name="validator")
 app.add_typer(challenge_app, name="challenge")
@@ -60,6 +70,8 @@ app.add_typer(db_app, name="db")
 app.add_typer(registry_app, name="registry")
 app.add_typer(gpu_app, name="gpu-agent")
 app.add_typer(gpu_server_app, name="gpu-server")
+app.add_typer(k8s_server_app, name="k8s-server")
+app.add_typer(k8s_agent_app, name="k8s-agent")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -94,6 +106,16 @@ def _admin_request(
         response.raise_for_status()
         if response.text:
             typer.echo(response.text)
+
+
+def _parse_labels(labels: list[str] | None) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for item in labels or []:
+        key, separator, value = item.partition("=")
+        if not separator or not key:
+            raise typer.BadParameter("labels must use key=value format")
+        parsed[key] = value
+    return parsed
 
 
 class DockerRuntimeController:
@@ -188,6 +210,14 @@ def _gpu_registry(settings) -> FileGpuServerRegistry:
     )
 
 
+def _kubernetes_target_registry(settings) -> FileKubernetesTargetRegistry:
+    return FileKubernetesTargetRegistry(
+        settings.kubernetes.target_state_file,
+        secret_dir=settings.docker.secret_dir,
+        configured_targets=settings.kubernetes_targets,
+    )
+
+
 def _gpu_clients(settings) -> dict[str, GpuAgentClient]:
     clients: dict[str, GpuAgentClient] = {}
     registry = _gpu_registry(settings)
@@ -207,7 +237,25 @@ def _gpu_clients(settings) -> dict[str, GpuAgentClient]:
     return clients
 
 
+def _ensure_kubernetes_broker_backend(settings) -> None:
+    if (
+        settings.runtime.backend == "kubernetes"
+        and settings.kubernetes.broker_backend != "kubernetes"
+    ):
+        raise typer.BadParameter(
+            "runtime.backend=kubernetes requires kubernetes.broker_backend=kubernetes"
+        )
+
+
 def _challenge_orchestrator(settings) -> ChallengeOrchestratorRouter:
+    if settings.runtime.backend == "kubernetes":
+        _ensure_kubernetes_broker_backend(settings)
+        return ChallengeOrchestratorRouter(
+            local_orchestrator=KubernetesTargetRouter.from_settings(
+                settings, _kubernetes_target_registry(settings)
+            ),
+            gpu_clients={},
+        )
     return ChallengeOrchestratorRouter(
         local_orchestrator=DockerOrchestrator(
             network_name=settings.docker.network_name,
@@ -243,6 +291,7 @@ def master_run(config: Path = typer.Option(Path("config/master.example.yaml"))):
         registry=registry,
         runtime_controller=DockerRuntimeController(registry, orchestrator),
         gpu_registry=_gpu_registry(settings),
+        kubernetes_target_registry=_kubernetes_target_registry(settings),
         admin_token_provider=lambda: read_secret(
             settings.security.admin_token,
             settings.security.admin_token_file,
@@ -291,20 +340,57 @@ def master_broker(config: Path = typer.Option(Path("config/master.example.yaml")
 
     _run_startup_migrations(settings)
     registry = _master_registry(settings)
-    broker = create_docker_broker_app(
-        registry=registry,
-        service=DockerBrokerService(
-            DockerBrokerConfig(
-                workspace_dir=Path(settings.docker.broker_workspace_dir),
-                allowed_images=tuple(settings.docker.broker_allowed_images),
-            )
-        ),
-    )
+    _ensure_kubernetes_broker_backend(settings)
+    if settings.kubernetes.broker_backend == "kubernetes":
+        broker = create_kubernetes_broker_app(
+            registry=registry,
+            service=KubernetesBrokerRouterService.from_settings(
+                settings=settings,
+                challenge_registry=registry,
+                target_registry=_kubernetes_target_registry(settings),
+            ),
+        )
+    else:
+        broker = create_docker_broker_app(
+            registry=registry,
+            service=DockerBrokerService(
+                DockerBrokerConfig(
+                    workspace_dir=Path(settings.docker.broker_workspace_dir),
+                    allowed_images=tuple(settings.docker.broker_allowed_images),
+                )
+            ),
+        )
     endpoint = f"{settings.docker.broker_host}:{settings.docker.broker_port}"
     typer.echo(f"Starting Docker broker API on {endpoint}")
     uvicorn.run(
         broker, host=settings.docker.broker_host, port=settings.docker.broker_port
     )
+
+
+@k8s_agent_app.command("run")
+def k8s_agent_run(
+    config: Path = typer.Option(Path("config/master.example.yaml")),
+    token: str | None = typer.Option(None, help="Kubernetes agent bearer token."),
+    token_file: Path | None = typer.Option(None, help="Path containing bearer token."),
+    host: str = typer.Option("0.0.0.0"),
+    port: int = typer.Option(8091),
+):
+    settings = load_settings(config)
+    configure_logging(settings.observability.log_json)
+    agent_token = read_secret(token, str(token_file) if token_file else None)
+    if not agent_token:
+        raise typer.BadParameter("Kubernetes agent token or token file is required")
+    import uvicorn
+
+    app_instance = create_kubernetes_agent_app(
+        token_provider=lambda: agent_token,
+        orchestrator=KubernetesTargetRouter.from_settings(
+            settings, _kubernetes_target_registry(settings)
+        ).default_orchestrator,
+        broker_service=KubernetesBrokerService.from_settings(settings),
+    )
+    typer.echo(f"Starting Kubernetes agent API on {host}:{port}")
+    uvicorn.run(app_instance, host=host, port=port)
 
 
 @gpu_app.command("run")
@@ -403,6 +489,60 @@ def gpu_server_health(
     server_id: str, config: Path = typer.Option(Path("config/validator.example.yaml"))
 ):
     _admin_post(config, f"/v1/admin/gpu-servers/{server_id}/health")
+
+
+@k8s_server_app.command("add-kubeconfig")
+def k8s_server_add_kubeconfig(
+    target_id: str,
+    kubeconfig_file: Path = typer.Option(..., "--kubeconfig-file"),
+    api_url: str | None = typer.Option(None, "--api-url"),
+    namespace: str = typer.Option("platform", "--namespace"),
+    service_account: str | None = typer.Option("platform-master", "--service-account"),
+    gpu_count: int = typer.Option(0, "--gpu-count"),
+    storage_class: str | None = typer.Option(None, "--storage-class"),
+    runtime_class_name: str | None = typer.Option(None, "--runtime-class-name"),
+    enabled: bool = typer.Option(True, "--enabled/--disabled"),
+    verify_tls: bool = typer.Option(True, "--verify-tls/--no-verify-tls"),
+    label: list[str] | None = typer.Option(None, "--label"),
+    config: Path = typer.Option(Path("config/validator.example.yaml")),
+):
+    _admin_post(
+        config,
+        "/v1/admin/kubernetes-targets",
+        {
+            "id": target_id,
+            "mode": "direct",
+            "api_url": api_url,
+            "namespace": namespace,
+            "service_account": service_account,
+            "kubeconfig_file": str(kubeconfig_file),
+            "enabled": enabled,
+            "verify_tls": verify_tls,
+            "gpu_count": gpu_count,
+            "storage_class": storage_class,
+            "runtime_class_name": runtime_class_name,
+            "labels": _parse_labels(label),
+        },
+    )
+
+
+@k8s_server_app.command("list")
+def k8s_server_list(config: Path = typer.Option(Path("config/validator.example.yaml"))):
+    _admin_request(config, "GET", "/v1/admin/kubernetes-targets")
+
+
+@k8s_server_app.command("show")
+def k8s_server_show(
+    target_id: str, config: Path = typer.Option(Path("config/validator.example.yaml"))
+):
+    _admin_request(config, "GET", f"/v1/admin/kubernetes-targets/{target_id}")
+
+
+@k8s_server_app.command("health")
+def k8s_server_health(
+    target_id: str, config: Path = typer.Option(Path("config/validator.example.yaml"))
+):
+    _admin_post(config, f"/v1/admin/kubernetes-targets/{target_id}/health")
 
 
 @master_app.command("weights")

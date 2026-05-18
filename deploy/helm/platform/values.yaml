@@ -1,0 +1,144 @@
+image:
+  repository: ghcr.io/platformnetwork/platform
+  tag: latest
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+runtime:
+  backend: kubernetes
+
+database:
+  urlSecret:
+    name: platform-database
+    key: url
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 10Gi
+
+security:
+  existingSecret: platform-secrets
+  adminTokenKey: admin_token
+
+network:
+  netuid: 0
+  chainEndpoint: ""
+  walletName: default
+  walletHotkey: default
+
+kubernetes:
+  namespace: platform
+  serviceAccount: platform-master
+  brokerBackend: kubernetes
+  challengeMode: statefulset
+  storageClass: ""
+  storageSize: 10Gi
+  gpuResourceName: nvidia.com/gpu
+  runtimeClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  targetDefaults:
+    imagePullSecrets: []
+    gpuResourceName: nvidia.com/gpu
+    runtimeClassName: ""
+    nodeSelector: {}
+    tolerations: []
+
+kubernetesTargets:
+  enabled: false
+  targets: []
+
+masterAdmin:
+  replicas: 1
+  port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+masterProxy:
+  replicas: 2
+  port: 8080
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+broker:
+  enabled: true
+  replicas: 2
+  port: 8082
+  publicUrl: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+validator:
+  enabled: true
+  replicas: 1
+
+weights:
+  enabled: true
+  schedule: "*/6 * * * *"
+
+gpuAgent:
+  enabled: false
+
+kubernetesAgent:
+  enabled: false
+  replicas: 1
+  port: 8091
+  tokenKey: kubernetes_agent_token
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+remoteAgents:
+  enabled: false
+  networkPolicy:
+    egressCIDRs: []
+    ports:
+      - 443
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+
+networkPolicy:
+  enabled: true
+  ingress:
+    allowRuntimePods: true
+    extraFrom: []
+  egress:
+    allowAll: true
+    extraRules: []
+
+keda:
+  enabled: false

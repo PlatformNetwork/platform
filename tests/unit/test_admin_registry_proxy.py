@@ -22,6 +22,12 @@ from platform_network.schemas.gpu_server import (
     GpuServerRecord,
     GpuServerUpdate,
 )
+from platform_network.schemas.kubernetes_target import (
+    KubernetesTargetCreate,
+    KubernetesTargetHealth,
+    KubernetesTargetRecord,
+    KubernetesTargetUpdate,
+)
 from platform_network.security.miner_auth import (
     MinerUploadVerifier,
     NonceReplayError,
@@ -98,6 +104,61 @@ class FakeGpuServerRegistry:
 
     def get_token(self, server_id: str) -> str:
         return self.tokens[server_id]
+
+
+class FakeKubernetesTargetRegistry:
+    def __init__(self) -> None:
+        self.records: dict[str, KubernetesTargetRecord] = {}
+
+    def list(self) -> list[KubernetesTargetRecord]:
+        return list(self.records.values())
+
+    def get(self, target_id: str) -> KubernetesTargetRecord:
+        return self.records[target_id]
+
+    def create(self, payload: KubernetesTargetCreate) -> KubernetesTargetRecord:
+        record = KubernetesTargetRecord(
+            id=payload.id,
+            mode=payload.mode,
+            api_url=payload.api_url,
+            agent_url=payload.agent_url,
+            namespace=payload.namespace,
+            service_account=payload.service_account,
+            kubeconfig_file="/var/lib/platform/secrets/test-kubeconfig",
+            enabled=payload.enabled,
+            verify_tls=payload.verify_tls,
+            timeout_seconds=payload.timeout_seconds,
+            description=payload.description,
+            labels=payload.labels,
+            gpu_count=payload.gpu_count,
+            storage_class=payload.storage_class,
+            node_selector=payload.node_selector,
+            tolerations=payload.tolerations,
+            runtime_class_name=payload.runtime_class_name,
+        )
+        self.records[payload.id] = record
+        return record
+
+    def update(
+        self, target_id: str, payload: KubernetesTargetUpdate
+    ) -> KubernetesTargetRecord:
+        data = self.get(target_id).model_dump()
+        updates = payload.model_dump(exclude_unset=True)
+        updates.pop("kubeconfig", None)
+        updates.pop("agent_token", None)
+        data.update(updates)
+        self.records[target_id] = KubernetesTargetRecord(**data)
+        return self.records[target_id]
+
+    def delete(self, target_id: str) -> None:
+        self.records.pop(target_id)
+
+    def set_enabled(self, target_id: str, enabled: bool) -> KubernetesTargetRecord:
+        return self.update(target_id, KubernetesTargetUpdate(enabled=enabled))
+
+    def health(self, target_id: str) -> KubernetesTargetHealth:
+        self.get(target_id)
+        return KubernetesTargetHealth(id=target_id, status="ok", detail="direct")
 
 
 class FakeNonceStore:
@@ -318,6 +379,57 @@ def test_admin_gpu_servers_pages_and_api_without_secret_leak() -> None:
     assert delete_response.status_code == 204
 
 
+def test_admin_kubernetes_targets_pages_api_and_health_without_secret_leak() -> None:
+    client = TestClient(
+        _admin_app(
+            registry=ChallengeRegistry(),
+            admin_token_provider=lambda: "admin-secret",
+            kubernetes_target_registry=FakeKubernetesTargetRegistry(),
+        )
+    )
+    headers = {"X-Admin-Token": "admin-secret"}
+
+    create_response = client.post(
+        "/v1/admin/kubernetes-targets",
+        headers=headers,
+        json={
+            "id": "k8s-a",
+            "mode": "direct",
+            "api_url": "https://k8s-a",
+            "kubeconfig": "apiVersion: v1\nsecret-data",
+            "namespace": "platform-gpu",
+            "gpu_count": 2,
+            "labels": {"region": "eu"},
+        },
+    )
+
+    assert create_response.status_code == 201
+    body = create_response.json()
+    assert body["id"] == "k8s-a"
+    assert body["mode"] == "direct"
+    assert body["gpu_count"] == 2
+    assert "secret-data" not in create_response.text
+
+    list_response = client.get("/v1/admin/kubernetes-targets", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["id"] == "k8s-a"
+
+    page_response = client.get("/admin/kubernetes-targets", headers=headers)
+    assert page_response.status_code == 200
+    assert "k8s-a" in page_response.text
+
+    health_response = client.post(
+        "/v1/admin/kubernetes-targets/k8s-a/health", headers=headers
+    )
+    assert health_response.status_code == 200
+    assert health_response.json()["status"] == "ok"
+
+    delete_response = client.delete(
+        "/v1/admin/kubernetes-targets/k8s-a", headers=headers
+    )
+    assert delete_response.status_code == 204
+
+
 def test_proxy_blocks_internal_health_and_version_paths() -> None:
     for path in (
         "internal/v1/get_weights",
@@ -473,9 +585,20 @@ def test_signed_upload_bridge_rejects_replay_and_bad_time() -> None:
         now_fn=lambda: 1_000,
         signature_verifier=lambda _hotkey, _message, signature: signature == "valid",
     )
+
+    @asynccontextmanager
+    async def failing_client_factory():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("boom", request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            yield client
+
     client = TestClient(
         create_proxy_app(
             registry=registry,
+            client_factory=failing_client_factory,
             miner_verifier=verifier,
             challenge_token_provider=lambda _slug: "challenge-token",
         )

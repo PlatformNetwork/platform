@@ -1,0 +1,47 @@
+{{- if and .Values.masterProxy.autoscaling.enabled (not .Values.keda.enabled) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "platform.fullname" . }}-proxy
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "proxy"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "platform.fullname" . }}-proxy
+  minReplicas: {{ .Values.masterProxy.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.masterProxy.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.masterProxy.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if and .Values.broker.enabled .Values.broker.autoscaling.enabled (not .Values.keda.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "platform.fullname" . }}-broker
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "broker"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "platform.fullname" . }}-broker
+  minReplicas: {{ .Values.broker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.broker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.broker.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

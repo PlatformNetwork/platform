@@ -1,0 +1,1 @@
+{{- include "platform.deployment" (dict "root" . "name" "proxy" "replicas" .Values.masterProxy.replicas "port" .Values.masterProxy.port "resources" .Values.masterProxy.resources "automountToken" false "command" (list "platform" "master" "proxy" "--config" "config/master.kubernetes.yaml")) }}

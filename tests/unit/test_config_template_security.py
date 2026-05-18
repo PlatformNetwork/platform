@@ -46,6 +46,41 @@ def test_load_settings_gpu_servers(tmp_path: Path) -> None:
     assert server.timeout_seconds == 12
 
 
+def test_load_settings_kubernetes_targets(tmp_path: Path) -> None:
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "kubernetes:",
+                f"  target_state_file: {tmp_path / 'targets.json'}",
+                "kubernetes_targets:",
+                "  - id: gpu-a",
+                "    mode: direct",
+                "    api_url: https://k8s-gpu-a",
+                f"    kubeconfig_file: {kubeconfig}",
+                "    namespace: platform-gpu",
+                "    verify_tls: false",
+                "    gpu_count: 4",
+                "    labels:",
+                "      region: eu",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+    target = settings.kubernetes_targets[0]
+    assert settings.kubernetes.target_state_file == str(tmp_path / "targets.json")
+    assert target.id == "gpu-a"
+    assert target.kubeconfig_file == str(kubeconfig)
+    assert target.namespace == "platform-gpu"
+    assert target.verify_tls is False
+    assert target.gpu_count == 4
+    assert target.labels == {"region": "eu"}
+
+
 def test_load_settings_parses_complex_env(monkeypatch) -> None:
     monkeypatch.setenv(
         "PLATFORM_DOCKER__BROKER_ALLOWED_IMAGES",

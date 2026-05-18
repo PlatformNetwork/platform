@@ -1,0 +1,31 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "platform.fullname" . }}-proxy
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "proxy"
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      platform.component: "proxy"
+{{- if .Values.broker.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "platform.fullname" . }}-broker
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "broker"
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      platform.component: "broker"
+{{- end }}

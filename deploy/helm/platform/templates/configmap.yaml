@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "platform.fullname" . }}-config
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+data:
+  master.yaml: |
+    runtime:
+      backend: {{ .Values.runtime.backend | quote }}
+    database:
+      url: "${PLATFORM_DATABASE__URL}"
+    network:
+      netuid: {{ .Values.network.netuid }}
+      chain_endpoint: {{ .Values.network.chainEndpoint | quote }}
+      wallet_name: {{ .Values.network.walletName | quote }}
+      wallet_hotkey: {{ .Values.network.walletHotkey | quote }}
+    master:
+      registry_url: "http://{{ include "platform.fullname" . }}-admin:{{ .Values.masterAdmin.port }}"
+      admin_host: "0.0.0.0"
+      admin_port: {{ .Values.masterAdmin.port }}
+      proxy_host: "0.0.0.0"
+      proxy_port: {{ .Values.masterProxy.port }}
+    docker:
+      broker_host: "0.0.0.0"
+      broker_port: {{ .Values.broker.port }}
+      {{- if .Values.broker.publicUrl }}
+      broker_url: {{ .Values.broker.publicUrl | quote }}
+      {{- else }}
+      broker_url: "http://{{ include "platform.fullname" . }}-broker:{{ .Values.broker.port }}"
+      {{- end }}
+    security:
+      admin_token_file: "/var/lib/platform/secrets/{{ .Values.security.adminTokenKey }}"
+    kubernetes:
+      namespace: {{ .Release.Namespace | quote }}
+      in_cluster: true
+      target_state_file: "/var/lib/platform/kubernetes_targets.json"
+      service_account: {{ .Values.kubernetes.serviceAccount | quote }}
+      challenge_mode: {{ .Values.kubernetes.challengeMode | quote }}
+      broker_backend: {{ .Values.kubernetes.brokerBackend | quote }}
+      storage_class: {{ .Values.kubernetes.storageClass | quote }}
+      storage_size: {{ .Values.kubernetes.storageSize | quote }}
+      gpu_resource_name: {{ .Values.kubernetes.gpuResourceName | quote }}
+      runtime_class_name: {{ .Values.kubernetes.runtimeClassName | quote }}
+      image_pull_secrets:
+        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+      node_selector:
+        {{- toYaml .Values.kubernetes.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.kubernetes.tolerations | nindent 8 }}
+      target_defaults:
+        image_pull_secrets:
+          {{- toYaml .Values.kubernetes.targetDefaults.imagePullSecrets | nindent 10 }}
+        gpu_resource_name: {{ .Values.kubernetes.targetDefaults.gpuResourceName | quote }}
+        runtime_class_name: {{ .Values.kubernetes.targetDefaults.runtimeClassName | quote }}
+        node_selector:
+          {{- toYaml .Values.kubernetes.targetDefaults.nodeSelector | nindent 10 }}
+        tolerations:
+          {{- toYaml .Values.kubernetes.targetDefaults.tolerations | nindent 10 }}
+      autoscaling:
+        enabled: {{ .Values.masterProxy.autoscaling.enabled }}
+        keda_enabled: {{ .Values.keda.enabled }}
+        min_replicas: {{ .Values.masterProxy.autoscaling.minReplicas }}
+        max_replicas: {{ .Values.masterProxy.autoscaling.maxReplicas }}
+        target_cpu_utilization: {{ .Values.masterProxy.autoscaling.targetCPUUtilizationPercentage }}
+    kubernetes_targets:
+      {{- if and .Values.kubernetesTargets.enabled .Values.kubernetesTargets.targets }}
+      {{- range .Values.kubernetesTargets.targets }}
+      - id: {{ .id | quote }}
+        mode: {{ .mode | default "direct" | quote }}
+        api_url: {{ .api_url | default "" | quote }}
+        agent_url: {{ .agent_url | default "" | quote }}
+        namespace: {{ .namespace | default $.Release.Namespace | quote }}
+        service_account: {{ .service_account | default $.Values.kubernetes.serviceAccount | quote }}
+        kubeconfig_file: {{ .kubeconfig_file | default "" | quote }}
+        agent_token_file: {{ .agent_token_file | default "" | quote }}
+        enabled: {{ if hasKey . "enabled" }}{{ .enabled }}{{ else }}true{{ end }}
+        verify_tls: {{ if hasKey . "verify_tls" }}{{ .verify_tls }}{{ else }}true{{ end }}
+        timeout_seconds: {{ .timeout_seconds | default 30.0 }}
+        description: {{ .description | default "" | quote }}
+        labels:
+          {{- toYaml (.labels | default dict) | nindent 10 }}
+        gpu_count: {{ .gpu_count | default 0 }}
+        storage_class: {{ .storage_class | default "" | quote }}
+        node_selector:
+          {{- toYaml (.node_selector | default dict) | nindent 10 }}
+        tolerations:
+          {{- toYaml (.tolerations | default list) | nindent 10 }}
+        runtime_class_name: {{ .runtime_class_name | default "" | quote }}
+      {{- end }}
+      {{- else }}
+      []
+      {{- end }}

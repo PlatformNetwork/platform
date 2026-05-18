@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "backend": { "type": "string", "enum": ["docker", "kubernetes"] }
+      }
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string" },
+        "pullSecrets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "required": ["repository", "tag"]
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "storageClass": { "type": "string" },
+        "size": { "type": "string", "minLength": 1 }
+      }
+    },
+    "kubernetes": {
+      "type": "object",
+      "properties": {
+        "serviceAccount": { "type": "string", "minLength": 1 },
+        "gpuResourceName": { "type": "string", "minLength": 1 },
+        "runtimeClassName": { "type": "string" },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "tolerations": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "targetDefaults": {
+          "type": "object",
+          "properties": {
+            "imagePullSecrets": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "gpuResourceName": { "type": "string", "minLength": 1 },
+            "runtimeClassName": { "type": "string" },
+            "nodeSelector": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "tolerations": {
+              "type": "array",
+              "items": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "kubernetesTargets": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "mode": { "type": "string", "enum": ["direct", "agent"] },
+              "namespace": { "type": "string", "minLength": 1 },
+              "service_account": { "type": "string", "minLength": 1 },
+              "agent_url": { "type": "string" },
+              "api_url": { "type": "string" },
+              "kubeconfig_file": { "type": "string" },
+              "agent_token_file": { "type": "string" },
+              "labels": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "gpu_count": { "type": "integer", "minimum": 0 },
+              "storage_class": { "type": "string" },
+              "runtime_class_name": { "type": "string" },
+              "node_selector": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "tolerations": {
+                "type": "array",
+                "items": { "type": "object" }
+              },
+              "enabled": { "type": "boolean" },
+              "verify_tls": { "type": "boolean" },
+              "timeout_seconds": { "type": "number", "minimum": 1 },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "remoteAgents": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "networkPolicy": {
+          "type": "object",
+          "properties": {
+            "egressCIDRs": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "ports": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            }
+          }
+        }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "properties": {
+        "publicUrl": { "type": "string" }
+      }
+    },
+    "kubernetesAgent": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "tokenKey": { "type": "string", "minLength": 1 },
+        "resources": { "type": "object" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingress": {
+          "type": "object",
+          "properties": {
+            "allowRuntimePods": { "type": "boolean" },
+            "extraFrom": {
+              "type": "array",
+              "items": { "type": "object" }
+            }
+          }
+        },
+        "egress": {
+          "type": "object",
+          "properties": {
+            "allowAll": { "type": "boolean" },
+            "extraRules": {
+              "type": "array",
+              "items": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "keda": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{{- if and .Values.keda.enabled .Values.masterProxy.autoscaling.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "platform.fullname" . }}-proxy
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "proxy"
+spec:
+  scaleTargetRef:
+    name: {{ include "platform.fullname" . }}-proxy
+  minReplicaCount: {{ .Values.masterProxy.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.masterProxy.autoscaling.maxReplicas }}
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: {{ .Values.masterProxy.autoscaling.targetCPUUtilizationPercentage | quote }}
+{{- end }}
+{{- if and .Values.keda.enabled .Values.broker.enabled .Values.broker.autoscaling.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "platform.fullname" . }}-broker
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "broker"
+spec:
+  scaleTargetRef:
+    name: {{ include "platform.fullname" . }}-broker
+  minReplicaCount: {{ .Values.broker.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.broker.autoscaling.maxReplicas }}
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: {{ .Values.broker.autoscaling.targetCPUUtilizationPercentage | quote }}
+{{- end }}

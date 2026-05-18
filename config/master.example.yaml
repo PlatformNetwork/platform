@@ -31,6 +31,33 @@ docker:
     - platformnetwork/
     - ghcr.io/platformnetwork/
 
+runtime:
+  backend: docker
+
+kubernetes:
+  namespace: platform
+  in_cluster: true
+  kubeconfig: null
+  target_state_file: /var/lib/platform/kubernetes_targets.json
+  service_account: platform-master
+  image_pull_secrets: []
+  storage_class: null
+  storage_size: 10Gi
+  challenge_mode: statefulset
+  broker_backend: docker
+  gpu_resource_name: nvidia.com/gpu
+  node_selector: {}
+  tolerations: []
+  runtime_class_name: null
+  autoscaling:
+    enabled: true
+    keda_enabled: false
+    min_replicas: 1
+    max_replicas: 3
+    target_cpu_utilization: 70
+
+kubernetes_targets: []
+
 security:
   admin_token_file: /var/lib/platform/secrets/admin_token
 

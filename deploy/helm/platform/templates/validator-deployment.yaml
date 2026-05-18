@@ -1,0 +1,61 @@
+{{- if .Values.validator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.fullname" . }}-validator
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "validator"
+spec:
+  replicas: {{ .Values.validator.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      platform.component: "validator"
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" . | nindent 8 }}
+        platform.component: "validator"
+    spec:
+      serviceAccountName: {{ .Values.kubernetes.serviceAccount }}
+      automountServiceAccountToken: true
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- include "platform.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: validator
+          image: {{ include "platform.image" . | quote }}
+          command:
+            - platform
+            - validator
+            - run
+            - --config
+            - config/master.kubernetes.yaml
+          securityContext:
+            {{- include "platform.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/master.kubernetes.yaml
+              subPath: master.yaml
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/platform
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "platform.fullname" . }}-config
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "platform.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

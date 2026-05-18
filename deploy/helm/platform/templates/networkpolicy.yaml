@@ -1,0 +1,62 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-control-plane
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- if .Values.networkPolicy.ingress.allowRuntimePods }}
+        - podSelector:
+            matchExpressions:
+              - key: platform.component
+                operator: In
+                values:
+                  - challenge
+                  - broker-job
+        {{- end }}
+        {{- with .Values.networkPolicy.ingress.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.masterAdmin.port }}
+        - protocol: TCP
+          port: {{ .Values.masterProxy.port }}
+        - protocol: TCP
+          port: {{ .Values.broker.port }}
+  egress:
+    {{- if .Values.networkPolicy.egress.allowAll }}
+    - {}
+    {{- else }}
+    {{- range .Values.remoteAgents.networkPolicy.egressCIDRs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        {{- range $.Values.remoteAgents.networkPolicy.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if and (not .Values.remoteAgents.networkPolicy.egressCIDRs) (not .Values.networkPolicy.egress.extraRules) }}
+    []
+    {{- end }}
+    {{- end }}
+{{- end }}

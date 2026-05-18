@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+from typing import Protocol
+
 from platform_network.gpu.client import GpuAgentClient
 from platform_network.master.docker_orchestrator import (
     ChallengeRuntime,
     ChallengeSpec,
     DockerOrchestrationError,
-    DockerOrchestrator,
 )
+
+
+class LocalOrchestrator(Protocol):
+    @property
+    def runtime(self) -> dict[str, ChallengeRuntime]: ...
+    def start_challenge(
+        self, spec: ChallengeSpec, *, recreate: bool = False
+    ) -> ChallengeRuntime: ...
+    def restart_challenge(self, spec: ChallengeSpec) -> ChallengeRuntime: ...
+    def stop_challenge(self, slug: str, *, remove: bool = False) -> None: ...
+    def pull_image(self, image: str) -> object: ...
 
 
 class ChallengeOrchestratorRouter:
     def __init__(
         self,
         *,
-        local_orchestrator: DockerOrchestrator,
+        local_orchestrator: LocalOrchestrator,
         gpu_clients: dict[str, GpuAgentClient] | None = None,
     ) -> None:
         self.local_orchestrator = local_orchestrator

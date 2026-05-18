@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class NetworkSettings(BaseModel):
@@ -52,6 +54,59 @@ class DockerSettings(BaseModel):
     )
 
 
+class RuntimeSettings(BaseModel):
+    backend: str = Field(default="docker", pattern=r"^(docker|kubernetes)$")
+
+
+class KubernetesAutoscalingSettings(BaseModel):
+    enabled: bool = True
+    keda_enabled: bool = False
+    min_replicas: int = Field(default=1, ge=1)
+    max_replicas: int = Field(default=3, ge=1)
+    target_cpu_utilization: int = Field(default=70, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> KubernetesAutoscalingSettings:
+        if self.max_replicas < self.min_replicas:
+            raise ValueError(
+                "max_replicas must be greater than or equal to min_replicas"
+            )
+        return self
+
+
+class KubernetesTargetDefaultsSettings(BaseModel):
+    image_pull_secrets: list[str] = Field(default_factory=list)
+    gpu_resource_name: str = "nvidia.com/gpu"
+    runtime_class_name: str | None = None
+    node_selector: dict[str, str] = Field(default_factory=dict)
+    tolerations: list[dict[str, object]] = Field(default_factory=list)
+
+
+class KubernetesSettings(BaseModel):
+    namespace: str = "platform"
+    in_cluster: bool = True
+    kubeconfig: str | None = None
+    target_state_file: str = "/var/lib/platform/kubernetes_targets.json"
+    service_account: str = "platform-master"
+    image_pull_secrets: list[str] = Field(default_factory=list)
+    storage_class: str | None = None
+    storage_size: str = "10Gi"
+    challenge_mode: str = Field(
+        default="statefulset", pattern=r"^(statefulset|deployment)$"
+    )
+    broker_backend: str = Field(default="docker", pattern=r"^(docker|kubernetes)$")
+    gpu_resource_name: str = "nvidia.com/gpu"
+    node_selector: dict[str, str] = Field(default_factory=dict)
+    tolerations: list[dict[str, object]] = Field(default_factory=list)
+    runtime_class_name: str | None = None
+    target_defaults: KubernetesTargetDefaultsSettings = Field(
+        default_factory=KubernetesTargetDefaultsSettings
+    )
+    autoscaling: KubernetesAutoscalingSettings = Field(
+        default_factory=KubernetesAutoscalingSettings
+    )
+
+
 class GpuServerSettings(BaseModel):
     id: str = Field(..., min_length=1, pattern=r"^[a-zA-Z0-9_.-]+$")
     base_url: str = Field(..., min_length=1)
@@ -60,6 +115,29 @@ class GpuServerSettings(BaseModel):
     enabled: bool = True
     verify_tls: bool = True
     timeout_seconds: float = 30.0
+
+
+class KubernetesTargetSettings(BaseModel):
+    id: str = Field(..., min_length=1, pattern=r"^[a-zA-Z0-9_.-]+$")
+    mode: Literal["direct", "agent"] = "direct"
+    api_url: str | None = None
+    agent_url: str | None = None
+    namespace: str = Field(default="platform", min_length=1)
+    service_account: str | None = "platform-master"
+    kubeconfig: str | None = None
+    kubeconfig_file: str | None = None
+    agent_token: str | None = None
+    agent_token_file: str | None = None
+    enabled: bool = True
+    verify_tls: bool = True
+    timeout_seconds: float = 30.0
+    description: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+    gpu_count: int = Field(default=0, ge=0)
+    storage_class: str | None = None
+    node_selector: dict[str, str] = Field(default_factory=dict)
+    tolerations: list[dict[str, object]] = Field(default_factory=list)
+    runtime_class_name: str | None = None
 
 
 class SecuritySettings(BaseModel):
@@ -79,6 +157,9 @@ class Settings(BaseModel):
     validator: ValidatorSettings = Field(default_factory=ValidatorSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     docker: DockerSettings = Field(default_factory=DockerSettings)
+    runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
+    kubernetes: KubernetesSettings = Field(default_factory=KubernetesSettings)
     gpu_servers: list[GpuServerSettings] = Field(default_factory=list)
+    kubernetes_targets: list[KubernetesTargetSettings] = Field(default_factory=list)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
