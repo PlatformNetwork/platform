@@ -4,12 +4,10 @@
 
 **Multi-challenge Bittensor subnet platform with master/validator orchestration**
 
-**[Validators](docs/validator.md) • [Architecture](docs/architecture.md) • [Challenges](docs/challenges.md) • [Security](docs/security.md) • [Website](https://platform.network)**
+**[Miner Guide](docs/miner/README.md) • [Validator Guide](docs/validator/README.md) • [Architecture](docs/architecture.md) • [Challenges](docs/challenges.md) • [Security](docs/security.md) • [Website](https://platform.network)**
 
 [![CI](https://github.com/PlatformNetwork/platform/actions/workflows/ci.yml/badge.svg)](https://github.com/PlatformNetwork/platform/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/PlatformNetwork/platform)](https://github.com/PlatformNetwork/platform/blob/main/LICENSE)
-[![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-platform-009688.svg)](https://fastapi.tiangolo.com/)
 [![Bittensor](https://img.shields.io/badge/Bittensor-subnet-black.svg)](https://bittensor.com/)
 
 ![Platform Banner](assets/banner.jpg)
@@ -22,18 +20,23 @@
 
 ## Overview
 
-Platform is a Python 3.12 implementation of a **multi-challenge Bittensor validator platform**. A master validator orchestrates independent challenge containers, exposes a registry and public challenge proxy, collects `get_weights` from each active challenge, normalizes emissions, maps hotkeys to UIDs, and submits final weights to Bittensor.
+Platform is a **multi-challenge Bittensor subnet platform**. It lets independent challenge
+subnets run under one validator network, routes miner traffic to the right challenge, collects raw
+challenge weights, normalizes emissions, maps miner hotkeys to Bittensor UIDs, and submits final
+weights on-chain.
 
-Each challenge lives in its own repository, ships its own GHCR Docker image, owns its SQLite state, and exposes a standard FastAPI contract for the master.
+Each challenge lives in its own repository and owns its submissions, scoring logic, state, and
+public miner experience. Platform provides the orchestration layer that makes those challenges run
+together as one subnet.
 
 ## Core Principles
 
 - One **Platform master validator** controls the central registry and orchestration.
-- One repo/image per **challenge**, isolated in Docker.
-- Challenges expose only the standard internal `get_weights` contract to Platform.
-- Public challenge APIs are proxied through `/challenges/{slug}/...`.
+- One repository and image per **challenge**, isolated from other challenges.
+- Challenges expose a standard internal weight contract to Platform.
+- Public challenge APIs are proxied through Platform without exposing internal control routes.
 - Master PostgreSQL is private to the master process.
-- Challenge state is persistent SQLite mounted as Docker named volumes.
+- Challenge state remains owned by each challenge.
 - Validators can run all active challenge containers from the master registry.
 
 ---
@@ -41,7 +44,8 @@ Each challenge lives in its own repository, ships its own GHCR Docker image, own
 ## Documentation Index
 
 - [Architecture](docs/architecture.md)
-- [Validator Guide](docs/validator.md)
+- [Miner guide](docs/miner/README.md)
+- [Validator guide](docs/validator/README.md)
 - [Challenges](docs/challenges.md)
 - [Challenge Integration Guide](docs/challenge-integration.md)
 - [Security Model](docs/security.md)
@@ -83,8 +87,8 @@ sequenceDiagram
     participant BT as Bittensor
 
     E->>M: trigger
-    M->>A: GET /internal/v1/get_weights
-    M->>B: GET /internal/v1/get_weights
+    M->>A: collect challenge weights
+    M->>B: collect challenge weights
     A-->>M: hotkey -> weight
     B-->>M: hotkey -> weight
     M->>G: normalize + emissions
@@ -94,66 +98,37 @@ sequenceDiagram
 
 ---
 
-## Quick Start
+## What Platform Does
 
-```bash
-git clone https://github.com/PlatformNetwork/platform.git
-cd ./platform
-uv sync --extra dev
-uv run pytest
-uv run platform --help
-```
+Platform coordinates the full lifecycle of a multi-challenge subnet:
 
-Run the private master API:
+1. The master tracks active challenges and their emission shares.
+2. Validators synchronize the challenge registry.
+3. Challenge containers run isolated from the master and from each other.
+4. Miners interact with the relevant challenge through Platform's public proxy.
+5. Each challenge calculates raw hotkey weights from its own scoring rules.
+6. Platform normalizes challenge outputs, applies configured emissions, and maps hotkeys to UIDs.
+7. Final weights are submitted to Bittensor at epoch boundaries.
 
-```bash
-uv run platform master run --config config/master.example.yaml
-```
+If a challenge fails, Platform can isolate that challenge's contribution without taking down the
+entire subnet.
 
-Run the public proxy API:
+## Roles
 
-```bash
-uv run platform master proxy --config config/master.example.yaml
-```
+### Miners
 
-Generate a new challenge repository:
+Miners choose a challenge, follow that challenge's submission rules, and monitor challenge-specific
+leaderboards through Platform.
 
-```bash
-uv run platform challenge create code-arena --out ../code-arena
-```
+### Challenge Owners
 
-Validate the project:
+Challenge owners maintain independent repositories, images, scoring logic, public documentation, and
+weight contracts.
 
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest
-```
+### Validators
 
----
-
-## Challenge Contract
-
-Every challenge image must expose:
-
-- `GET /health`
-- `GET /version`
-- `GET /internal/v1/get_weights`
-- optional public routes proxied via `/challenges/{slug}/...`
-
-`get_weights` returns hotkey weights:
-
-```json
-{
-  "challenge_slug": "code-arena",
-  "weights": {
-    "5F...hotkey": 1.0
-  }
-}
-```
-
-The master normalizes each challenge, applies fixed emission percentages, ignores unknown hotkeys, and sets a challenge contribution to zero if it fails.
+Validators run Platform, synchronize the registry, launch challenge containers, collect raw weights,
+and submit final normalized weights to Bittensor.
 
 ---
 
@@ -165,24 +140,10 @@ platform/
   alembic/                   # PostgreSQL migrations
   config/                    # YAML example configs
   docker/                    # Dockerfiles and dev compose
-  docs/                      # Project documentation
+  docs/                      # Project, miner, validator, and challenge docs
   plan/                      # Detailed design plan
   tests/                     # Unit/runtime validation tests
 ```
-
----
-
-## Status
-
-Current validation suite:
-
-- `ruff check`
-- `ruff format --check`
-- `mypy src`
-- `mypy -p platform_network`
-- `pytest`
-- `docker compose config`
-- rendered challenge template tests
 
 ---
 
