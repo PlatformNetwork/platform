@@ -285,11 +285,11 @@ class DockerExecutor:
             raise DockerExecutorError(f"Docker image is not allowed: {spec.image}")
         if not spec.command:
             raise DockerExecutorError("Docker command cannot be empty")
-        if spec.limits.network != "none" and not spec.limits.network.startswith(
-            "platform_"
+        if spec.limits.network not in {"none", "default"} and (
+            not spec.limits.network.startswith("platform_")
         ):
             raise DockerExecutorError(
-                "Docker network must be 'none' or a platform network"
+                "Docker network must be 'none', 'default', or a platform network"
             )
         for mount in spec.mounts:
             if not mount.source.exists():

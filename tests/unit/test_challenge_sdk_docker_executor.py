@@ -91,6 +91,21 @@ def test_rejects_images_outside_allowlist(tmp_path: Path) -> None:
         )
 
 
+def test_allows_default_network_for_broker_compatible_jobs(tmp_path: Path) -> None:
+    spec = DockerRunSpec(
+        image="platformnetwork/swe-forge:task",
+        command=("true",),
+        mounts=(DockerMount(tmp_path, "/x"),),
+        limits=DockerLimits(network="default"),
+    )
+
+    cmd = DockerExecutor(
+        challenge="agent", allowed_images=("platformnetwork/",)
+    ).build_run_command(spec, "name")
+
+    assert "--network" in cmd and "default" in cmd
+
+
 def test_cleanup_job_uses_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
