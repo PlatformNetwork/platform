@@ -6,6 +6,7 @@ import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
+from platform_network.config.policy import validate_kubernetes_target_trust
 from platform_network.config.settings import KubernetesTargetSettings
 from platform_network.schemas.kubernetes_target import (
     KubernetesTargetCreate,
@@ -35,14 +36,25 @@ class FileKubernetesTargetRegistry:
         *,
         secret_dir: str | Path,
         configured_targets: list[KubernetesTargetSettings] | None = None,
+        production_policy: bool = False,
     ) -> None:
         self.state_file = Path(state_file)
         self.secret_dir = Path(secret_dir)
         self._records: dict[str, KubernetesTargetRecord] = {}
         self._assignments: dict[str, str] = {}
+        self._assignment_metadata: dict[str, dict[str, object]] = {}
+        self._assignment_audit: list[dict[str, object]] = []
         self._configured_agent_tokens: dict[str, str] = {}
+        self.production_policy = production_policy
         self._load()
         for target in configured_targets or []:
+            validate_kubernetes_target_trust(
+                mode=target.mode,
+                agent_url=target.agent_url,
+                verify_tls=target.verify_tls,
+                production=self.production_policy,
+                subject=f"Kubernetes target {target.id!r}",
+            )
             agent_token = _read_secret(target.agent_token, target.agent_token_file)
             if agent_token:
                 self._configured_agent_tokens[target.id] = agent_token
@@ -62,6 +74,7 @@ class FileKubernetesTargetRegistry:
                     kubeconfig_file=kubeconfig_file,
                     agent_token_hint=_secret_hint(agent_token),
                     enabled=target.enabled,
+                    draining=target.draining,
                     verify_tls=target.verify_tls,
                     timeout_seconds=target.timeout_seconds,
                     description=target.description,
@@ -74,6 +87,8 @@ class FileKubernetesTargetRegistry:
                     created_at=now,
                     updated_at=now,
                 )
+        for record in self._records.values():
+            self._validate_record(record)
 
     def list(self) -> list[KubernetesTargetRecord]:
         self._load()
@@ -88,6 +103,13 @@ class FileKubernetesTargetRegistry:
 
     def create(self, payload: KubernetesTargetCreate) -> KubernetesTargetRecord:
         self._load()
+        validate_kubernetes_target_trust(
+            mode=payload.mode,
+            agent_url=payload.agent_url,
+            verify_tls=payload.verify_tls,
+            production=self.production_policy,
+            subject=f"Kubernetes target {payload.id!r}",
+        )
         if payload.id in self._records:
             raise KubernetesTargetAlreadyExistsError(payload.id)
         now = datetime.now(UTC)
@@ -112,6 +134,7 @@ class FileKubernetesTargetRegistry:
             kubeconfig_file=kubeconfig_file,
             agent_token_hint=_secret_hint(agent_token),
             enabled=payload.enabled,
+            draining=payload.draining,
             verify_tls=payload.verify_tls,
             timeout_seconds=payload.timeout_seconds,
             description=payload.description,
@@ -145,6 +168,14 @@ class FileKubernetesTargetRegistry:
             updates.pop("agent_token_file", None),
             secret_name="agent_token",
         )
+        candidate_verify_tls = updates.get("verify_tls", record.verify_tls)
+        validate_kubernetes_target_trust(
+            mode=updates.get("mode", record.mode),
+            agent_url=updates.get("agent_url", record.agent_url),
+            verify_tls=candidate_verify_tls,
+            production=self.production_policy,
+            subject=f"Kubernetes target {target_id!r}",
+        )
         data.update(updates)
         if kubeconfig:
             data["kubeconfig_file"] = str(self._write_kubeconfig(target_id, kubeconfig))
@@ -155,17 +186,15 @@ class FileKubernetesTargetRegistry:
         updated = KubernetesTargetRecord(**data)
         self._validate_record(updated)
         self._records[target_id] = updated
+        if not updated.enabled:
+            self._remove_assignments_for_target(target_id, reason="target disabled")
         self._save()
         return updated
 
     def delete(self, target_id: str) -> None:
         self.get(target_id)
         self._records.pop(target_id, None)
-        self._assignments = {
-            slug: assigned
-            for slug, assigned in self._assignments.items()
-            if assigned != target_id
-        }
+        self._remove_assignments_for_target(target_id, reason="target deleted")
         self._kubeconfig_path(target_id).unlink(missing_ok=True)
         self._agent_token_path(target_id).unlink(missing_ok=True)
         self._save()
@@ -202,6 +231,10 @@ class FileKubernetesTargetRegistry:
         if not record.enabled:
             return KubernetesTargetHealth(
                 id=target_id, status="error", detail="target disabled"
+            )
+        if record.draining:
+            return KubernetesTargetHealth(
+                id=target_id, status="draining", detail="target draining"
             )
         if record.mode == "direct":
             if not record.kubeconfig_file:
@@ -248,18 +281,50 @@ class FileKubernetesTargetRegistry:
             return KubernetesTargetHealth(id=target_id, status="error", detail=str(exc))
         return KubernetesTargetHealth(id=target_id, status="ok", detail="agent")
 
-    def assign_challenge(self, slug: str, target_id: str) -> None:
+    def assign_challenge(
+        self, slug: str, target_id: str, gpu_count: int | None = None
+    ) -> None:
         self.get(target_id)
         self._assignments[slug] = target_id
+        metadata = {
+            "target_id": target_id,
+            "gpu_count": int(gpu_count or 0),
+            "assigned_at": datetime.now(UTC).isoformat(),
+        }
+        self._assignment_metadata[slug] = metadata
+        self._assignment_audit.append({"slug": slug, "action": "assigned", **metadata})
         self._save()
 
     def get_assignment(self, slug: str) -> str | None:
         self._load()
         return self._assignments.get(slug)
 
+    def get_assignment_metadata(self, slug: str) -> dict[str, object] | None:
+        self._load()
+        metadata = self._assignment_metadata.get(slug)
+        return dict(metadata) if metadata is not None else None
+
+    def assignments(self) -> dict[str, str]:
+        self._load()
+        return dict(self._assignments)
+
+    def assignment_audit(self) -> builtins.list[dict[str, object]]:
+        self._load()
+        return [dict(item) for item in self._assignment_audit]
+
     def clear_assignment(self, slug: str) -> None:
         self._load()
-        if self._assignments.pop(slug, None) is not None:
+        assigned = self._assignments.pop(slug, None)
+        if assigned is not None:
+            self._assignment_metadata.pop(slug, None)
+            self._assignment_audit.append(
+                {
+                    "slug": slug,
+                    "target_id": assigned,
+                    "action": "cleared",
+                    "assigned_at": datetime.now(UTC).isoformat(),
+                }
+            )
             self._save()
 
     def _load(self) -> None:
@@ -274,11 +339,26 @@ class FileKubernetesTargetRegistry:
             }
         assignments = payload.get("assignments", {})
         if isinstance(assignments, dict):
-            self._assignments = {
-                str(slug): str(target_id)
-                for slug, target_id in assignments.items()
-                if target_id in self._records
-            }
+            self._assignments = {}
+            self._assignment_metadata = {}
+            for slug, target in assignments.items():
+                if isinstance(target, dict):
+                    target_id = str(target.get("target_id", ""))
+                    metadata = dict(target)
+                else:
+                    target_id = str(target)
+                    metadata = {"target_id": target_id, "gpu_count": 0}
+                if target_id in self._records:
+                    self._assignments[str(slug)] = target_id
+                    self._assignment_metadata[str(slug)] = metadata
+        metadata = payload.get("assignment_metadata", {})
+        if isinstance(metadata, dict):
+            for slug, value in metadata.items():
+                if slug in self._assignments and isinstance(value, dict):
+                    self._assignment_metadata[str(slug)] = dict(value)
+        audit = payload.get("assignment_audit", [])
+        if isinstance(audit, list):
+            self._assignment_audit = [item for item in audit if isinstance(item, dict)]
 
     def _save(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -288,10 +368,19 @@ class FileKubernetesTargetRegistry:
                 for target_id, record in self._records.items()
             },
             "assignments": dict(self._assignments),
+            "assignment_metadata": dict(self._assignment_metadata),
+            "assignment_audit": list(self._assignment_audit),
         }
         self.state_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def _validate_record(self, record: KubernetesTargetRecord) -> None:
+        validate_kubernetes_target_trust(
+            mode=record.mode,
+            agent_url=record.agent_url,
+            verify_tls=record.verify_tls,
+            production=self.production_policy,
+            subject=f"Kubernetes target {record.id!r}",
+        )
         if record.mode == "direct" and not record.kubeconfig_file:
             raise KubernetesTargetSecretError(
                 "direct Kubernetes targets require kubeconfig material"
@@ -299,6 +388,25 @@ class FileKubernetesTargetRegistry:
         if record.mode == "agent" and not record.agent_url:
             raise KubernetesTargetSecretError(
                 "agent Kubernetes targets require agent_url"
+            )
+
+    def _remove_assignments_for_target(self, target_id: str, *, reason: str) -> None:
+        removed = [
+            slug
+            for slug, assigned in self._assignments.items()
+            if assigned == target_id
+        ]
+        for slug in removed:
+            self._assignments.pop(slug, None)
+            self._assignment_metadata.pop(slug, None)
+            self._assignment_audit.append(
+                {
+                    "slug": slug,
+                    "target_id": target_id,
+                    "action": "cleared",
+                    "reason": reason,
+                    "assigned_at": datetime.now(UTC).isoformat(),
+                }
             )
 
     def _kubeconfig_path(self, target_id: str) -> Path:

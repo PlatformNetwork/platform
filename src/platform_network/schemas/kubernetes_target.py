@@ -20,6 +20,7 @@ class KubernetesTargetCreate(BaseModel):
     agent_token: str | None = None
     agent_token_file: str | None = None
     enabled: bool = True
+    draining: bool = False
     verify_tls: bool = True
     timeout_seconds: float = 30.0
     description: str | None = None
@@ -50,6 +51,7 @@ class KubernetesTargetUpdate(BaseModel):
     agent_token: str | None = None
     agent_token_file: str | None = None
     enabled: bool | None = None
+    draining: bool | None = None
     verify_tls: bool | None = None
     timeout_seconds: float | None = None
     description: str | None = None
@@ -71,6 +73,7 @@ class KubernetesTargetRecord(BaseModel):
     kubeconfig_file: str | None = None
     agent_token_hint: str | None = None
     enabled: bool = True
+    draining: bool = False
     verify_tls: bool = True
     timeout_seconds: float = 30.0
     description: str | None = None
@@ -94,6 +97,7 @@ class KubernetesTargetView(BaseModel):
     kubeconfig_file: str | None = None
     agent_token_hint: str | None = None
     enabled: bool
+    draining: bool
     verify_tls: bool
     timeout_seconds: float
     description: str | None = None
