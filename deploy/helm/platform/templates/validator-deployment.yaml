@@ -47,6 +47,8 @@ spec:
               readOnly: true
             - name: data
               mountPath: /var/lib/platform
+          resources:
+            {{- toYaml .Values.validator.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:

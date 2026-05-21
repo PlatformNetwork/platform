@@ -55,6 +55,8 @@ spec:
                 - name: secrets
                   mountPath: /var/lib/platform/secrets
                   readOnly: true
+              resources:
+                {{- toYaml .Values.weights.resources | nindent 16 }}
               securityContext:
                 {{- include "platform.containerSecurityContext" . | nindent 16 }}
           volumes:

@@ -1,3 +1,4 @@
+{{- include "platform.validatePolicy" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -6,6 +7,7 @@ metadata:
     {{- include "platform.labels" . | nindent 4 }}
 data:
   master.yaml: |
+    environment: {{ .Values.environment | quote }}
     runtime:
       backend: {{ .Values.runtime.backend | quote }}
     database:
@@ -29,6 +31,8 @@ data:
       {{- else }}
       broker_url: "http://{{ include "platform.fullname" . }}-broker:{{ .Values.broker.port }}"
       {{- end }}
+      broker_allowed_images:
+        {{- toYaml .Values.docker.brokerAllowedImages | nindent 8 }}
     security:
       admin_token_file: "/var/lib/platform/secrets/{{ .Values.security.adminTokenKey }}"
     kubernetes:
