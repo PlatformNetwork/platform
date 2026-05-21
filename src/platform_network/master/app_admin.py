@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import inspect
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import (
     Depends,
@@ -17,6 +17,11 @@ from fastapi import (
 )
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from platform_network.config.policy import (
+    ProductionPolicyError,
+    validate_image_reference,
+    validate_tls_enabled,
+)
 from platform_network.gpu.client import GpuAgentClient
 from platform_network.gpu.registry import (
     GpuServerAlreadyExistsError,
@@ -92,6 +97,7 @@ def create_admin_app(
     kubernetes_target_registry: KubernetesTargetRegistry | None = None,
     metrics_provider: ChallengeMetricsProvider | None = None,
     admin_token_provider: TokenProvider = load_admin_token_from_environment,
+    enforce_production_policy: bool = False,
 ) -> FastAPI:
     """Create the private admin/registry FastAPI app."""
 
@@ -123,6 +129,11 @@ def create_admin_app(
 
     async def registry_response():
         return await resolve(challenge_registry.registry_response())
+
+    def _raise_policy_error(exc: ProductionPolicyError) -> NoReturn:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     async def require_admin(
         x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
@@ -244,12 +255,17 @@ def create_admin_app(
     )
     async def create_challenge(payload: ChallengeCreate) -> ChallengeCreateResponse:
         try:
+            validate_image_reference(
+                payload.image, production=enforce_production_policy
+            )
             record, token = await registry_create(payload)
         except ChallengeAlreadyExistsError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Challenge '{payload.slug}' already exists",
             ) from exc
+        except ProductionPolicyError as exc:
+            _raise_policy_error(exc)
         broker_token = ""
         get_broker_token = getattr(challenge_registry, "get_broker_token", None)
         if callable(get_broker_token):
@@ -285,9 +301,15 @@ def create_admin_app(
         slug: str, payload: ChallengeUpdate
     ) -> ChallengeAdminView:
         try:
+            if payload.image is not None:
+                validate_image_reference(
+                    payload.image, production=enforce_production_policy
+                )
             return record_to_admin_view(await registry_update(slug, payload))
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
+        except ProductionPolicyError as exc:
+            _raise_policy_error(exc)
 
     @app.post(
         "/v1/admin/challenges/{slug}/activate",
@@ -340,12 +362,19 @@ def create_admin_app(
     )
     async def create_gpu_server(payload: GpuServerCreate) -> GpuServerView:
         try:
+            validate_tls_enabled(
+                verify_tls=payload.verify_tls,
+                production=enforce_production_policy,
+                subject=f"GPU server {payload.id!r}",
+            )
             return _gpu_view(gpu_servers.create(payload))
         except GpuServerAlreadyExistsError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"GPU server '{payload.id}' already exists",
             ) from exc
+        except ProductionPolicyError as exc:
+            _raise_policy_error(exc)
 
     @app.get(
         "/v1/admin/gpu-servers/{server_id}",
@@ -367,9 +396,17 @@ def create_admin_app(
         server_id: str, payload: GpuServerUpdate
     ) -> GpuServerView:
         try:
+            if payload.verify_tls is not None:
+                validate_tls_enabled(
+                    verify_tls=payload.verify_tls,
+                    production=enforce_production_policy,
+                    subject=f"GPU server {server_id!r}",
+                )
             return _gpu_view(gpu_servers.update(server_id, payload))
         except GpuServerNotFoundError as exc:
             raise _gpu_not_found(server_id) from exc
+        except ProductionPolicyError as exc:
+            _raise_policy_error(exc)
 
     @app.delete(
         "/v1/admin/gpu-servers/{server_id}",
@@ -464,6 +501,11 @@ def create_admin_app(
     ) -> KubernetesTargetView:
         target_registry = _kubernetes_target_registry()
         try:
+            validate_tls_enabled(
+                verify_tls=payload.verify_tls,
+                production=enforce_production_policy,
+                subject=f"Kubernetes target {payload.id!r}",
+            )
             return _kubernetes_target_view(target_registry.create(payload))
         except KubernetesTargetAlreadyExistsError as exc:
             raise HTTPException(
@@ -475,6 +517,8 @@ def create_admin_app(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
+        except ProductionPolicyError as exc:
+            _raise_policy_error(exc)
 
     @app.get(
         "/v1/admin/kubernetes-targets/{target_id}",
@@ -497,6 +541,12 @@ def create_admin_app(
     ) -> KubernetesTargetView:
         target_registry = _kubernetes_target_registry()
         try:
+            if payload.verify_tls is not None:
+                validate_tls_enabled(
+                    verify_tls=payload.verify_tls,
+                    production=enforce_production_policy,
+                    subject=f"Kubernetes target {target_id!r}",
+                )
             return _kubernetes_target_view(target_registry.update(target_id, payload))
         except KubernetesTargetNotFoundError as exc:
             raise _kubernetes_target_not_found(target_id) from exc
@@ -505,6 +555,8 @@ def create_admin_app(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
+        except ProductionPolicyError as exc:
+            _raise_policy_error(exc)
 
     @app.delete(
         "/v1/admin/kubernetes-targets/{target_id}",

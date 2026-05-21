@@ -6,6 +6,7 @@ import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
+from platform_network.config.policy import validate_tls_enabled
 from platform_network.config.settings import GpuServerSettings
 from platform_network.schemas.gpu_server import (
     GpuServerCreate,
@@ -31,13 +32,20 @@ class FileGpuServerRegistry:
         *,
         secret_dir: str | Path,
         configured_servers: list[GpuServerSettings] | None = None,
+        production_policy: bool = False,
     ) -> None:
         self.state_file = Path(state_file)
         self.secret_dir = Path(secret_dir)
         self._records: dict[str, GpuServerRecord] = {}
         self._configured_tokens: dict[str, str] = {}
+        self.production_policy = production_policy
         self._load()
         for server in configured_servers or []:
+            validate_tls_enabled(
+                verify_tls=server.verify_tls,
+                production=self.production_policy,
+                subject=f"GPU server {server.id!r}",
+            )
             token = read_secret(server.token, server.token_file)
             if token:
                 self._configured_tokens[server.id] = token
@@ -64,6 +72,11 @@ class FileGpuServerRegistry:
 
     def create(self, payload: GpuServerCreate) -> GpuServerRecord:
         self._load()
+        validate_tls_enabled(
+            verify_tls=payload.verify_tls,
+            production=self.production_policy,
+            subject=f"GPU server {payload.id!r}",
+        )
         if payload.id in self._records:
             raise GpuServerAlreadyExistsError(payload.id)
         now = datetime.now(UTC)
@@ -92,6 +105,12 @@ class FileGpuServerRegistry:
         data = record.model_dump()
         updates = payload.model_dump(exclude_unset=True)
         token = read_secret(updates.pop("token", None), updates.pop("token_file", None))
+        candidate_verify_tls = updates.get("verify_tls", record.verify_tls)
+        validate_tls_enabled(
+            verify_tls=candidate_verify_tls,
+            production=self.production_policy,
+            subject=f"GPU server {server_id!r}",
+        )
         data.update(updates)
         if token:
             self._write_token(server_id, token)

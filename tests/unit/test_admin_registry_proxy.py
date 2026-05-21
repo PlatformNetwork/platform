@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import pytest
@@ -35,7 +36,7 @@ from platform_network.security.miner_auth import (
 )
 
 
-def _payload(slug: str = "demo") -> dict[str, object]:
+def _payload(slug: str = "demo") -> dict[str, Any]:
     return {
         "slug": slug,
         "name": "Demo",
@@ -176,7 +177,7 @@ class FakeNonceStore:
     def __init__(self) -> None:
         self.keys: set[tuple[int, str, str, str]] = set()
 
-    async def reserve(self, **kwargs: object) -> None:
+    async def reserve(self, **kwargs: Any) -> None:
         key = (
             int(kwargs["netuid"]),
             str(kwargs["challenge_slug"]),
@@ -188,7 +189,7 @@ class FakeNonceStore:
         self.keys.add(key)
 
 
-def _admin_app(registry: ChallengeRegistry, **kwargs: object) -> FastAPI:
+def _admin_app(registry: ChallengeRegistry, **kwargs: Any) -> FastAPI:
     return create_admin_app(
         registry=registry,
         runtime_controller=FakeRuntimeController(),
@@ -202,7 +203,7 @@ class FakeCache:
         return {}
 
 
-def _proxy_app(registry: ChallengeRegistry, **kwargs: object) -> FastAPI:
+def _proxy_app(registry: ChallengeRegistry, **kwargs: Any) -> FastAPI:
     return create_proxy_app(
         registry=registry,
         nonce_store=FakeNonceStore(),
@@ -557,7 +558,7 @@ def test_signed_upload_bridge_verifies_and_forwards_internal_request() -> None:
     registry = ChallengeRegistry()
     registry.create(ChallengeCreate(**_payload()))
     registry.set_status("demo", ChallengeStatus.ACTIVE)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class Cache:
         def get(self) -> dict[str, int]:
@@ -676,3 +677,83 @@ def test_signed_upload_bridge_rejects_replay_and_bad_time() -> None:
         "/v1/challenges/demo/submissions", content=b"x", headers=stale
     )
     assert stale_response.status_code == 401
+
+
+def test_production_admin_rejects_unsafe_challenge_image() -> None:
+    registry = ChallengeRegistry()
+    client = TestClient(
+        _admin_app(
+            registry,
+            admin_token_provider=lambda: "admin-secret",
+            enforce_production_policy=True,
+        )
+    )
+
+    response = client.post(
+        "/v1/admin/challenges",
+        json=_payload(),
+        headers={"X-Admin-Token": "admin-secret"},
+    )
+
+    assert response.status_code == 400
+    assert "digest" in response.text
+
+
+def test_production_admin_accepts_pinned_image_and_rejects_update() -> None:
+    registry = ChallengeRegistry()
+    client = TestClient(
+        _admin_app(
+            registry,
+            admin_token_provider=lambda: "admin-secret",
+            enforce_production_policy=True,
+        )
+    )
+    digest = "sha256:" + "b" * 64
+
+    response = client.post(
+        "/v1/admin/challenges",
+        json={**_payload(), "image": f"ghcr.io/platformnetwork/demo:1.2.3@{digest}"},
+        headers={"X-Admin-Token": "admin-secret"},
+    )
+    assert response.status_code == 201
+
+    patch = client.patch(
+        "/v1/admin/challenges/demo",
+        json={"image": "ghcr.io/platformnetwork/demo:latest"},
+        headers={"X-Admin-Token": "admin-secret"},
+    )
+    assert patch.status_code == 400
+    assert "latest" in patch.text
+
+
+def test_production_admin_rejects_verify_tls_false_targets() -> None:
+    client = TestClient(
+        _admin_app(
+            registry=ChallengeRegistry(),
+            admin_token_provider=lambda: "admin-secret",
+            kubernetes_target_registry=FakeKubernetesTargetRegistry(),
+            enforce_production_policy=True,
+        )
+    )
+    headers = {"X-Admin-Token": "admin-secret"}
+
+    gpu = client.post(
+        "/v1/admin/gpu-servers",
+        headers=headers,
+        json={"id": "gpu-a", "base_url": "https://gpu-a", "verify_tls": False},
+    )
+    assert gpu.status_code == 400
+    assert "verify_tls=true" in gpu.text
+
+    target = client.post(
+        "/v1/admin/kubernetes-targets",
+        headers=headers,
+        json={
+            "id": "k8s-a",
+            "mode": "agent",
+            "agent_url": "https://agent-a",
+            "verify_tls": False,
+        },
+    )
+    assert target.status_code == 400
+    assert "verify_tls=true" in target.text
