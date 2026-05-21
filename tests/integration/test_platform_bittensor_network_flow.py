@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -16,7 +16,10 @@ from platform_network.master.docker_orchestrator import (
     ChallengeSpec,
 )
 from platform_network.master.kubernetes_broker import KubernetesBrokerRouterService
-from platform_network.master.kubernetes_orchestrator import KubernetesTargetRouter
+from platform_network.master.kubernetes_orchestrator import (
+    KubernetesOrchestrator,
+    KubernetesTargetRouter,
+)
 from platform_network.master.service import MasterWeightService
 from platform_network.schemas.challenge import ChallengeStatus, RegistryChallenge
 from platform_network.schemas.docker_broker import BrokerRunRequest
@@ -75,7 +78,7 @@ async def test_platform_agents_broker_and_bittensor_weight_epoch(
         )
     )
     router = KubernetesTargetRouter(
-        default_orchestrator=UnusedOrchestrator(),
+        default_orchestrator=cast(KubernetesOrchestrator, UnusedOrchestrator()),
         settings=settings,
         target_registry=target_registry,
     )
@@ -218,6 +221,8 @@ class InMemoryAgentServer:
     ) -> httpx.Response:
         self._authenticate(headers or {})
         path_only = path.split("?", 1)[0]
+        if method == "GET" and path_only == "/health":
+            return _json_response(method, path, {"status": "ok"})
         if method == "POST" and path_only == "/v1/challenges/start":
             payload = dict(json_payload or {})
             self.starts.append(payload)
