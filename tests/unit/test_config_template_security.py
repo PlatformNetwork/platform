@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from platform_network.config.loader import load_settings
 from platform_network.security.tokens import generate_token, hash_token, verify_token
 from platform_network.template_engine import (
@@ -104,3 +106,94 @@ def test_render_challenge_template(tmp_path: Path) -> None:
     assert (out / "src" / "demo_challenge" / "app.py").exists()
     assert (out / "src" / "demo_challenge" / "sdk" / "executors" / "docker.py").exists()
     assert "docker-cli" in (out / "Dockerfile").read_text(encoding="utf-8")
+
+
+def test_production_settings_require_postgres_safe_prefixes_and_tls(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "prod.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "environment: production",
+                "database:",
+                "  url: postgresql+asyncpg://user:pass@postgres.platform/platform",
+                "docker:",
+                "  broker_allowed_images:",
+                "    - ghcr.io/platformnetwork/",
+                "gpu_servers:",
+                "  - id: gpu-a",
+                "    base_url: https://gpu-a.internal",
+                "    verify_tls: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.environment == "production"
+    assert settings.database.url.startswith("postgresql+asyncpg://")
+
+
+def test_production_settings_reject_sqlite_broad_prefixes_and_insecure_tls(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "bad-prod.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "environment: production",
+                "database:",
+                "  url: sqlite+aiosqlite:////tmp/platform.sqlite3",
+                "docker:",
+                "  broker_allowed_images:",
+                "    - platformnetwork/",
+                "kubernetes_targets:",
+                "  - id: k8s-a",
+                "    mode: agent",
+                "    agent_url: https://agent-a",
+                "    verify_tls: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PostgreSQL|external PostgreSQL"):
+        load_settings(config)
+
+    config.write_text(
+        "\n".join(
+            [
+                "environment: production",
+                "database:",
+                "  url: postgresql+asyncpg://user:pass@postgres.platform/platform",
+                "docker:",
+                "  broker_allowed_images:",
+                "    - platformnetwork/",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="too broad"):
+        load_settings(config)
+
+    config.write_text(
+        "\n".join(
+            [
+                "environment: production",
+                "database:",
+                "  url: postgresql+asyncpg://user:pass@postgres.platform/platform",
+                "docker:",
+                "  broker_allowed_images:",
+                "    - ghcr.io/platformnetwork/",
+                "gpu_servers:",
+                "  - id: gpu-a",
+                "    base_url: https://gpu-a.internal",
+                "    verify_tls: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="verify_tls=true"):
+        load_settings(config)

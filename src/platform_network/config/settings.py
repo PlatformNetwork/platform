@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from platform_network.config.policy import validate_settings_policy
+
 
 class NetworkSettings(BaseModel):
     name: str = "platform"
@@ -129,6 +131,7 @@ class KubernetesTargetSettings(BaseModel):
     agent_token: str | None = None
     agent_token_file: str | None = None
     enabled: bool = True
+    draining: bool = False
     verify_tls: bool = True
     timeout_seconds: float = 30.0
     description: str | None = None
@@ -152,6 +155,7 @@ class ObservabilitySettings(BaseModel):
 
 
 class Settings(BaseModel):
+    environment: str = "development"
     network: NetworkSettings = Field(default_factory=NetworkSettings)
     master: MasterSettings = Field(default_factory=MasterSettings)
     validator: ValidatorSettings = Field(default_factory=ValidatorSettings)
@@ -163,3 +167,8 @@ class Settings(BaseModel):
     kubernetes_targets: list[KubernetesTargetSettings] = Field(default_factory=list)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+
+    @model_validator(mode="after")
+    def validate_production_policy(self) -> Settings:
+        validate_settings_policy(self)
+        return self

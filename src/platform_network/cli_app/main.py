@@ -10,6 +10,7 @@ import typer
 from platform_network.bittensor.factory import create_bittensor_runtime
 from platform_network.bittensor.validator_loop import run_epoch_loop
 from platform_network.config import load_settings
+from platform_network.config.policy import production_policy_enabled_for_settings
 from platform_network.db.session import create_engine, create_session_factory
 from platform_network.gpu.agent import GpuAgentService, create_gpu_agent_app
 from platform_network.gpu.capabilities import ResourceCapabilityChecker
@@ -199,6 +200,7 @@ def _master_registry(settings, session_factory=None) -> DatabaseChallengeRegistr
         secret_dir=settings.docker.secret_dir,
         network=settings.network.name,
         master_uid=settings.network.master_uid,
+        production_policy=production_policy_enabled_for_settings(settings),
     )
 
 
@@ -207,6 +209,7 @@ def _gpu_registry(settings) -> FileGpuServerRegistry:
         settings.docker.gpu_server_state_file,
         secret_dir=settings.docker.secret_dir,
         configured_servers=settings.gpu_servers,
+        production_policy=production_policy_enabled_for_settings(settings),
     )
 
 
@@ -215,6 +218,7 @@ def _kubernetes_target_registry(settings) -> FileKubernetesTargetRegistry:
         settings.kubernetes.target_state_file,
         secret_dir=settings.docker.secret_dir,
         configured_targets=settings.kubernetes_targets,
+        production_policy=production_policy_enabled_for_settings(settings),
     )
 
 
@@ -296,6 +300,7 @@ def master_run(config: Path = typer.Option(Path("config/master.example.yaml"))):
             settings.security.admin_token,
             settings.security.admin_token_file,
         ),
+        enforce_production_policy=production_policy_enabled_for_settings(settings),
     )
     endpoint = f"{settings.master.admin_host}:{settings.master.admin_port}"
     typer.echo(f"Starting master admin API on {endpoint}")

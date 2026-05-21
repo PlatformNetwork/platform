@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
@@ -16,6 +18,7 @@ from platform_network.cli_app.main import DockerRuntimeController, app
 from platform_network.config.loader import load_settings
 from platform_network.gpu.capabilities import CapabilityDecision
 from platform_network.master.challenge_client import ChallengeClient
+from platform_network.master.docker_orchestrator import ChallengeSpec
 from platform_network.master.registry import FileChallengeRegistry
 from platform_network.master.service import MasterWeightService
 from platform_network.observability.logging import JsonFormatter, configure_logging
@@ -149,7 +152,8 @@ async def test_challenge_client_routes_weights_through_assigned_agent(
     assert result.ok
     assert calls[0]["base_url"] == "https://agent-a"
     assert calls[1]["path"] == "/internal/v1/get_weights"
-    assert calls[1]["headers"]["Authorization"] == "Bearer challenge-token"
+    forwarded_headers = cast(dict[str, str], calls[1]["headers"])
+    assert forwarded_headers["Authorization"] == "Bearer challenge-token"
 
 
 async def async_noop(*args: object, **kwargs: object) -> None:
@@ -180,7 +184,7 @@ async def test_master_weight_service_and_validator_runner() -> None:
         name="Demo",
         image="ghcr.io/o/demo:1",
         version="1",
-        emission_percent=10,
+        emission_percent=Decimal("10"),
         status=ChallengeStatus.ACTIVE,
         internal_base_url="http://challenge-demo:8000",
         public_proxy_base_path="/challenges/demo",
@@ -192,8 +196,10 @@ async def test_master_weight_service_and_validator_runner() -> None:
     )
     setter = Setter()
     service = MasterWeightService(
-        metagraph_cache=Cache(), weight_setter=setter, challenge_client=Client()
-    )  # type: ignore[arg-type]
+        metagraph_cache=cast(MetagraphCache, Cache()),
+        weight_setter=cast(WeightSetter, setter),
+        challenge_client=cast(ChallengeClient, Client()),
+    )
     final = await service.run_epoch([challenge], {"demo": "tok"})
     assert final.uids == [3]
     assert setter.calls == [([3], [1.0])]
@@ -204,15 +210,15 @@ async def test_master_weight_service_and_validator_runner() -> None:
 
     class Orchestrator:
         def __init__(self) -> None:
-            self.specs = []
+            self.specs: list[ChallengeSpec] = []
 
         def start_challenge(self, spec):
             self.specs.append(spec)
 
     orchestrator = Orchestrator()
     runner = NormalValidatorRunner(
-        registry_client=Registry(), orchestrator=orchestrator
-    )  # type: ignore[arg-type]
+        registry_client=cast(RegistryClient, Registry()), orchestrator=orchestrator
+    )
     await runner.run_once()
     assert orchestrator.specs[0].slug == "demo"
     assert orchestrator.specs[0].resources.cpu == 2.0
@@ -241,7 +247,7 @@ async def test_master_weight_service_fails_when_capability_blocked() -> None:
         name="GPU Demo",
         image="ghcr.io/o/demo:1",
         version="1",
-        emission_percent=10,
+        emission_percent=Decimal("10"),
         status=ChallengeStatus.ACTIVE,
         internal_base_url="http://challenge-demo:8000",
         public_proxy_base_path="/challenges/demo",
@@ -253,8 +259,8 @@ async def test_master_weight_service_fails_when_capability_blocked() -> None:
     )
     setter = Setter()
     service = MasterWeightService(
-        metagraph_cache=Cache(),  # type: ignore[arg-type]
-        weight_setter=setter,  # type: ignore[arg-type]
+        metagraph_cache=cast(MetagraphCache, Cache()),
+        weight_setter=cast(WeightSetter, setter),
         capability_checker=Checker(),  # type: ignore[arg-type]
     )
 
@@ -326,7 +332,7 @@ def test_config_env_security_and_observability(
 def test_bittensor_cache_and_setter() -> None:
     class Subtensor:
         def __init__(self) -> None:
-            self.calls = []
+            self.calls: list[tuple[str, object]] = []
 
         def metagraph(self, netuid: int) -> object:
             self.calls.append(("metagraph", netuid))
@@ -372,9 +378,9 @@ def test_cli_create_and_runtime_controller(tmp_path: Path) -> None:
 
     class Orchestrator:
         def __init__(self) -> None:
-            self.runtime = {}
-            self.pulled = []
-            self.specs = []
+            self.runtime: dict[str, object] = {}
+            self.pulled: list[str] = []
+            self.specs: list[ChallengeSpec] = []
 
         def pull_image(self, image: str) -> None:
             self.pulled.append(image)
@@ -424,7 +430,7 @@ def test_cli_master_weights_once_wires_bittensor_runtime(
             name="Demo",
             image="ghcr.io/o/demo:1",
             version="1",
-            emission_percent=10,
+            emission_percent=Decimal("10"),
             status=ChallengeStatus.ACTIVE,
         )
     )
@@ -447,7 +453,7 @@ def test_cli_master_weights_once_wires_bittensor_runtime(
             assert kwargs["token"]
             return ChallengeWeightsResult(
                 slug=str(kwargs["slug"]),
-                emission_percent=float(kwargs["emission_percent"]),
+                emission_percent=float(cast(float, kwargs["emission_percent"])),
                 weights={"hk": 2.0},
             )
 
@@ -699,7 +705,7 @@ def test_cli_k8s_server_commands_call_admin(
     assert calls[6] == ("DELETE", "/v1/admin/kubernetes-targets/k8s-a", None)
 
 
-def test_registry_client_with_asgi_transport() -> None:
+def test_registry_client_with_asgi_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -712,20 +718,16 @@ def test_registry_client_with_asgi_transport() -> None:
         )
 
     transport = httpx.MockTransport(handler)
-    original = httpx.AsyncClient
 
-    class Client(original):
+    class Client(httpx.AsyncClient):
         def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(transport=transport, base_url="http://x")
 
     async def run() -> None:
         import platform_network.validator.registry_client as module
 
-        module.httpx.AsyncClient = Client  # type: ignore[assignment]
-        try:
-            response = await RegistryClient("http://registry").fetch_registry()
-            assert response.challenges == []
-        finally:
-            module.httpx.AsyncClient = original  # type: ignore[assignment]
+        monkeypatch.setattr(module.httpx, "AsyncClient", Client)
+        response = await RegistryClient("http://registry").fetch_registry()
+        assert response.challenges == []
 
     asyncio.run(run())
