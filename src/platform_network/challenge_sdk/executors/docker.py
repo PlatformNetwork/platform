@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import re
 import subprocess
 import tarfile
@@ -48,6 +49,27 @@ class DockerLimits:
     user: str | None = None
     tmpfs: tuple[str, ...] = ("/tmp:rw,noexec,nosuid,size=512m",)
     ulimits: tuple[str, ...] = ("nofile=1024:1024",)
+    cap_drop: tuple[str, ...] = ("ALL",)
+    security_opt: tuple[str, ...] = ("no-new-privileges",)
+    init: bool = True
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.cpus) or self.cpus <= 0:
+            raise DockerExecutorError("Docker CPU limit must be positive and finite")
+        if not self.memory.strip():
+            raise DockerExecutorError("Docker memory limit cannot be empty")
+        if self.memory_swap is not None and not self.memory_swap.strip():
+            raise DockerExecutorError("Docker memory swap limit cannot be empty")
+        if self.pids_limit < 1:
+            raise DockerExecutorError("Docker PID limit must be at least 1")
+        if not self.cap_drop:
+            raise DockerExecutorError(
+                "Docker cap_drop must drop at least one capability"
+            )
+        if not self.security_opt:
+            raise DockerExecutorError(
+                "Docker security_opt must include at least one security option"
+            )
 
 
 @dataclass(frozen=True)
@@ -155,12 +177,13 @@ class DockerExecutor:
             limits.memory,
             "--pids-limit",
             str(limits.pids_limit),
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--init",
         ]
+        for capability in limits.cap_drop:
+            cmd.extend(["--cap-drop", capability])
+        for security_opt in limits.security_opt:
+            cmd.extend(["--security-opt", security_opt])
+        if limits.init:
+            cmd.append("--init")
         if limits.memory_swap:
             cmd.extend(["--memory-swap", limits.memory_swap])
         if limits.read_only:

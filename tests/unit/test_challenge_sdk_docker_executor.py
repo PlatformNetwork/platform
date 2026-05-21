@@ -4,6 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -34,6 +35,9 @@ def test_build_run_command_has_security_flags(tmp_path: Path) -> None:
 
     assert cmd[:3] == ["docker", "run", "--rm"]
     assert "--network" in cmd and "none" in cmd
+    assert "--cpus" in cmd and "1.5" in cmd
+    assert "--memory" in cmd and "512m" in cmd
+    assert "--pids-limit" in cmd and "64" in cmd
     assert "--cap-drop" in cmd and "ALL" in cmd
     assert "no-new-privileges" in cmd
     assert "--read-only" in cmd
@@ -48,6 +52,31 @@ def test_build_run_command_has_security_flags(tmp_path: Path) -> None:
         "bash",
         "/workspace/forge/evaluate.sh",
     ]
+
+
+def test_docker_limits_default_to_hardened_runtime_controls() -> None:
+    limits = DockerLimits(cpus=1, memory="512m", pids_limit=1)
+
+    assert limits.init is True
+    assert limits.read_only is True
+    assert limits.cap_drop == ("ALL",)
+    assert limits.security_opt == ("no-new-privileges",)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"cpus": 0},
+        {"memory": ""},
+        {"memory_swap": ""},
+        {"pids_limit": 0},
+        {"cap_drop": ()},
+        {"security_opt": ()},
+    ],
+)
+def test_docker_limits_reject_unsafe_values(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(DockerExecutorError):
+        DockerLimits(**kwargs)
 
 
 def test_reserved_labels_cannot_be_overridden(tmp_path: Path) -> None:
@@ -186,7 +215,7 @@ def test_broker_backend_posts_run_request(
     import platform_network.challenge_sdk.executors.docker as module
 
     (tmp_path / "input.txt").write_text("ok", encoding="utf-8")
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class Response:
         def __enter__(self):
@@ -232,8 +261,9 @@ def test_broker_backend_posts_run_request(
 
     assert result.returncode == 0
     assert captured["url"] == "http://broker/v1/docker/run"
-    assert captured["headers"]["Authorization"] == "Bearer tok"
-    payload = captured["payload"]
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["Authorization"] == "Bearer tok"
+    payload = cast(dict[str, Any], captured["payload"])
     assert payload["image"] == "python:3.12-slim"
     assert payload["mounts"][0]["target"] == "/mnt"
     assert payload["timeout_seconds"] == 20
@@ -242,7 +272,7 @@ def test_broker_backend_posts_run_request(
 def test_broker_backend_lists_containers(monkeypatch: pytest.MonkeyPatch) -> None:
     import platform_network.challenge_sdk.executors.docker as module
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class Response:
         def __enter__(self):
@@ -281,8 +311,46 @@ def test_broker_backend_lists_containers(monkeypatch: pytest.MonkeyPatch) -> Non
     ).list_containers("job-1")
 
     assert captured["url"] == "http://broker/v1/docker/list"
-    assert captured["payload"] == {"job_id": "job-1"}
+    assert cast(dict[str, Any], captured["payload"]) == {"job_id": "job-1"}
     assert containers[0].container_name == "agent-job"
+
+
+def test_broker_backend_cleanup_posts_job_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform_network.challenge_sdk.executors.docker as module
+
+    captured: dict[str, Any] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"status": "ok"}).encode()
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        captured["timeout"] = timeout
+        captured["url"] = request.full_url  # type: ignore[attr-defined]
+        captured["headers"] = dict(request.headers.items())  # type: ignore[attr-defined]
+        captured["payload"] = json.loads(request.data.decode())  # type: ignore[attr-defined]
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    DockerExecutor(
+        challenge="agent",
+        backend="broker",
+        broker_url="http://broker",
+        broker_token="tok",
+    ).cleanup_job("job-1")
+
+    assert captured["url"] == "http://broker/v1/docker/cleanup"
+    assert captured["headers"]["Authorization"] == "Bearer tok"
+    assert cast(dict[str, Any], captured["payload"]) == {"job_id": "job-1"}
+    assert captured["timeout"] == 30
 
 
 def test_template_executor_matches_shared_sdk() -> None:
