@@ -37,7 +37,7 @@ dev = [
   "types-PyYAML>=6.0"
 ]
 master = ["bittensor>=9", "kubernetes>=30"]
-validator = []
+validator = ["bittensor>=9", "kubernetes>=30"]
 
 [project.scripts]
 platform = "platform_network.cli:app"

@@ -1612,6 +1612,10 @@ master = [
     { name = "bittensor" },
     { name = "kubernetes" },
 ]
+validator = [
+    { name = "bittensor" },
+    { name = "kubernetes" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1620,10 +1624,12 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "bittensor", marker = "extra == 'bittensor'", specifier = ">=9" },
     { name = "bittensor", marker = "extra == 'master'", specifier = ">=9" },
+    { name = "bittensor", marker = "extra == 'validator'", specifier = ">=9" },
     { name = "docker", specifier = ">=7.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "kubernetes", marker = "extra == 'master'", specifier = ">=30" },
+    { name = "kubernetes", marker = "extra == 'validator'", specifier = ">=30" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "opentelemetry-api", specifier = ">=1.25" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.46b0" },
