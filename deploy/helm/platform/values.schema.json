@@ -36,6 +36,22 @@
       },
       "required": ["repository", "tag"]
     },
+    "images": {
+      "type": "object",
+      "properties": {
+        "master": { "$ref": "#/definitions/imageReference" },
+        "validator": { "$ref": "#/definitions/imageReference" },
+        "updater": { "$ref": "#/definitions/imageReference" }
+      }
+    },
+    "imageAutoUpdate": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "type": "string", "minLength": 1 },
+        "registryEndpoint": { "type": "string" }
+      }
+    },
     "network": {
       "type": "object",
       "properties": {
@@ -236,6 +252,21 @@
       "properties": {
         "enabled": { "type": "boolean" }
       }
+    }
+  },
+  "definitions": {
+    "imageReference": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "digest": {
+          "type": "string",
+          "pattern": "^(|sha256:[a-f0-9]{64})$"
+        },
+        "pullPolicy": { "type": "string" }
+      },
+      "required": ["repository", "tag"]
     }
   },
   "allOf": [

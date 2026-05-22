@@ -8,8 +8,30 @@ image:
   tag: latest
   digest: ""
   production: false
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   pullSecrets: []
+
+images:
+  master:
+    repository: ghcr.io/platformnetwork/platform-master
+    tag: latest
+    digest: ""
+    pullPolicy: Always
+  validator:
+    repository: ghcr.io/platformnetwork/platform
+    tag: latest
+    digest: ""
+    pullPolicy: Always
+  updater:
+    repository: ghcr.io/platformnetwork/platform
+    tag: latest
+    digest: ""
+    pullPolicy: Always
+
+imageAutoUpdate:
+  enabled: true
+  schedule: "*/1 * * * *"
+  registryEndpoint: ""
 
 runtime:
   backend: kubernetes

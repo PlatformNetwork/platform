@@ -18,18 +18,13 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- if or (not .Values.database.urlSecret.name) (not .Values.database.urlSecret.key) -}}
 {{- fail "production policy requires database.urlSecret.name and database.urlSecret.key" -}}
 {{- end -}}
-{{- if eq .Values.image.tag "latest" -}}
-{{- fail "production policy rejects image.tag=latest" -}}
+{{- if .Values.imageAutoUpdate.enabled -}}
+{{- fail "production policy rejects imageAutoUpdate.enabled=true" -}}
 {{- end -}}
-{{- if not (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" .Values.image.tag) -}}
-{{- fail "production policy requires a semver image.tag" -}}
-{{- end -}}
-{{- if not .Values.image.digest -}}
-{{- fail "production policy requires image.digest" -}}
-{{- end -}}
-{{- if not (regexMatch "^sha256:[0-9a-fA-F]{64}$" .Values.image.digest) -}}
-{{- fail "production policy requires image.digest to be sha256" -}}
-{{- end -}}
+{{- include "platform.validateImagePolicy" (dict "image" .Values.image "name" "image") -}}
+{{- include "platform.validateImagePolicy" (dict "image" .Values.images.master "name" "images.master") -}}
+{{- include "platform.validateImagePolicy" (dict "image" .Values.images.validator "name" "images.validator") -}}
+{{- include "platform.validateImagePolicy" (dict "image" .Values.images.updater "name" "images.updater") -}}
 {{- range .Values.kubernetesTargets.targets -}}
 {{- if and (hasKey . "verify_tls") (not .verify_tls) -}}
 {{- fail (printf "production policy requires verify_tls=true for Kubernetes target %s" .id) -}}
@@ -41,12 +36,41 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- end -}}
 
+{{- define "platform.validateImagePolicy" -}}
+{{- if eq .image.tag "latest" -}}
+{{- fail (printf "production policy rejects %s.tag=latest" .name) -}}
+{{- end -}}
+{{- if not (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" .image.tag) -}}
+{{- fail (printf "production policy requires a semver %s.tag" .name) -}}
+{{- end -}}
+{{- if not .image.digest -}}
+{{- fail (printf "production policy requires %s.digest" .name) -}}
+{{- end -}}
+{{- if not (regexMatch "^sha256:[0-9a-fA-F]{64}$" .image.digest) -}}
+{{- fail (printf "production policy requires %s.digest to be sha256" .name) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "platform.image" -}}
 {{- if .Values.image.digest -}}
 {{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}
 {{- else -}}
 {{ .Values.image.repository }}:{{ .Values.image.tag }}
 {{- end -}}
+{{- end -}}
+
+{{- define "platform.imageValue" -}}
+{{- $image := .image -}}
+{{- if $image.digest -}}
+{{ $image.repository }}:{{ $image.tag }}@{{ $image.digest }}
+{{- else -}}
+{{ $image.repository }}:{{ $image.tag }}
+{{- end -}}
+{{- end -}}
+
+{{- define "platform.mutableImageValue" -}}
+{{- $image := .image -}}
+{{ $image.repository }}:{{ $image.tag }}
 {{- end -}}
 
 {{- define "platform.podSecurityContext" -}}
