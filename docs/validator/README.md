@@ -1,247 +1,135 @@
-# Validator Guide
+# Validator Kubernetes Installation Guide
 
-## Purpose
+This guide is only for normal validators. It installs a validator as Kubernetes
+resources that synchronize challenge metadata from the public Platform registry
+and start challenge workloads through the Kubernetes API.
 
-Platform validators operate the multi-challenge subnet. They synchronize the active challenge
-registry, run challenge containers, collect raw challenge weights, normalize emissions, map hotkeys
-to Bittensor UIDs, and submit final weights at epoch boundaries.
+The default registry endpoint is:
 
-## Validator Roles
+```text
+https://chain.platform.network/v1/registry
+```
 
-### Master Validator
+## Secret Rule
 
-The master owns:
+The installer asks for one secret only: the validator hotkey mnemonic. Never enter
+coldkey material into the installer, shell history, logs, screenshots, support
+channels, or evidence files. The mnemonic is read with silent input, converted into
+hotkey files in a temporary local directory, stored as a Kubernetes Secret, and the
+temporary directory is deleted automatically.
 
-- challenge registry and emission configuration;
-- challenge lifecycle orchestration;
-- private database state;
-- public challenge proxy;
-- raw weight collection;
-- final Bittensor weight submission.
+## Automatic Kubernetes Install
 
-### Normal Validator
-
-Normal validators synchronize with the registry and run active challenge containers locally. They
-keep challenge services available and follow registry updates from the master.
-
-## Master Operations
-
-Run the private master process:
+Run from the repository root:
 
 ```bash
-uv run platform master run --config config/master.example.yaml
+./scripts/install-validator.sh
 ```
 
-Run the public proxy process:
+The script performs these actions:
+
+1. Deletes only prior installer-managed validator objects in the selected namespace.
+2. Applies Namespace, ServiceAccount, Role, RoleBinding, PVC, ConfigMap, and Deployment.
+3. Prompts silently for the validator hotkey mnemonic.
+4. Creates the `platform-validator-wallet` Kubernetes Secret from generated hotkey files.
+5. Starts the validator Deployment in Kubernetes mode.
+
+Useful options:
 
 ```bash
-uv run platform master proxy --config config/master.example.yaml
+./scripts/install-validator.sh --dry-run
+./scripts/install-validator.sh --skip-hotkey-import
+./scripts/install-validator.sh --namespace platform-validator
+./scripts/install-validator.sh --image ghcr.io/platformnetwork/platform:v1.2.3@sha256:<digest>
+./scripts/install-validator.sh --database-url postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
+./scripts/install-validator.sh --broker-allowed-images ghcr.io/platformnetwork/,registry.example.com/platform/
+./scripts/install-validator.sh --registry-url https://chain.platform.network
+./scripts/install-validator.sh --netuid 0
+./scripts/install-validator.sh --wallet-name platform-validator --wallet-hotkey validator
+./scripts/install-validator.sh --cleanup
 ```
 
-The master process handles registry state, challenge orchestration, and final weight logic. The
-proxy process exposes public challenge traffic while blocking internal challenge routes.
+`--cleanup` is scoped to objects created by this installer:
 
-## Normal Validator Operations
+```text
+deployment/platform-validator
+configmap/platform-validator-config
+secret/platform-validator-wallet
+role/platform-validator-runtime
+rolebinding/platform-validator-runtime
+serviceaccount/platform-validator
+```
 
-Run a normal validator:
+It does not run broad cluster cleanup commands and it does not delete unrelated
+workloads.
+
+## Manual Kubernetes Installation
+
+If you do not use the script, reproduce the same flow manually:
+
+1. Create a namespace for the validator.
+2. Create a ServiceAccount plus a namespaced Role/RoleBinding that can manage
+   Secrets, Services, Pods/logs, PVCs, Deployments, StatefulSets, Jobs, HPAs, and
+   NetworkPolicies in that namespace.
+3. Create a ConfigMap containing `validator.yaml`. Kubernetes mode enables the production policy gate, so `database.url` must be an external PostgreSQL URL and `docker.broker_allowed_images` must use registry-scoped prefixes, not broad Docker Hub or wildcard prefixes.
+
+```yaml
+runtime:
+  backend: kubernetes
+database:
+  url: postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
+validator:
+  registry_url: https://chain.platform.network
+docker:
+  broker_allowed_images:
+    - ghcr.io/platformnetwork/
+    - registry.example.com/platform/
+kubernetes:
+  in_cluster: true
+  broker_backend: kubernetes
+  namespace: platform-validator
+  service_account: platform-validator
+network:
+  wallet_name: platform-validator
+  wallet_hotkey: validator
+  wallet_path: /var/lib/platform/wallets
+```
+
+4. Regenerate only the validator hotkey from its mnemonic on a local trusted
+   machine and create a Kubernetes Secret containing the generated hotkey files.
+   The Secret is readable by cluster admins and any subject with Secret read RBAC
+   unless the cluster is locked down with dedicated namespaces, minimal RBAC, and
+   Secret encryption at rest.
+5. Create a Deployment that runs:
+
+```text
+platform validator run --config config/validator.kubernetes.yaml
+```
+
+Mount the ConfigMap at `/app/config/validator.kubernetes.yaml`, mount validator
+state at `/var/lib/platform`, and mount the hotkey Secret at:
+
+```text
+/var/lib/platform/wallets/platform-validator/hotkeys
+```
+
+## Runtime Checks
 
 ```bash
-uv run platform validator run --config config/validator.example.yaml
+kubectl -n platform-validator get pods
+kubectl -n platform-validator logs -f deployment/platform-validator
+kubectl -n platform-validator describe deployment platform-validator
 ```
-
-Normal validators fetch the active registry with `GET https://chain.platform.network/v1/registry`,
-pull configured challenge images, run containers, and retry if registry access is temporarily
-unavailable.
-
-## Challenge Management
-
-Create a new challenge repository from the template:
-
-```bash
-uv run platform challenge create demo --out ../demo
-```
-
-Register and operate a challenge locally while iterating:
-
-```bash
-uv run platform challenge register demo ghcr.io/org/demo:latest 10
-uv run platform challenge activate demo
-uv run platform challenge pull demo
-uv run platform challenge restart demo
-```
-
-Run database migrations:
-
-```bash
-uv run platform db migrate
-```
-
-## Challenge Contract
-
-Every challenge must provide health, version, and protected weight endpoints:
-
-```http
-GET /health
-GET /version
-GET /internal/v1/get_weights
-```
-
-Platform calls the protected weight endpoint with the shared challenge token and challenge slug
-header. Public miner routes are proxied under the challenge slug, while internal and health routes
-are blocked from public proxy access.
-
-Example weight response:
-
-```json
-{
-  "challenge_slug": "demo",
-  "epoch": 1760000000,
-  "weights": {
-    "5Abc...": 1.0
-  }
-}
-```
-
-## Weight Lifecycle
-
-1. Each active challenge computes raw hotkey weights.
-2. Platform requests weights from each challenge.
-3. Platform ignores failed challenge responses for that epoch.
-4. Platform applies each challenge's configured emission share.
-5. Platform normalizes hotkey scores.
-6. Platform maps hotkeys to Bittensor UIDs.
-7. Platform submits final weights on-chain.
-
-## Configuration Areas
-
-Validators should review:
-
-- Bittensor endpoint and subnet UID;
-- validator hotkey or secret key;
-- master database URL;
-- public proxy URL;
-- Docker and broker settings;
-- challenge image registry access;
-- per-challenge shared tokens;
-- emission allocations;
-- logging and telemetry settings.
-
-
-## Database, Image, and TLS Policy
-
-Platform intentionally keeps local workflows usable while enforcing stricter production rules:
-
-- Dev, test, and local validator workflows may use SQLite for master state and may register local, mutable, or `latest` challenge images during iteration.
-- Production and Kubernetes deployments must use an external PostgreSQL database secret or URL. SQLite is not a production or Kubernetes database.
-- Production challenge and control-plane images must include a semver tag plus a `sha256` digest, such as `ghcr.io/platformnetwork/demo:1.2.3@sha256:<64-hex-digest>`. Production rejects `latest`, untagged images, and missing digests.
-- Production Docker image allowlists must be registry and namespace scoped. Broad prefixes are development-only.
-- Production remote GPU servers and Kubernetes targets must use `verify_tls=true`; `verify_tls=false` is only for local or test-only targets.
-- Production Kubernetes agent targets must use HTTPS plus `verify_tls=true`. Target routing should reuse persisted assignments only for enabled, healthy, non-draining targets with remaining GPU capacity.
 
 ## Validation Commands
 
-Run project validators before releases from the repository root:
+Before changing the installer or docs, run:
 
 ```bash
-uv sync --extra dev --extra master
+bash -n scripts/install-validator.sh
+./scripts/install-validator.sh --dry-run --skip-hotkey-import
+uv run pytest tests/unit/test_validator_install_docs.py
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
-uv run pytest --cov=platform_network --cov-report=term-missing --cov-fail-under=80
 ```
-
-Current Task 12 evidence records the commands above as passing without changing the gates: Ruff check, Ruff format check, mypy, and full coverage. Historical Task 11 evidence recorded Ruff format and mypy blockers, but those blockers are resolved in the current validation state. Keep the commands above unchanged so CI and local evidence use the same gates.
-
-If Docker configuration changes, also validate Compose output:
-
-```bash
-docker compose -f docker/compose.yml config --quiet
-docker compose -f docker/compose.dev.yml config --quiet
-docker compose -f docker/compose.yml -f docker/compose.watchtower.yml config --quiet
-```
-
-If Kubernetes or production policy changes, validate Helm and Kubernetes manifests:
-
-```bash
-helm lint deploy/helm/platform
-helm template platform deploy/helm/platform > /tmp/platform-default.yaml
-kubeconform -strict -summary /tmp/platform-default.yaml
-helm template platform deploy/helm/platform -f deploy/helm/platform/values.production.example.yaml > /tmp/platform-production.yaml
-kubeconform -strict -summary /tmp/platform-production.yaml
-kind delete cluster --name platform-validation
-kind create cluster --name platform-validation
-kind get kubeconfig --name platform-validation > /tmp/platform-validation-kubeconfig
-KUBECONFIG=/tmp/platform-validation-kubeconfig kubectl apply --dry-run=server -f /tmp/platform-default.yaml
-KUBECONFIG=/tmp/platform-validation-kubeconfig kubectl apply --dry-run=server -f /tmp/platform-production.yaml
-kind delete cluster --name platform-validation
-```
-
-Clean up local Compose validation resources with:
-
-```bash
-docker compose -f docker/compose.yml -f docker/compose.watchtower.yml down --remove-orphans
-```
-
-## Local and Staging Watchtower Policy
-
-The Watchtower Compose overlay is for local and staging Docker Compose deployments only. It is not part of the production Kubernetes deployment path, and production Kubernetes must use Kubernetes image rollout and rollback controls instead.
-
-Watchtower uses the maintained `nickfedor/watchtower:1.17.1` image for Docker 29 API compatibility and is configured with `--label-enable`. Only these Platform control-plane services are opted in with `com.centurylinklabs.watchtower.enable=true`:
-
-- `master-admin`
-- `master-proxy`
-- `platform-docker-broker`
-- `validator`
-- `gpu-agent`
-
-Do not add Watchtower labels to challenge containers, broker-created job containers, database services, or Kubernetes manifests. Challenge and job images remain controlled by the registry, broker, and validator lifecycle rather than background image replacement.
-
-When enabling the overlay, operators should monitor the `master-admin`, `master-proxy`, and `platform-docker-broker` health endpoints and confirm validators reconnect after an update. Keep an explicit rollback image tag available. Watchtower can replace containers, but it doesn't prove application health or perform production rollback orchestration.
-
-Run the local or staging overlay with:
-
-```bash
-docker compose -f docker/compose.yml -f docker/compose.watchtower.yml up -d
-```
-
-## Docker and Kubernetes Runtime Boundaries
-
-Local Compose services that mount `/var/run/docker.sock` can control the host Docker daemon. Treat that as root-equivalent host access. These socket mounts support local Docker orchestration and Watchtower checks; they are not a production isolation boundary, and broker-created jobs must not receive the socket.
-
-Kubernetes challenge workloads reject Docker-only `pids_limit`, `memory_swap`, and custom Docker network modes. Kubernetes PID and swap ceilings must come from cluster configuration or admission policy, not from this PodSpec path.
-
-
-## Broker Archive and Cleanup Security
-
-Broker uploads are untrusted. Docker and Kubernetes broker paths reject archive traversal, absolute paths, links, device members, malformed images, and unsafe mounts before runtime resources are created. Kubernetes broker runs should attempt cleanup of the Job, NetworkPolicy, and mount Secret across success and failure paths. Evidence should show those checks without storing archive payloads or credentials.
-
-## Operational Checklist
-
-Before running a validator:
-
-1. Configure secrets and never commit them.
-2. Verify database connectivity.
-3. Verify Docker access.
-4. Pull or build challenge images.
-5. Confirm challenge health and version responses.
-6. Confirm protected weight calls work with the shared token.
-7. Confirm hotkeys map to Bittensor UIDs.
-8. Monitor epoch timing and weight submission logs.
-
-During operation:
-
-- keep challenge images updated with registry changes;
-- watch for failing challenge containers;
-- rotate tokens if exposed;
-- back up master database state;
-- monitor Bittensor submission failures;
-- keep challenge emission shares aligned with owner intent.
-
-## Security Checklist
-
-- Keep master database private.
-- Keep challenge shared tokens private.
-- Block public access to internal challenge routes.
-- Run challenge containers with isolated state and resource limits.
-- Avoid logging bearer tokens, hotkey secrets, or broker tokens.
-- Treat challenge code as untrusted unless it is reviewed and pinned.

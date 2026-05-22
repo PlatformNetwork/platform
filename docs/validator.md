@@ -1,52 +1,56 @@
-# Validator Guide
+# Validator Quick Start
 
-![Platform Banner](../assets/banner.jpg)
+This page is only for normal validator Kubernetes installation. The validator
+fetches the public registry from `https://chain.platform.network/v1/registry`,
+runs active challenge workloads through Kubernetes, and keeps them synchronized.
 
-## Master Mode
+## Automatic Install
 
-```bash
-uv run platform master run --config config/master.example.yaml
-uv run platform master proxy --config config/master.example.yaml
-```
-
-The master exposes:
-
-- private admin and registry API
-- public challenge proxy API
-- Docker orchestration for active local challenges
-- weight aggregation and Bittensor wrappers
-
-## Normal Validator Mode
+Run from the repository root:
 
 ```bash
-uv run platform validator run --config config/validator.example.yaml
+./scripts/install-validator.sh
 ```
 
-A normal validator fetches active challenges with `GET https://chain.platform.network/v1/registry` and launches them locally.
+The installer asks only for the validator hotkey mnemonic. Do not enter coldkey
+material. The mnemonic is read silently, converted to hotkey files in a temporary
+local directory, and stored as a Kubernetes Secret.
 
-## CLI
-
-Local development may register mutable images while iterating. Production must use semver-tagged images pinned with `sha256` digests and must not use `latest`.
+Dry-run the Kubernetes objects first:
 
 ```bash
-uv run platform challenge create demo --out ../demo
-uv run platform challenge register demo ghcr.io/org/demo:latest 10
-uv run platform challenge activate demo
-uv run platform challenge pull demo
-uv run platform challenge restart demo
-uv run platform db migrate
+./scripts/install-validator.sh --dry-run --skip-hotkey-import
 ```
 
-## Production Policy
+Follow the validator:
 
-Dev, test, and local runs may use SQLite and local mutable images. Production and Kubernetes deployments require an external PostgreSQL secret or URL, reject SQLite, reject production `latest` or untagged images, require semver plus `sha256` digest image references, and require `verify_tls=true` for production remote GPU or Kubernetes targets.
+```bash
+kubectl -n platform-validator logs -f deployment/platform-validator
+```
 
-Production Kubernetes agent targets must use HTTPS plus `verify_tls=true`. Multi-server target routing should trust only enabled, healthy, non-draining targets with available GPU capacity. Kubernetes rejects Docker-only PID and swap settings because enforceable PID or swap ceilings belong to cluster or admission policy.
+Stop only installer-managed validator objects:
 
-Watchtower is a local and staging Compose overlay only and uses `nickfedor/watchtower:1.17.1` for Docker 29 API compatibility. Do not add Watchtower labels to challenges, broker-created jobs, databases, or Kubernetes manifests. Local Compose services that mount `/var/run/docker.sock` have root-equivalent host Docker daemon access and should not be treated as production isolation.
+```bash
+./scripts/install-validator.sh --cleanup
+```
 
-Broker archives are untrusted input. Docker and Kubernetes broker paths reject traversal, absolute paths, links, device members, malformed images, and unsafe mounts before runtime resources are created. Kubernetes broker cleanup should attempt to delete the Job, NetworkPolicy, and mount Secret across success and failure paths.
+## Manual Install
 
-## Validation
+Create equivalent Kubernetes resources manually: namespace, service account,
+namespaced runtime RBAC, state PVC, validator ConfigMap, hotkey Secret, and a
+Deployment that runs:
 
-The full operations runbook is in [Validator Operations](operations/validator.md). It includes the exact `uv`, Docker Compose, Helm, kubeconform, kind, kubectl server dry-run, and cleanup commands used for local validation. Current Task 12 evidence records Ruff check, Ruff format check, mypy, and full coverage passing; the earlier Task 11 Ruff format and mypy blockers are historical and resolved.
+```text
+platform validator run --config config/validator.kubernetes.yaml
+```
+
+The ConfigMap must set `runtime.backend: kubernetes`,
+`validator.registry_url: https://chain.platform.network`, `database.url` to an external PostgreSQL URL such as `postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform`, `docker.broker_allowed_images` to registry-scoped prefixes such as `ghcr.io/platformnetwork/`, and `kubernetes.in_cluster: true`. SQLite URLs, wildcard prefixes, and broad prefixes such as `platformnetwork/` are rejected in Kubernetes mode.
+
+## Safety
+
+- The installer never needs coldkey material.
+- Cleanup is scoped to this validator Deployment and its installer-managed objects.
+- The default registry URL is `https://chain.platform.network`.
+- The validator runs in Kubernetes mode; do not install it with local Compose.
+- The hotkey Secret is readable by cluster admins and any subject with Secret read RBAC; use a dedicated namespace and enable Kubernetes Secret encryption at rest.
