@@ -1,0 +1,83 @@
+{{- if .Values.imageAutoUpdate.enabled }}
+{{- $root := . }}
+{{- $targets := list
+  (dict "name" "admin" "kind" "deployment" "resource" (printf "%s-admin" (include "platform.fullname" .)) "container" "admin" "image" .Values.images.master)
+  (dict "name" "proxy" "kind" "deployment" "resource" (printf "%s-proxy" (include "platform.fullname" .)) "container" "proxy" "image" .Values.images.master)
+}}
+{{- if .Values.broker.enabled }}
+{{- $targets = append $targets (dict "name" "broker" "kind" "deployment" "resource" (printf "%s-broker" (include "platform.fullname" .)) "container" "broker" "image" .Values.images.master) }}
+{{- end }}
+{{- if .Values.weights.enabled }}
+{{- $targets = append $targets (dict "name" "weights" "kind" "cronjob" "resource" (printf "%s-weights" (include "platform.fullname" .)) "container" "weights" "image" .Values.images.master) }}
+{{- end }}
+{{- if .Values.validator.enabled }}
+{{- $targets = append $targets (dict "name" "validator" "kind" "deployment" "resource" (printf "%s-validator" (include "platform.fullname" .)) "container" "validator" "image" .Values.images.validator) }}
+{{- end }}
+{{- range $index, $target := $targets }}
+{{- if gt $index 0 }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "platform.fullname" $root }}-{{ $target.name }}-image-updater
+  labels:
+    {{- include "platform.labels" $root | nindent 4 }}
+    platform.component: "image-updater"
+    platform.update-target: {{ $target.name | quote }}
+spec:
+  schedule: {{ $root.Values.imageAutoUpdate.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "platform.labels" $root | nindent 12 }}
+            platform.component: "image-updater"
+            platform.update-target: {{ $target.name | quote }}
+        spec:
+          serviceAccountName: {{ include "platform.fullname" $root }}-image-updater
+          automountServiceAccountToken: true
+          {{- with $root.Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- include "platform.podSecurityContext" $root | nindent 12 }}
+          containers:
+            - name: image-updater
+              image: {{ include "platform.imageValue" (dict "image" $root.Values.images.updater) | quote }}
+              imagePullPolicy: {{ default $root.Values.image.pullPolicy $root.Values.images.updater.pullPolicy }}
+              command:
+                - platform
+                - validator
+                - refresh-image
+                - --namespace
+                - {{ $root.Release.Namespace }}
+                - --resource-kind
+                - {{ $target.kind }}
+                - --name
+                - {{ $target.resource }}
+                - --container
+                - {{ $target.container }}
+                - --image
+                - {{ include "platform.mutableImageValue" (dict "image" $target.image) }}
+                - --registry-endpoint
+                - {{ $root.Values.imageAutoUpdate.registryEndpoint | quote }}
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                {{- include "platform.containerSecurityContext" $root | nindent 16 }}
+{{- end }}
+{{- end }}
