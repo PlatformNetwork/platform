@@ -4,10 +4,11 @@ network:
   chain_endpoint: null
   wallet_name: default
   wallet_hotkey: default
+  wallet_path: null
   master_uid: 0
 
 validator:
-  registry_url: https://rpc.platform.network
+  registry_url: https://chain.platform.network
   registry_retry_seconds: 15
 
 docker:

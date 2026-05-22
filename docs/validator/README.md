@@ -49,8 +49,9 @@ Run a normal validator:
 uv run platform validator run --config config/validator.example.yaml
 ```
 
-Normal validators fetch the active registry, pull configured challenge images, run containers, and
-retry if registry access is temporarily unavailable.
+Normal validators fetch the active registry with `GET https://chain.platform.network/v1/registry`,
+pull configured challenge images, run containers, and retry if registry access is temporarily
+unavailable.
 
 ## Challenge Management
 

@@ -22,7 +22,7 @@ The master exposes:
 uv run platform validator run --config config/validator.example.yaml
 ```
 
-A normal validator fetches active challenges from `rpc.platform.network/v1/registry` and launches them locally.
+A normal validator fetches active challenges with `GET https://chain.platform.network/v1/registry` and launches them locally.
 
 ## CLI
 

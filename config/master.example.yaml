@@ -4,10 +4,11 @@ network:
   chain_endpoint: null
   wallet_name: default
   wallet_hotkey: default
+  wallet_path: null
   master_uid: 0
 
 master:
-  registry_url: https://rpc.platform.network
+  registry_url: https://chain.platform.network
   admin_host: 0.0.0.0
   admin_port: 8080
   proxy_host: 0.0.0.0
