@@ -72,6 +72,7 @@ class Challenge(Base, TimestampMixin):
             ChallengeStatus,
             name="challenge_status",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         nullable=False,
         default=ChallengeStatus.DRAFT,

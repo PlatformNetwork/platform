@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +27,8 @@ from platform_network.db import (
     session_scope,
 )
 from platform_network.schemas.health import HealthResponse, VersionResponse
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
 def test_db_models_construct_and_metadata() -> None:
@@ -61,6 +65,38 @@ def test_db_models_construct_and_metadata() -> None:
     assert Base.metadata.tables["challenges"].name == "challenges"
     assert HealthResponse(slug="demo", version="1").status == "ok"
     assert "get_weights" in VersionResponse(challenge_version="1").capabilities
+
+
+def test_challenge_status_orm_enum_matches_migration_metadata() -> None:
+    status_column = Challenge.__table__.c.status
+
+    assert status_column.type.name == "challenge_status"
+    assert status_column.type.native_enum is False
+    assert status_column.type.enums == [status.value for status in ChallengeStatus]
+
+
+def test_challenge_status_migration_literals_match_model_enum() -> None:
+    migration_path = ROOT_DIR / "alembic/versions/0001_create_challenge_registry.py"
+    migration_ast = ast.parse(migration_path.read_text(encoding="utf-8"))
+
+    enum_call = None
+    for node in migration_ast.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "challenge_status"
+            for target in node.targets
+        ):
+            continue
+        enum_call = node.value
+        break
+
+    assert isinstance(enum_call, ast.Call)
+    assert isinstance(enum_call.func, ast.Attribute)
+    assert enum_call.func.attr == "Enum"
+    assert [arg.value for arg in enum_call.args if isinstance(arg, ast.Constant)] == [
+        status.value for status in ChallengeStatus
+    ]
 
 
 def test_session_helpers_and_scope(monkeypatch: pytest.MonkeyPatch) -> None:
