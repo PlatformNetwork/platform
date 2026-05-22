@@ -101,6 +101,37 @@ def test_challenge_resources_include_secrets_gpu_and_pull_secrets() -> None:
     )
 
 
+def test_kubernetes_resources_normalize_docker_memory_suffixes() -> None:
+    challenge = build_challenge_workload(
+        ChallengeSpec(
+            slug="demo",
+            image="ghcr.io/org/demo:1",
+            resources=ChallengeResources(memory="4g"),
+        ),
+        namespace="platform",
+    )
+    challenge_container = challenge["spec"]["template"]["spec"]["containers"][0]
+    assert challenge_container["resources"]["requests"]["memory"] == "4Gi"
+
+    broker = build_broker_job(
+        "demo",
+        BrokerRunRequest(
+            job_id="job-1",
+            image="ghcr.io/platformnetwork/worker:1",
+            command=["python", "-V"],
+            limits=BrokerLimits(memory="512m"),
+        ),
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+    broker_container = broker["spec"]["template"]["spec"]["containers"][0]
+    assert broker_container["resources"]["requests"]["memory"] == "512Mi"
+    assert broker["spec"]["template"]["spec"]["volumes"][0]["emptyDir"] == {
+        "medium": "Memory",
+        "sizeLimit": "512Mi",
+    }
+
+
 def test_production_challenge_workload_requires_digest_image_and_postgres() -> None:
     spec = ChallengeSpec(
         slug="demo",

@@ -275,9 +275,10 @@ def build_broker_job(
     if run_id:
         labels["platform.run"] = run_id
     validate_broker_kubernetes_limits(request.limits)
+    memory = _memory_quantity(request.limits.memory)
     resources = {
-        "requests": {"cpu": str(request.limits.cpus), "memory": request.limits.memory},
-        "limits": {"cpu": str(request.limits.cpus), "memory": request.limits.memory},
+        "requests": {"cpu": str(request.limits.cpus), "memory": memory},
+        "limits": {"cpu": str(request.limits.cpus), "memory": memory},
     }
     volumes = _broker_volumes(name, request)
     volume_mounts = _broker_volume_mounts(request)
@@ -490,7 +491,7 @@ def _tmpfs_size(value: str) -> str | None:
     for option in value.split(":")[1:]:
         for part in option.split(","):
             if part.startswith("size="):
-                return part.removeprefix("size=")
+                return _memory_quantity(part.removeprefix("size="))
     return None
 
 
@@ -628,6 +629,15 @@ def _unsupported_docker_semantics_annotations() -> dict[str, str]:
     }
 
 
+def _memory_quantity(value: str) -> str:
+    stripped = value.strip()
+    suffixes = {"g": "Gi", "m": "Mi", "k": "Ki"}
+    suffix = stripped[-1:]
+    if suffix in suffixes and stripped[:-1]:
+        return f"{stripped[:-1]}{suffixes[suffix]}"
+    return stripped
+
+
 def _challenge_resources(spec: ChallengeSpec, gpu_resource_name: str) -> dict[str, Any]:
     requests: dict[str, str] = {}
     limits: dict[str, str] = {}
@@ -635,8 +645,9 @@ def _challenge_resources(spec: ChallengeSpec, gpu_resource_name: str) -> dict[st
         requests["cpu"] = str(spec.resources.cpu)
         limits["cpu"] = str(spec.resources.cpu)
     if spec.resources.memory is not None:
-        requests["memory"] = spec.resources.memory
-        limits["memory"] = spec.resources.memory
+        memory = _memory_quantity(spec.resources.memory)
+        requests["memory"] = memory
+        limits["memory"] = memory
     if spec.resources.gpu_count is not None and spec.resources.gpu_count > 0:
         limits[gpu_resource_name] = str(spec.resources.gpu_count)
     return {"requests": requests, "limits": limits}
