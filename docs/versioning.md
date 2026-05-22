@@ -12,7 +12,7 @@ Update these files together for every Platform release:
 - `deploy/helm/platform/values.production.example.yaml`: production image tag and digest fixture.
 - `.github/workflows/ci.yml`: GHCR tag policy.
 
-For the `3.0.0` release, the Python package version, Helm chart `version`, and Helm `appVersion` are all `3.0.0`. The Git release tag is `v3.0.0`.
+For the `3.0.1` release, the Python package version, Helm chart `version`, and Helm `appVersion` are all `3.0.1`. The Git release tag is `v3.0.1`.
 
 ## SemVer Rules
 
@@ -24,7 +24,7 @@ For the `3.0.0` release, the Python package version, Helm chart `version`, and H
 
 ## GitHub And GHCR Tags
 
-Use Git tags with a leading `v`, such as `v3.0.0`, for release events. The GitHub Actions metadata policy publishes canonical GHCR image tags from the tag event using:
+Use Git tags with a leading `v`, such as `v3.0.1`, for release events. The GitHub Actions metadata policy publishes canonical GHCR image tags from the tag event using:
 
 ```text
 type=semver,pattern={{version}}
@@ -32,7 +32,7 @@ type=semver,pattern={{raw}}
 type=sha,prefix=sha-
 ```
 
-This means a `v3.0.0` Git tag publishes both the canonical `3.0.0` image tag and the compatibility `v3.0.0` tag, plus a traceable `sha-<commit>` tag. The `latest` tag is published only from `main` and is a mutable development/staging channel.
+This means a `v3.0.1` Git tag publishes both the canonical `3.0.1` image tag and the compatibility `v3.0.1` tag, plus a traceable `sha-<commit>` tag. The `latest` tag is published only from `main` and is a mutable development/staging channel.
 
 Pull requests build Docker images with `push: false`. GHCR publication happens only from trusted events: `main`, `v*.*.*` tags, or a manual `workflow_dispatch` where `confirm_publish` is set to `true`.
 
@@ -49,7 +49,7 @@ Tags containing a hyphen, such as `v3.1.0-rc.1`, are marked as prereleases. Stab
 Production and Kubernetes deployment references must use a SemVer image tag plus a digest:
 
 ```text
-ghcr.io/platformnetwork/platform:3.0.0@sha256:<64-hex-digest>
+ghcr.io/platformnetwork/platform:3.0.1@sha256:<64-hex-digest>
 ```
 
 The digest is the immutable deployment selector. The tag provides human-readable release context. Production policy rejects `latest`, untagged image references, missing digests, and non-SemVer tags.
