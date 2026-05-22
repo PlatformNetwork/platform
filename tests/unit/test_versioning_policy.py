@@ -6,8 +6,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "3.0.2"
-GIT_RELEASE_TAG = "v3.0.2"
+VERSION = "3.0.3"
+GIT_RELEASE_TAG = "v3.0.3"
 PRODUCTION_DIGEST = "sha256:" + "1" * 64
 
 
@@ -27,7 +27,7 @@ def test_platform_release_version_sources_are_3_0_0() -> None:
     assert pyproject["project"]["version"] == VERSION
     assert chart["version"] == VERSION
     assert chart["appVersion"] == VERSION
-    assert 'name = "platform-network"\nversion = "3.0.2"' in lock
+    assert 'name = "platform-network"\nversion = "3.0.3"' in lock
 
 
 def test_production_values_start_at_platform_3_0_0() -> None:
@@ -47,7 +47,7 @@ def test_versioning_policy_documents_release_contract() -> None:
     policy = (ROOT / "docs" / "versioning.md").read_text(encoding="utf-8")
 
     required = [
-        "3.0.2",
+        "3.0.3",
         GIT_RELEASE_TAG,
         "Semantic Versioning",
         "pyproject.toml",

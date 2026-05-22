@@ -1571,7 +1571,7 @@ wheels = [
 
 [[package]]
 name = "platform-network"
-version = "3.0.2"
+version = "3.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

@@ -1,6 +1,6 @@
 [project]
 name = "platform-network"
-version = "3.0.2"
+version = "3.0.3"
 description = "Multi-challenge Bittensor subnet validator platform"
 requires-python = ">=3.12"
 dependencies = [

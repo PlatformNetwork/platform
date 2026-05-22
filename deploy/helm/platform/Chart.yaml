@@ -2,5 +2,5 @@ apiVersion: v2
 name: platform
 description: Platform Network Kubernetes deployment
 type: application
-version: 3.0.2
-appVersion: "3.0.2"
+version: 3.0.3
+appVersion: "3.0.3"
