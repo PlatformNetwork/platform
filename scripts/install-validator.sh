@@ -5,6 +5,8 @@ umask 077
 APP="platform-validator"
 NAMESPACE="${PLATFORM_NAMESPACE:-platform-validator}"
 IMAGE="${PLATFORM_IMAGE:-ghcr.io/platformnetwork/platform:latest}"
+AUTO_UPDATE_SCHEDULE="${PLATFORM_VALIDATOR_AUTO_UPDATE_SCHEDULE:-*/5 * * * *}"
+AUTO_UPDATE_IMAGE="${PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE:-registry.k8s.io/kubectl@sha256:99b37df34bc4f99ee322521d4c85cb98c1ceb8f70ff0618bef84eec9fe1ebc20}"
 REGISTRY_URL="${PLATFORM_VALIDATOR_REGISTRY_URL:-https://chain.platform.network}"
 NETUID="${PLATFORM_NETUID:-0}"
 CHAIN_ENDPOINT="${PLATFORM_CHAIN_ENDPOINT:-}"
@@ -28,6 +30,8 @@ Options:
   --cleanup                  Delete this installer-managed validator deployment and exit.
   --namespace NAME           Kubernetes namespace. Default: platform-validator
   --image IMAGE              Platform validator image. Default: ghcr.io/platformnetwork/platform:latest
+  --auto-update-schedule S   Cron schedule for validator image restarts. Default: */5 * * * *
+  --auto-update-image IMAGE  kubectl image used by the updater CronJob. Default: registry.k8s.io/kubectl@sha256:99b37df34bc4f99ee322521d4c85cb98c1ceb8f70ff0618bef84eec9fe1ebc20
   --registry-url URL         Registry API URL. Default: https://chain.platform.network
   --netuid NETUID            Bittensor subnet UID. Default: 0
   --chain-endpoint ENDPOINT  Optional Bittensor chain endpoint.
@@ -45,6 +49,8 @@ while [ "$#" -gt 0 ]; do
     --cleanup) CLEANUP_ONLY=1 ;;
     --namespace) NAMESPACE="${2:?missing NAME}"; shift ;;
     --image) IMAGE="${2:?missing IMAGE}"; shift ;;
+    --auto-update-schedule) AUTO_UPDATE_SCHEDULE="${2:?missing SCHEDULE}"; shift ;;
+    --auto-update-image) AUTO_UPDATE_IMAGE="${2:?missing IMAGE}"; shift ;;
     --registry-url) REGISTRY_URL="${2:?missing URL}"; shift ;;
     --netuid) NETUID="${2:?missing NETUID}"; shift ;;
     --chain-endpoint) CHAIN_ENDPOINT="${2:?missing ENDPOINT}"; shift ;;
@@ -111,6 +117,10 @@ render_broker_allowed_images() {
 }
 
 cleanup_validator() {
+  kubectl_delete -n "$NAMESPACE" delete cronjob "$APP-image-updater"
+  kubectl_delete -n "$NAMESPACE" delete role "$APP-image-updater"
+  kubectl_delete -n "$NAMESPACE" delete rolebinding "$APP-image-updater"
+  kubectl_delete -n "$NAMESPACE" delete serviceaccount "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete deployment "$APP"
   kubectl_delete -n "$NAMESPACE" delete configmap "$APP-config"
   kubectl_delete -n "$NAMESPACE" delete secret "$APP-wallet"
@@ -182,6 +192,15 @@ metadata:
     app.kubernetes.io/name: platform-network
     app.kubernetes.io/part-of: ${APP}
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -208,6 +227,20 @@ rules:
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["${APP}"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ${APP}-runtime
@@ -222,6 +255,22 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: ${APP}-runtime
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+subjects:
+  - kind: ServiceAccount
+    name: ${APP}-image-updater
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${APP}-image-updater
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -314,7 +363,7 @@ spec:
       containers:
         - name: validator
           image: ${IMAGE}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command:
             - platform
             - validator
@@ -350,6 +399,53 @@ spec:
                 path: ${WALLET_HOTKEY}
               - key: hotkeypub.txt
                 path: ${WALLET_HOTKEY}pub.txt
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: validator-image-updater
+spec:
+  schedule: "${AUTO_UPDATE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: platform-network
+            app.kubernetes.io/part-of: ${APP}
+            platform.component: validator-image-updater
+        spec:
+          serviceAccountName: ${APP}-image-updater
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: updater
+              image: ${AUTO_UPDATE_IMAGE}
+              imagePullPolicy: Always
+              command:
+                - kubectl
+                - -n
+                - ${NAMESPACE}
+                - rollout
+                - restart
+                - deployment/${APP}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
 YAML
 }
 
