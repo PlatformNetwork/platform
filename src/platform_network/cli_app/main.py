@@ -51,6 +51,7 @@ from platform_network.template_engine import (
     ChallengeTemplateContext,
     render_challenge_template,
 )
+from platform_network.validator.image_updater import create_incluster_updater
 from platform_network.validator.normal_runner import NormalValidatorRunner
 from platform_network.validator.registry_client import RegistryClient
 
@@ -657,6 +658,24 @@ def validator_run(config: Path = typer.Option(Path("config/validator.example.yam
         retry_seconds=settings.validator.registry_retry_seconds,
     )
     asyncio.run(runner.run_forever())
+
+
+@validator_app.command("refresh-image")
+def validator_refresh_image(
+    namespace: str = typer.Option(..., "--namespace"),
+    deployment: str = typer.Option(..., "--deployment"),
+    container: str = typer.Option("validator", "--container"),
+    image: str = typer.Option(..., "--image"),
+    registry_endpoint: str = typer.Option("", "--registry-endpoint"),
+):
+    updated = create_incluster_updater().refresh(
+        namespace=namespace,
+        deployment=deployment,
+        container=container,
+        image=image,
+        registry_endpoint=registry_endpoint or None,
+    )
+    typer.echo("updated" if updated else "already-current")
 
 
 @challenge_app.command("create")
