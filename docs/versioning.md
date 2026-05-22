@@ -32,7 +32,7 @@ type=semver,pattern={{raw}}
 type=sha,prefix=sha-
 ```
 
-This means a `v3.0.3` Git tag publishes both the canonical `3.0.3` image tag and the compatibility `v3.0.3` tag, plus a traceable `sha-<commit>` tag. The `latest` tag is published only from `main` and is a mutable development/staging channel.
+This means a `v3.0.3` Git tag publishes both the canonical `3.0.3` image tag and the compatibility `v3.0.3` tag, plus a traceable `sha-<commit>` tag. Branch builds publish a mutable `main` tag, and `main` also publishes `latest`; those mutable tags are the default Kubernetes auto-update channel for first-party Platform workloads.
 
 Pull requests build Docker images with `push: false`. GHCR publication happens only from trusted events: `main`, `v*.*.*` tags, or a manual `workflow_dispatch` where `confirm_publish` is set to `true`.
 
@@ -46,15 +46,15 @@ Tags containing a hyphen, such as `v3.1.0-rc.1`, are marked as prereleases. Stab
 
 ## Production Image Policy
 
-Production and Kubernetes deployment references must use a SemVer image tag plus a digest:
+Pinned production deployment references must use a SemVer image tag plus a digest:
 
 ```text
 ghcr.io/platformnetwork/platform:3.0.3@sha256:<64-hex-digest>
 ```
 
-The digest is the immutable deployment selector. The tag provides human-readable release context. Production policy rejects `latest`, untagged image references, missing digests, and non-SemVer tags.
+The digest is the immutable deployment selector. The tag provides human-readable release context. Production policy rejects `latest`, untagged image references, missing digests, non-SemVer tags, and mutable auto-update CronJobs.
 
-Mutable tags such as `latest` are allowed only for local, development, and explicitly documented staging flows. The validator installer includes an image-updater CronJob that checks mutable GHCR tag digests and patches the Deployment only when the digest changed, but production should prefer digest-pinned image references.
+Mutable tags such as `latest` and `main` are allowed for the default Kubernetes auto-update mode. In that mode, Helm renders master admin/proxy/broker/weights from `ghcr.io/platformnetwork/platform-master:latest`, validators from `ghcr.io/platformnetwork/platform:latest`, and one-minute image-updater CronJobs. The updaters use anonymous GHCR registry digest checks for public packages and patch Deployments or the weights CronJob to `tag@sha256:<digest>` only when a mutable tag moves. No GHCR pull secret is required while the packages remain public. To roll back or freeze a production deployment, disable `imageAutoUpdate` and pin SemVer plus digest values.
 
 ## Release Execution Boundary
 

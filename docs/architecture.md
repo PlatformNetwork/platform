@@ -41,7 +41,7 @@ Each challenge runs as a Kubernetes workload with its own OCI image, persistent 
 
 ## Deployment Boundaries
 
-First-party Platform deployments are Kubernetes-only. Kubernetes should use rollout controls, scoped RBAC, external PostgreSQL, and semver plus `sha256` digest image pins for control-plane and challenge images.
+First-party Platform deployments are Kubernetes-only. Default Helm deployments use mutable GHCR `latest` images plus one-minute digest-checking updater CronJobs for master and validator workloads. Pinned production deployments should disable mutable auto-update and use rollout controls, scoped RBAC, external PostgreSQL, and semver plus `sha256` digest image pins for control-plane and challenge images.
 
 Kubernetes CPU and memory requests and limits map to PodSpec fields. Docker-only `pids_limit`, `memory_swap`, and custom Docker network modes do not have parity in this path, so non-default requests are rejected or handled by cluster and admission policy outside Platform.
 

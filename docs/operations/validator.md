@@ -54,8 +54,12 @@ PLATFORM_WALLET_HOTKEY=validator
 PLATFORM_DATABASE_URL=postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
 PLATFORM_BROKER_ALLOWED_IMAGES=ghcr.io/platformnetwork/,registry.example.com/platform/
 PLATFORM_VALIDATOR_AUTO_UPDATE_SCHEDULE=*/5 * * * *
-PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE=registry.k8s.io/kubectl@sha256:99b37df34bc4f99ee322521d4c85cb98c1ceb8f70ff0618bef84eec9fe1ebc20
+PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE=ghcr.io/platformnetwork/platform:latest
 ```
+
+The auto-update image must contain the `platform` CLI because the CronJob runs
+`platform validator refresh-image`. Leave `PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE`
+unset to reuse the validator image, or set it to a Platform image tag/digest.
 
 The validator pod sees the hotkey at:
 
