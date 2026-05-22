@@ -5,7 +5,7 @@ environment: production
 
 image:
   repository: ghcr.io/platformnetwork/platform
-  tag: 3.0.1
+  tag: 3.0.2
   digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
   production: true
   pullPolicy: IfNotPresent
