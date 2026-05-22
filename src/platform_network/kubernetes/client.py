@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import time
 from typing import Any
@@ -53,16 +54,16 @@ class KubernetesClient:
         return result.to_dict() if hasattr(result, "to_dict") else dict(result)
 
     def delete(self, resource: dict[str, Any] | str, name: str | None = None) -> None:
-        if isinstance(resource, dict):
-            api = self._api_for(resource)
-            metadata = resource.get("metadata", {})
-            name = metadata["name"]
-            namespace = metadata.get("namespace", self.namespace)
-        else:
-            kind, name = resource, name
-            api = self._api_by_kind(kind)
-            namespace = self.namespace
         try:
+            if isinstance(resource, dict):
+                api = self._api_for(resource)
+                metadata = resource.get("metadata", {})
+                name = metadata["name"]
+                namespace = metadata.get("namespace", self.namespace)
+            else:
+                kind, name = resource, name
+                api = self._api_by_kind(kind)
+                namespace = self.namespace
             api.delete(name=name, namespace=namespace)
         except Exception:
             return
@@ -122,7 +123,13 @@ class KubernetesClient:
             namespace=self.namespace,
             path=path.strip("/"),
         )
-        payload = json.loads(response) if isinstance(response, str) else response
+        if isinstance(response, str):
+            try:
+                payload = json.loads(response)
+            except json.JSONDecodeError:
+                payload = ast.literal_eval(response)
+        else:
+            payload = response
         if not isinstance(payload, dict):
             raise ValueError(f"Service proxy {service_name}/{path} returned non-object")
         return payload
