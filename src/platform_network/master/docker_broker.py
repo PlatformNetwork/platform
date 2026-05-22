@@ -40,7 +40,7 @@ class BrokerTokenRegistry(Protocol):
 class DockerBrokerConfig:
     docker_bin: str = "docker"
     workspace_dir: Path = Path("/tmp/platform-docker-broker")
-    allowed_images: tuple[str, ...] = ("platformnetwork/", "ghcr.io/platformnetwork/")
+    allowed_images: tuple[str, ...] = ("ghcr.io/platformnetwork/",)
     log_limit_bytes: int = 64_000
 
 

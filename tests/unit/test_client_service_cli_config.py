@@ -517,17 +517,14 @@ def test_cli_master_weights_once_wires_bittensor_runtime(
 
     assert result.exit_code == 0
     assert "submit: computed 1 weights" in result.output
-    assert created_runtime == {
-        "netuid": 12,
-        "chain_endpoint": "ws://chain",
-        "wallet_name": "wallet",
-        "wallet_hotkey": "hotkey",
-        "client_kwargs": {
-            "timeout_seconds": 1.5,
-            "retries": 2,
-            "kubernetes_target_registry": None,
-        },
-    }
+    assert created_runtime["netuid"] == 12
+    assert created_runtime["chain_endpoint"] == "ws://chain"
+    assert created_runtime["wallet_name"] == "wallet"
+    assert created_runtime["wallet_hotkey"] == "hotkey"
+    client_kwargs = cast(dict[str, object], created_runtime["client_kwargs"])
+    assert client_kwargs["timeout_seconds"] == 1.5
+    assert client_kwargs["retries"] == 2
+    assert client_kwargs["kubernetes_target_registry"] is not None
     assert setter_calls == [([7], [1.0])]
 
 
@@ -599,7 +596,7 @@ def test_cli_gpu_clients_loads_enabled_servers(tmp_path: Path) -> None:
                 "  - id: gpu-a",
                 "    base_url: https://gpu-a",
                 f"    token_file: {token_file}",
-                "    verify_tls: false",
+                "    verify_tls: true",
                 "    timeout_seconds: 9",
                 "  - id: gpu-b",
                 "    base_url: https://gpu-b",
@@ -614,7 +611,7 @@ def test_cli_gpu_clients_loads_enabled_servers(tmp_path: Path) -> None:
 
     assert list(clients) == ["gpu-a"]
     assert clients["gpu-a"].token == "file-token"
-    assert clients["gpu-a"].verify_tls is False
+    assert clients["gpu-a"].verify_tls is True
     assert clients["gpu-a"].timeout_seconds == 9
 
 

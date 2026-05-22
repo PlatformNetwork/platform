@@ -11,14 +11,19 @@ validator:
   registry_url: https://chain.platform.network
   registry_retry_seconds: 15
 
+database:
+  url: postgresql+asyncpg://platform:platform@postgres.platform.svc.cluster.local/platform
+
 docker:
   network_name: platform_challenges
   secret_dir: /var/lib/platform/secrets
   internal_network: true
   broker_url: http://platform-docker-broker:8082
+  broker_allowed_images:
+    - ghcr.io/platformnetwork/
 
 runtime:
-  backend: docker
+  backend: kubernetes
 
 kubernetes:
   namespace: platform
@@ -30,7 +35,7 @@ kubernetes:
   storage_class: null
   storage_size: 10Gi
   challenge_mode: statefulset
-  broker_backend: docker
+  broker_backend: kubernetes
   gpu_resource_name: nvidia.com/gpu
   node_selector: {}
   tolerations: []

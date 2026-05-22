@@ -57,10 +57,7 @@ class KubernetesBrokerService:
         namespace: str = "platform",
         service_account_name: str = "platform-broker",
         log_limit_bytes: int = 64_000,
-        allowed_images: tuple[str, ...] = (
-            "platformnetwork/",
-            "ghcr.io/platformnetwork/",
-        ),
+        allowed_images: tuple[str, ...] = ("ghcr.io/platformnetwork/",),
     ) -> None:
         self.client = client
         self.namespace = namespace

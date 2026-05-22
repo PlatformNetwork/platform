@@ -18,7 +18,7 @@ master:
   registry_state_file: /var/lib/platform/registry.json
 
 database:
-  url: sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3
+  url: postgresql+asyncpg://platform:platform@postgres.platform.svc.cluster.local/platform
 
 docker:
   network_name: platform_challenges
@@ -29,11 +29,10 @@ docker:
   broker_url: http://platform-docker-broker:8082
   broker_workspace_dir: /tmp/platform-docker-broker
   broker_allowed_images:
-    - platformnetwork/
     - ghcr.io/platformnetwork/
 
 runtime:
-  backend: docker
+  backend: kubernetes
 
 kubernetes:
   namespace: platform
@@ -45,7 +44,7 @@ kubernetes:
   storage_class: null
   storage_size: 10Gi
   challenge_mode: statefulset
-  broker_backend: docker
+  broker_backend: kubernetes
   gpu_resource_name: nvidia.com/gpu
   node_selector: {}
   tolerations: []

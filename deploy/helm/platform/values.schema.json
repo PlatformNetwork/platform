@@ -15,7 +15,7 @@
     "runtime": {
       "type": "object",
       "properties": {
-        "backend": { "type": "string", "enum": ["docker", "kubernetes"] }
+        "backend": { "type": "string", "enum": ["kubernetes"] }
       }
     },
     "image": {

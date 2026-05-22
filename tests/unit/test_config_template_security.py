@@ -76,7 +76,7 @@ def test_load_settings_gpu_servers(tmp_path: Path) -> None:
                 "    base_url: https://gpu-a.internal",
                 "    token: secret",
                 "    enabled: true",
-                "    verify_tls: false",
+                "    verify_tls: true",
                 "    timeout_seconds: 12",
             ]
         ),
@@ -86,7 +86,7 @@ def test_load_settings_gpu_servers(tmp_path: Path) -> None:
     assert server.id == "gpu-a"
     assert server.base_url == "https://gpu-a.internal"
     assert server.token == "secret"
-    assert server.verify_tls is False
+    assert server.verify_tls is True
     assert server.timeout_seconds == 12
 
 
@@ -105,7 +105,7 @@ def test_load_settings_kubernetes_targets(tmp_path: Path) -> None:
                 "    api_url: https://k8s-gpu-a",
                 f"    kubeconfig_file: {kubeconfig}",
                 "    namespace: platform-gpu",
-                "    verify_tls: false",
+                "    verify_tls: true",
                 "    gpu_count: 4",
                 "    labels:",
                 "      region: eu",
@@ -120,7 +120,7 @@ def test_load_settings_kubernetes_targets(tmp_path: Path) -> None:
     assert target.id == "gpu-a"
     assert target.kubeconfig_file == str(kubeconfig)
     assert target.namespace == "platform-gpu"
-    assert target.verify_tls is False
+    assert target.verify_tls is True
     assert target.gpu_count == 4
     assert target.labels == {"region": "eu"}
 
@@ -128,13 +128,28 @@ def test_load_settings_kubernetes_targets(tmp_path: Path) -> None:
 def test_load_settings_parses_complex_env(monkeypatch) -> None:
     monkeypatch.setenv(
         "PLATFORM_DOCKER__BROKER_ALLOWED_IMAGES",
-        '["platformnetwork/","ghcr.io/platformnetwork/"]',
+        '["ghcr.io/platformnetwork/"]',
     )
 
-    assert load_settings().docker.broker_allowed_images == [
-        "platformnetwork/",
-        "ghcr.io/platformnetwork/",
-    ]
+    assert load_settings().docker.broker_allowed_images == ["ghcr.io/platformnetwork/"]
+
+
+def test_load_settings_rejects_docker_runtime_backends(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "runtime:",
+                "  backend: docker",
+                "kubernetes:",
+                "  broker_backend: docker",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="kubernetes"):
+        load_settings(config)
 
 
 def test_render_challenge_template(tmp_path: Path) -> None:

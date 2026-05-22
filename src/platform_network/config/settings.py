@@ -40,7 +40,7 @@ class ValidatorSettings(BaseModel):
 
 
 class DatabaseSettings(BaseModel):
-    url: str = "sqlite+aiosqlite:////var/lib/platform-db/platform.sqlite3"
+    url: str = "postgresql+asyncpg://platform:platform@postgres.platform.svc.cluster.local/platform"
 
 
 class DockerSettings(BaseModel):
@@ -53,12 +53,12 @@ class DockerSettings(BaseModel):
     broker_workspace_dir: str = "/tmp/platform-docker-broker"
     gpu_server_state_file: str = "/var/lib/platform/gpu_servers.json"
     broker_allowed_images: list[str] = Field(
-        default_factory=lambda: ["platformnetwork/", "ghcr.io/platformnetwork/"]
+        default_factory=lambda: ["ghcr.io/platformnetwork/"]
     )
 
 
 class RuntimeSettings(BaseModel):
-    backend: str = Field(default="docker", pattern=r"^(docker|kubernetes)$")
+    backend: str = Field(default="kubernetes", pattern=r"^kubernetes$")
 
 
 class KubernetesAutoscalingSettings(BaseModel):
@@ -97,7 +97,7 @@ class KubernetesSettings(BaseModel):
     challenge_mode: str = Field(
         default="statefulset", pattern=r"^(statefulset|deployment)$"
     )
-    broker_backend: str = Field(default="docker", pattern=r"^(docker|kubernetes)$")
+    broker_backend: str = Field(default="kubernetes", pattern=r"^kubernetes$")
     gpu_resource_name: str = "nvidia.com/gpu"
     node_selector: dict[str, str] = Field(default_factory=dict)
     tolerations: list[dict[str, object]] = Field(default_factory=list)

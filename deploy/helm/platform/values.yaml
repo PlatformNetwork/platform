@@ -104,7 +104,6 @@ broker:
 
 docker:
   brokerAllowedImages:
-    - platformnetwork/
     - ghcr.io/platformnetwork/
 
 validator:
