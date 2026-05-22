@@ -152,7 +152,7 @@ Platform separates local development defaults from production and Kubernetes dep
 
 - Dev, test, and local Compose workflows may use SQLite for the master database and local or mutable challenge images while iterating.
 - Production and Kubernetes deployments require an external PostgreSQL database provided through an explicit secret or URL. SQLite is rejected for production and Kubernetes control-plane state.
-- Production challenge and control-plane images must use a semver tag plus a `sha256` digest, for example `ghcr.io/platformnetwork/demo:1.2.3@sha256:<64-hex-digest>`. Production rejects `latest`, untagged images, and missing digests.
+- Production challenge and control-plane images must use a semver tag plus a `sha256` digest, for example `ghcr.io/platformnetwork/demo:1.2.3@sha256:<64-hex-digest>`. Production rejects `latest`, untagged images, and missing digests. Platform release versioning starts at `3.0.0`; see `docs/versioning.md` for the SemVer, Git tag, and GHCR tag policy.
 - Production remote GPU servers and Kubernetes targets must keep `verify_tls=true`; `verify_tls=false` is only acceptable for clearly local or test-only endpoints.
 - Multi-server and Kubernetes target routing trusts only enabled, healthy, non-draining targets with remaining GPU capacity. Production agent targets must use HTTPS and `verify_tls=true`; persisted insecure targets are rejected when production policy is active.
 - Kubernetes broker jobs and challenge workloads map CPU and memory to PodSpec requests and limits. Docker-only `pids_limit`, `memory_swap`, and custom Docker network modes are rejected for Kubernetes because PID and swap enforcement belongs at the cluster or admission-policy boundary.

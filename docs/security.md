@@ -16,7 +16,7 @@
 The production and Kubernetes boundary is stricter than local development:
 
 - Dev, test, and local runs may use SQLite for master state. Production and Kubernetes must use an external PostgreSQL database loaded from a secret or explicit database URL, and SQLite is rejected.
-- Dev and local challenge images may be local, mutable, or tagged `latest` while iterating. Production images must include both a semver tag and a `sha256` digest. Production rejects `latest`, untagged references, and missing digests.
+- Dev and local challenge images may be local, mutable, or tagged `latest` while iterating. Production images must include both a semver tag and a `sha256` digest, starting with Platform `3.0.0` for release images. Production rejects `latest`, untagged references, and missing digests.
 - Production image allowlists must be scoped to a registry and namespace such as `ghcr.io/platformnetwork/`. Broad prefixes such as `platformnetwork/` are development-only.
 - Production remote GPU servers and Kubernetes targets must use TLS verification with `verify_tls=true`. `verify_tls=false` is reserved for local or test-only endpoints.
 - Production Kubernetes agent targets must use HTTPS plus `verify_tls=true`. Multi-server routing may reuse a persisted target assignment only when the target still exists, is enabled, is healthy, is not draining, and has remaining GPU capacity.
