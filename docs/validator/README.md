@@ -29,16 +29,17 @@ Run from the repository root:
 The script performs these actions:
 
 1. Deletes only prior installer-managed validator objects in the selected namespace.
-2. Applies Namespace, ServiceAccount, Role, RoleBinding, PVC, ConfigMap, and Deployment.
+2. Applies Namespace, validator ServiceAccount/RBAC, updater ServiceAccount/RBAC, PVC, ConfigMap, Deployment, and updater CronJob.
 3. Prompts silently for the validator hotkey mnemonic.
 4. Creates the `platform-validator-wallet` Kubernetes Secret from generated hotkey files.
-5. Starts the validator Deployment in Kubernetes mode.
+5. Starts the validator Deployment in Kubernetes mode and schedules updater rollouts.
 
 Useful options:
 
 ```bash
 ./scripts/install-validator.sh --namespace platform-validator
 ./scripts/install-validator.sh --image ghcr.io/platformnetwork/platform:v1.2.3@sha256:<digest>
+./scripts/install-validator.sh --auto-update-schedule '*/5 * * * *'
 ./scripts/install-validator.sh --database-url postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
 ./scripts/install-validator.sh --broker-allowed-images ghcr.io/platformnetwork/,registry.example.com/platform/
 ./scripts/install-validator.sh --registry-url https://chain.platform.network
@@ -48,12 +49,18 @@ Useful options:
 ```
 
 The installer always performs a real cluster installation and always imports a
-hotkey Secret. Automated validation must use a disposable cluster, disposable
+hotkey Secret. It also installs a scoped CronJob that periodically restarts the
+validator Deployment so mutable GHCR tags such as `latest` are repulled by
+Kubernetes. Automated validation must use a disposable cluster, disposable
 namespace, and disposable test mnemonic supplied through a secure channel.
 
 `--cleanup` is scoped to objects created by this installer:
 
 ```text
+cronjob/platform-validator-image-updater
+role/platform-validator-image-updater
+rolebinding/platform-validator-image-updater
+serviceaccount/platform-validator-image-updater
 deployment/platform-validator
 configmap/platform-validator-config
 secret/platform-validator-wallet
@@ -136,4 +143,7 @@ uv run mypy src tests
 ```
 
 Run the full installer only when you intend to mutate a real Kubernetes context
-and can provide the validator hotkey mnemonic interactively.
+and can provide the validator hotkey mnemonic interactively. GHCR image
+publication is handled by CI: pull requests build images without pushing, while
+trusted `main`, `v*.*.*` tag, or confirmed manual runs publish `platform` and
+`platform-master` images to GHCR.

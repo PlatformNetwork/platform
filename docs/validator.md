@@ -17,8 +17,10 @@ material. The mnemonic is read silently, converted to hotkey files in a temporar
 local directory, and stored as a Kubernetes Secret.
 
 The installer always performs a real Kubernetes installation and prompts for the
-validator hotkey mnemonic. Use a disposable namespace and test mnemonic when
-validating the full install flow.
+validator hotkey mnemonic. It also installs a validator image-updater CronJob
+that periodically restarts the Deployment so updated mutable GHCR tags are
+repulled. Use a disposable namespace and test mnemonic when validating the full
+install flow.
 
 Follow the validator:
 

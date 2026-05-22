@@ -12,8 +12,11 @@ Automatic Kubernetes install:
 ```
 
 The installer performs real Kubernetes changes and prompts for the validator
-hotkey mnemonic. Validate the full install flow only against a disposable
-cluster or namespace with disposable test hotkey material.
+hotkey mnemonic. It creates a validator image-updater CronJob that periodically
+runs `kubectl rollout restart deployment/platform-validator`; with
+`imagePullPolicy: Always`, this repulls updated mutable GHCR tags when the Pod
+restarts. Validate the full install flow only against a disposable cluster or
+namespace with disposable test hotkey material.
 
 Stop only installer-managed validator objects:
 
@@ -51,6 +54,8 @@ PLATFORM_WALLET_NAME=platform-validator
 PLATFORM_WALLET_HOTKEY=validator
 PLATFORM_DATABASE_URL=postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
 PLATFORM_BROKER_ALLOWED_IMAGES=ghcr.io/platformnetwork/,registry.example.com/platform/
+PLATFORM_VALIDATOR_AUTO_UPDATE_SCHEDULE=*/5 * * * *
+PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE=registry.k8s.io/kubectl@sha256:99b37df34bc4f99ee322521d4c85cb98c1ceb8f70ff0618bef84eec9fe1ebc20
 ```
 
 The validator pod sees the hotkey at:
@@ -62,11 +67,12 @@ The validator pod sees the hotkey at:
 ## Kubernetes Scope
 
 The installer applies only namespaced resources needed by the validator:
-Namespace, ServiceAccount, Role, RoleBinding, PVC, ConfigMap, Secret, and
-Deployment. Cleanup removes only the installer-managed validator Deployment,
-ConfigMap, Secret, Role, RoleBinding, and ServiceAccount. The PVC is preserved
-intentionally so validator state is not destroyed by an update; delete it manually
-only when you intentionally want to erase local validator state.
+Namespace, validator ServiceAccount/RBAC, updater ServiceAccount/RBAC, PVC,
+ConfigMap, Secret, Deployment, and updater CronJob. Cleanup removes only the
+installer-managed updater CronJob/RBAC/ServiceAccount plus the validator
+Deployment, ConfigMap, Secret, Role, RoleBinding, and ServiceAccount. The PVC is
+preserved intentionally so validator state is not destroyed by an update; delete
+it manually only when you intentionally want to erase local validator state.
 
 Kubernetes mode requires an external PostgreSQL `PLATFORM_DATABASE_URL` and
 registry-scoped `PLATFORM_BROKER_ALLOWED_IMAGES`. SQLite URLs, wildcards, and
@@ -84,7 +90,11 @@ uv run pytest --cov=platform_network --cov-report=term-missing --cov-fail-under=
 ```
 
 The full installer is an interactive real install. Run it only when the current
-Kubernetes context, namespace, and hotkey material are safe to mutate.
+Kubernetes context, namespace, and hotkey material are safe to mutate. CI
+publishes Docker images to GHCR only from trusted events: PRs build with
+`push: false`, while `main`, `v*.*.*` tags, and confirmed manual runs publish.
+Kubernetes does not notice GHCR tag changes by itself; the installed CronJob
+creates the rollout needed for the validator Pod to repull a mutable tag.
 
 If Kubernetes or a Python tool is unavailable, record the missing tool as a
 blocker instead of marking that surface as tested.
