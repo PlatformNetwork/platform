@@ -42,6 +42,12 @@ def test_helm_template_renders_secure_kubernetes_control_plane() -> None:
         assert security.get("allowPrivilegeEscalation") is False
         assert security.get("privileged") is False
         assert security.get("capabilities", {}).get("drop") == ["ALL"]
+    for pod_spec in _pod_specs(documents):
+        security = pod_spec.get("securityContext", {})
+        assert security.get("runAsNonRoot") is True
+        assert security.get("runAsUser") == 1000
+        assert security.get("runAsGroup") == 1000
+        assert security.get("fsGroup") == 1000
 
 
 def test_helm_template_switches_from_hpa_to_keda_scaledobjects() -> None:
@@ -233,9 +239,11 @@ def test_helm_production_values_render_safe_control_plane() -> None:
     service_account = _document(documents, "ServiceAccount", "platform-master")
     role_binding = _document(documents, "RoleBinding", "platform-runtime")
     role = _document(documents, "Role", "platform-runtime")
+    pod_specs = _pod_specs(documents)
 
     assert "sqlite" not in rendered_lower
     assert ":latest" not in rendered_lower
+    assert "imagePullSecrets" not in rendered
     assert (
         "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         in rendered
@@ -252,7 +260,25 @@ def test_helm_production_values_render_safe_control_plane() -> None:
     assert all("*" not in rule.get("verbs", []) for rule in role["rules"])
     assert network_policy["spec"]["egress"] != [{}]
     assert network_policy["spec"]["egress"]
+    assert any(
+        {"protocol": "UDP", "port": 53} in rule.get("ports", [])
+        for rule in network_policy["spec"]["egress"]
+    )
+    assert any(
+        {"protocol": "TCP", "port": 5432} in rule.get("ports", [])
+        for rule in network_policy["spec"]["egress"]
+    )
+    assert any(
+        {"protocol": "TCP", "port": 443} in rule.get("ports", [])
+        for rule in network_policy["spec"]["egress"]
+    )
     assert {"namespaceSelector": {}} not in network_policy["spec"]["ingress"][0]["from"]
+    for pod_spec in pod_specs:
+        security = pod_spec.get("securityContext", {})
+        assert security.get("runAsNonRoot") is True
+        assert security.get("runAsUser") == 1000
+        assert security.get("runAsGroup") == 1000
+        assert security.get("fsGroup") == 1000
     for container in _containers(documents):
         resources = container.get("resources", {})
         assert resources.get("requests", {}).get("cpu")
@@ -332,6 +358,10 @@ def _containers(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if pod_spec:
             containers.extend(pod_spec.get("containers", []))
     return containers
+
+
+def _pod_specs(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [pod_spec for doc in documents if (pod_spec := _pod_spec(doc))]
 
 
 def _database_secret_refs(documents: list[dict[str, Any]]) -> set[tuple[str, str]]:

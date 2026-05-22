@@ -9,8 +9,7 @@ image:
   digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
   production: true
   pullPolicy: IfNotPresent
-  pullSecrets:
-    - platform-registry-pull
+  pullSecrets: []
 
 database:
   urlSecret:
@@ -33,8 +32,7 @@ kubernetes:
   storageClass: platform-retain
   storageSize: 50Gi
   targetDefaults:
-    imagePullSecrets:
-      - platform-registry-pull
+    imagePullSecrets: []
 
 masterAdmin:
   replicas: 2
@@ -75,6 +73,13 @@ networkPolicy:
   egress:
     allowAll: false
     extraRules:
+      - to:
+          - namespaceSelector: {}
+        ports:
+          - protocol: UDP
+            port: 53
+          - protocol: TCP
+            port: 53
       - to:
           - ipBlock:
               cidr: 203.0.113.0/24
