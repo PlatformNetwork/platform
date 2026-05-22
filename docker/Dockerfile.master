@@ -15,9 +15,15 @@ RUN apt-get update \
 
 COPY . .
 RUN if [ -f pyproject.toml ]; then uv pip install --system -e ".[master]"; fi
+RUN groupadd --system --gid 1000 platform \
+    && useradd --system --uid 1000 --gid platform --home-dir /var/lib/platform --shell /usr/sbin/nologin platform \
+    && mkdir -p /var/lib/platform /var/lib/platform/secrets /var/lib/platform-db \
+    && chown -R 1000:1000 /var/lib/platform /var/lib/platform-db
 
 VOLUME ["/var/lib/platform"]
 
 EXPOSE 8000 8001 8082
+
+USER 1000:1000
 
 CMD ["platform", "master", "run", "--config", "config/master.example.yaml"]
