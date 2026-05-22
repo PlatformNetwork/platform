@@ -62,11 +62,21 @@ class MasterWeightService:
         return results
 
     async def run_epoch(
-        self, challenges: list[RegistryChallenge], tokens: dict[str, str]
+        self,
+        challenges: list[RegistryChallenge],
+        tokens: dict[str, str],
+        *,
+        submit: bool = True,
     ) -> FinalWeights:
         hotkey_to_uid = self.metagraph_cache.get()
         results = await self.collect_weights(challenges, tokens)
         final = aggregate_challenge_weights(results, hotkey_to_uid)
+        if not submit:
+            logger.info(
+                "computed weights without submitting",
+                extra={"uids": len(final.uids), "challenges": len(challenges)},
+            )
+            return final
         self.weight_setter.set_weights(final.uids, final.weights)
         logger.info(
             "set weights",

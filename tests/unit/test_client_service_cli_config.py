@@ -227,6 +227,49 @@ async def test_master_weight_service_and_validator_runner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_master_weight_service_dry_run_skips_weight_setter() -> None:
+    class Cache:
+        def get(self) -> dict[str, int]:
+            return {"hk": 3}
+
+    class Setter:
+        def set_weights(self, uids: list[int], weights: list[float]) -> None:
+            raise AssertionError("dry-run must not submit weights")
+
+    class Client:
+        async def get_weights(self, **kwargs: object) -> ChallengeWeightsResult:
+            return ChallengeWeightsResult(
+                slug=str(kwargs["slug"]), emission_percent=10, weights={"hk": 2}
+            )
+
+    challenge = RegistryChallenge(
+        slug="demo",
+        name="Demo",
+        image="ghcr.io/o/demo:1",
+        version="1",
+        emission_percent=Decimal("10"),
+        status=ChallengeStatus.ACTIVE,
+        internal_base_url="http://challenge-demo:8000",
+        public_proxy_base_path="/challenges/demo",
+        required_capabilities=["get_weights", "proxy_routes"],
+        resources={"cpu": "2", "memory": "1g"},
+        volumes={},
+        env={},
+        secrets=[],
+    )
+    service = MasterWeightService(
+        metagraph_cache=cast(MetagraphCache, Cache()),
+        weight_setter=cast(WeightSetter, Setter()),
+        challenge_client=cast(ChallengeClient, Client()),
+    )
+
+    final = await service.run_epoch([challenge], {"demo": "tok"}, submit=False)
+
+    assert final.uids == [3]
+    assert final.weights == [1.0]
+
+
+@pytest.mark.asyncio
 async def test_master_weight_service_uid_zero_fallback_without_challenges() -> None:
     class Subtensor:
         def __init__(self) -> None:
@@ -526,6 +569,81 @@ def test_cli_master_weights_once_wires_bittensor_runtime(
     assert client_kwargs["retries"] == 2
     assert client_kwargs["kubernetes_target_registry"] is not None
     assert setter_calls == [([7], [1.0])]
+
+
+def test_cli_master_weights_dry_run_does_not_submit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry_path = tmp_path / "registry.json"
+    secret_dir = tmp_path / "secrets"
+    config = tmp_path / "master.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "network:",
+                "  netuid: 12",
+                "master:",
+                f"  registry_state_file: {registry_path}",
+                "docker:",
+                f"  secret_dir: {secret_dir}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    registry = FileChallengeRegistry(registry_path, secret_dir=secret_dir)
+    registry.create(
+        ChallengeCreate(
+            slug="demo",
+            name="Demo",
+            image="ghcr.io/o/demo:1",
+            version="1",
+            emission_percent=Decimal("10"),
+            status=ChallengeStatus.ACTIVE,
+        )
+    )
+
+    class Cache:
+        def get(self) -> dict[str, int]:
+            return {"hk": 7}
+
+    class Setter:
+        def set_weights(self, uids: list[int], weights: list[float]) -> None:
+            raise AssertionError("dry-run must not submit weights")
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def get_weights(self, **kwargs: object) -> ChallengeWeightsResult:
+            return ChallengeWeightsResult(
+                slug=str(kwargs["slug"]),
+                emission_percent=float(cast(float, kwargs["emission_percent"])),
+                weights={"hk": 2.0},
+            )
+
+    def create_runtime(settings):
+        return SimpleNamespace(metagraph_cache=Cache(), weight_setter=Setter())
+
+    monkeypatch.setattr(cli_module, "create_bittensor_runtime", create_runtime)
+    monkeypatch.setattr(cli_module, "ChallengeClient", Client)
+    monkeypatch.setattr(cli_module, "_run_startup_migrations", lambda _settings: None)
+    monkeypatch.setattr(cli_module, "_master_registry", lambda _settings: registry)
+
+    result = CliRunner().invoke(
+        app,
+        ["master", "weights", "--config", str(config), "--once", "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert "dry-run: computed 1 weights" in result.output
+
+
+def test_cli_master_weights_help_documents_dry_run() -> None:
+    result = CliRunner().invoke(app, ["master", "weights", "--help"])
+
+    assert result.exit_code == 0
+    assert "--dry-run" in result.output
+    assert "--submit" in result.output
 
 
 def test_cli_master_weights_loop_uses_epoch_interval(

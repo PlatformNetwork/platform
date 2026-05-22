@@ -275,11 +275,13 @@ def _challenge_orchestrator(settings) -> ChallengeOrchestratorRouter:
 async def _run_master_weight_epoch(
     service: MasterWeightService,
     registry: Any,
+    *,
+    submit: bool = True,
 ) -> FinalWeights:
     records = await _resolve(registry.list(active_only=True))
     challenges = [record_to_registry_view(record) for record in records]
     tokens = {record.slug: registry.get_token(record.slug) for record in records}
-    return await service.run_epoch(challenges, tokens)
+    return await service.run_epoch(challenges, tokens, submit=submit)
 
 
 @master_app.command("run")
@@ -613,6 +615,7 @@ def k8s_server_remove(
 def master_weights(
     config: Path = typer.Option(Path("config/master.example.yaml")),
     once: bool = typer.Option(False, "--once/--loop"),
+    dry_run: bool = typer.Option(False, "--dry-run/--submit"),
 ):
     settings = load_settings(config)
     configure_logging(settings.observability.log_json)
@@ -639,8 +642,9 @@ def master_weights(
     )
 
     async def epoch() -> None:
-        final = await _run_master_weight_epoch(service, registry)
-        typer.echo(f"submit: computed {len(final.uids)} weights")
+        final = await _run_master_weight_epoch(service, registry, submit=not dry_run)
+        action = "dry-run" if dry_run else "submit"
+        typer.echo(f"{action}: computed {len(final.uids)} weights")
 
     if once:
         asyncio.run(epoch())
