@@ -232,7 +232,7 @@ class FileChallengeRegistry(ChallengeRegistry):
     """Small persistent registry shared by admin/proxy processes.
 
     PostgreSQL remains the production source of truth for the master, but this
-    file-backed adapter gives local compose and split admin/proxy apps a shared
+    file-backed adapter gives split admin/proxy apps a shared
     registry without exposing challenge tokens or requiring both processes to
     share memory.
     """

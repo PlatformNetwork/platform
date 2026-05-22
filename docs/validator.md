@@ -53,5 +53,5 @@ The ConfigMap must set `runtime.backend: kubernetes`,
 - The installer never needs coldkey material.
 - Cleanup is scoped to this validator Deployment and its installer-managed objects.
 - The default registry URL is `https://chain.platform.network`.
-- The validator runs in Kubernetes mode; do not install it with local Compose.
+- The validator runs in Kubernetes mode.
 - The hotkey Secret is readable by cluster admins and any subject with Secret read RBAC; use a dedicated namespace and enable Kubernetes Secret encryption at rest.

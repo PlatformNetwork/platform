@@ -21,23 +21,9 @@ The production and Kubernetes boundary is stricter than local development:
 - Production remote GPU servers and Kubernetes targets must use TLS verification with `verify_tls=true`. `verify_tls=false` is reserved for local or test-only endpoints.
 - Production Kubernetes agent targets must use HTTPS plus `verify_tls=true`. Multi-server routing may reuse a persisted target assignment only when the target still exists, is enabled, is healthy, is not draining, and has remaining GPU capacity.
 
-## Docker Socket Risk
+## Kubernetes Runtime Boundary
 
-Local Docker Compose paths for `master-admin`, `platform-docker-broker`, `gpu-agent`, and `watchtower` mount `/var/run/docker.sock` when they need to create or update local containers. Access to that socket is equivalent to host Docker daemon control and can become host root access. The socket labels in Compose document the risk, but they don't make the socket safe for production isolation.
-
-Production Kubernetes should use Kubernetes rollout controls and scoped RBAC instead of Docker socket mounts. Broker-created challenge jobs must not receive the host Docker socket.
-
-## Watchtower Boundary
-
-Watchtower is allowed only through `docker/compose.watchtower.yml` for local and staging Compose deployments. The overlay uses the maintained `nickfedor/watchtower:1.17.1` image for Docker 29 API compatibility. It runs with `--label-enable`, and only control-plane services may carry `com.centurylinklabs.watchtower.enable=true`:
-
-- `master-admin`
-- `master-proxy`
-- `platform-docker-broker`
-- `validator`
-- `gpu-agent`
-
-Do not add Watchtower labels to challenge containers, broker-created jobs, database services, or Kubernetes manifests. Production uses semver plus digest image pins and Kubernetes rollout or rollback controls instead of background image replacement.
+First-party deployments use Kubernetes rollout controls and scoped RBAC. Broker-created challenge jobs must not receive the host Docker socket.
 
 ## Kubernetes PID and Swap Boundary
 

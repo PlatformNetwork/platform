@@ -21,7 +21,7 @@ The template config uses:
 sqlite+aiosqlite:////data/challenge.sqlite3
 ```
 
-`/data` is mounted as a persistent Docker named volume.
+`/data` is mounted as persistent storage for the Kubernetes challenge workload.
 
 ## Build and publish
 
