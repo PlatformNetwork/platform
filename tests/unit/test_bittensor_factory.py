@@ -23,6 +23,7 @@ def _settings(tmp_path: Path):
                 "  chain_endpoint: ws://localhost:9944",
                 "  wallet_name: test-wallet",
                 "  wallet_hotkey: test-hotkey",
+                f"  wallet_path: {tmp_path / 'wallets'}",
                 "master:",
                 "  metagraph_cache_ttl_seconds: 5",
             ]
@@ -58,7 +59,14 @@ def test_bittensor_runtime_uses_configured_network_and_wallet(
     assert runtime.weight_setter.netuid == 42
     assert calls == [
         ("subtensor", {"network": "ws://localhost:9944"}),
-        ("wallet", {"name": "test-wallet", "hotkey": "test-hotkey"}),
+        (
+            "wallet",
+            {
+                "name": "test-wallet",
+                "hotkey": "test-hotkey",
+                "path": str(tmp_path / "wallets"),
+            },
+        ),
     ]
 
 

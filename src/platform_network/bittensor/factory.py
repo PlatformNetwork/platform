@@ -35,10 +35,13 @@ def create_bittensor_runtime(settings: Settings) -> BittensorRuntime:
     if settings.network.chain_endpoint:
         subtensor_kwargs["network"] = settings.network.chain_endpoint
     subtensor = bittensor.Subtensor(**subtensor_kwargs)
-    wallet = bittensor.Wallet(
-        name=settings.network.wallet_name,
-        hotkey=settings.network.wallet_hotkey,
-    )
+    wallet_kwargs = {
+        "name": settings.network.wallet_name,
+        "hotkey": settings.network.wallet_hotkey,
+    }
+    if settings.network.wallet_path:
+        wallet_kwargs["path"] = settings.network.wallet_path
+    wallet = bittensor.Wallet(**wallet_kwargs)
 
     return BittensorRuntime(
         metagraph_cache=MetagraphCache(

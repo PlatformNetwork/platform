@@ -13,11 +13,12 @@ class NetworkSettings(BaseModel):
     chain_endpoint: str | None = None
     wallet_name: str = "default"
     wallet_hotkey: str = "default"
+    wallet_path: str | None = None
     master_uid: int = 0
 
 
 class MasterSettings(BaseModel):
-    registry_url: str = "https://rpc.platform.network"
+    registry_url: str = "https://chain.platform.network"
     admin_host: str = "0.0.0.0"
     admin_port: int = 8080
     proxy_host: str = "0.0.0.0"
@@ -34,7 +35,7 @@ class MasterSettings(BaseModel):
 
 
 class ValidatorSettings(BaseModel):
-    registry_url: str = "https://rpc.platform.network"
+    registry_url: str = "https://chain.platform.network"
     registry_retry_seconds: int = 15
 
 
