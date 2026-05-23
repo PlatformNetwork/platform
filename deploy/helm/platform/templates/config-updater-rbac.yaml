@@ -1,0 +1,62 @@
+{{- if .Values.configSync.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "platform.fullname" . }}-config-sync
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "config-sync"
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "platform.fullname" . }}-config-sync
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "config-sync"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ include "platform.fullname" . }}-config
+    verbs: ["get", "patch", "update"]
+  {{- if or .Values.master.enabled .Values.validator.enabled }}
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      {{- if .Values.master.enabled }}
+      - {{ include "platform.fullname" . }}-admin
+      - {{ include "platform.fullname" . }}-proxy
+      {{- if .Values.broker.enabled }}
+      - {{ include "platform.fullname" . }}-broker
+      {{- end }}
+      {{- end }}
+      {{- if .Values.validator.enabled }}
+      - {{ include "platform.fullname" . }}-validator
+      {{- end }}
+    verbs: ["get", "patch", "update"]
+  {{- end }}
+  {{- if and .Values.master.enabled .Values.weights.enabled .Values.weights.submitOnChain }}
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames:
+      - {{ include "platform.fullname" . }}-weights
+    verbs: ["get", "patch", "update"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "platform.fullname" . }}-config-sync
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "config-sync"
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "platform.fullname" . }}-config-sync
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "platform.fullname" . }}-config-sync
+{{- end }}

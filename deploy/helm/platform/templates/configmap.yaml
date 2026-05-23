@@ -20,7 +20,16 @@ data:
       wallet_path: {{ .Values.network.walletPath | quote }}
     validator:
       registry_url: {{ .Values.validator.registryUrl | quote }}
-      registry_retry_seconds: 15
+      registry_retry_seconds: {{ .Values.validator.registryRetrySeconds }}
+      {{- if .Values.validator.weightsUrl }}
+      weights_url: {{ .Values.validator.weightsUrl | quote }}
+      {{- else }}
+      weights_url: null
+      {{- end }}
+      weights_interval_seconds: {{ .Values.validator.weightsIntervalSeconds }}
+      weights_timeout_seconds: {{ .Values.validator.weightsTimeoutSeconds }}
+      weights_retries: {{ .Values.validator.weightsRetries }}
+      weights_freshness_seconds: {{ .Values.validator.weightsFreshnessSeconds }}
     master:
       registry_url: "http://{{ include "platform.fullname" . }}-admin:{{ .Values.masterAdmin.port }}"
       admin_host: "0.0.0.0"
@@ -43,7 +52,7 @@ data:
       namespace: {{ .Release.Namespace | quote }}
       in_cluster: true
       target_state_file: "/var/lib/platform/kubernetes_targets.json"
-      service_account: {{ .Values.kubernetes.serviceAccount | quote }}
+      service_account: {{ include "platform.serviceAccountName" . | quote }}
       challenge_mode: {{ .Values.kubernetes.challengeMode | quote }}
       broker_backend: {{ .Values.kubernetes.brokerBackend | quote }}
       storage_class: {{ .Values.kubernetes.storageClass | quote }}

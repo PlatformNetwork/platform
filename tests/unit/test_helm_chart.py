@@ -88,7 +88,7 @@ def test_helm_template_renders_validator_registry_url_default_and_override(
     )
 
     cases = [
-        ([], "https://chain.platform.network", ""),
+        ([], "https://chain.platform.network", "/var/lib/platform/wallets"),
         (
             ["-f", str(override_file)],
             "https://registry.override.test",
@@ -118,7 +118,16 @@ def test_helm_validator_deployment_uses_configured_image_pull_policy() -> None:
         pytest.skip("helm is not installed")
 
     rendered = subprocess.check_output(
-        [helm, "template", "platform", str(CHART), "--set", "image.pullPolicy=Always"],
+        [
+            helm,
+            "template",
+            "platform",
+            str(CHART),
+            "--set",
+            "validator.enabled=true",
+            "--set",
+            "image.pullPolicy=Always",
+        ],
         text=True,
     )
     documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
@@ -149,17 +158,17 @@ def test_helm_mutable_auto_update_renders_master_and_validator_latest_images() -
         assert container["image"] == "ghcr.io/platformnetwork/platform-master:latest"
         assert container["imagePullPolicy"] == "Always"
 
-    validator = _document(documents, "Deployment", "platform-validator")
-    validator_container = _named_container(_pod_spec(validator), "validator")
-    assert validator_container["image"] == "ghcr.io/platformnetwork/platform:latest"
-    assert validator_container["imagePullPolicy"] == "Always"
-
-    weights = _document(documents, "CronJob", "platform-weights")
-    weights_container = _named_container(_pod_spec(weights), "weights")
-    assert (
-        weights_container["image"] == "ghcr.io/platformnetwork/platform-master:latest"
+    assert not any(
+        doc.get("kind") == "Deployment"
+        and doc.get("metadata", {}).get("name") == "platform-validator"
+        for doc in documents
     )
-    assert weights_container["imagePullPolicy"] == "Always"
+
+    assert not any(
+        doc.get("kind") == "CronJob"
+        and doc.get("metadata", {}).get("name") == "platform-weights"
+        for doc in documents
+    )
 
 
 def test_helm_renders_one_minute_image_updaters_for_master_and_validator() -> None:
@@ -190,18 +199,6 @@ def test_helm_renders_one_minute_image_updaters_for_master_and_validator() -> No
             "platform-broker",
             "broker",
             "ghcr.io/platformnetwork/platform-master:latest",
-        ),
-        "platform-weights-image-updater": (
-            "cronjob",
-            "platform-weights",
-            "weights",
-            "ghcr.io/platformnetwork/platform-master:latest",
-        ),
-        "platform-validator-image-updater": (
-            "deployment",
-            "platform-validator",
-            "validator",
-            "ghcr.io/platformnetwork/platform:latest",
         ),
     }
 
@@ -236,6 +233,139 @@ def test_helm_renders_one_minute_image_updaters_for_master_and_validator() -> No
         ]
 
 
+def test_helm_renders_one_minute_github_config_sync_resources() -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    rendered = subprocess.check_output(
+        [helm, "template", "platform", str(CHART)],
+        text=True,
+    )
+    documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    cronjob = _document(documents, "CronJob", "platform-config-sync")
+    service_account = _document(documents, "ServiceAccount", "platform-config-sync")
+    role = _document(documents, "Role", "platform-config-sync")
+    role_binding = _document(documents, "RoleBinding", "platform-config-sync")
+    pod_spec = _pod_spec(cronjob)
+    assert pod_spec is not None
+    updater = _named_container(pod_spec, "config-sync")
+
+    assert cronjob["spec"]["schedule"] == "*/1 * * * *"
+    assert cronjob["spec"]["concurrencyPolicy"] == "Forbid"
+    assert service_account["automountServiceAccountToken"] is True
+    assert pod_spec["serviceAccountName"] == "platform-config-sync"
+    assert pod_spec["restartPolicy"] == "OnFailure"
+    assert updater["command"] == [
+        "platform",
+        "kubernetes",
+        "sync-config",
+        "--namespace",
+        "default",
+        "--config-map",
+        "platform-config",
+        "--github-repository",
+        "PlatformNetwork/platform",
+        "--ref",
+        "main",
+        "--values-path",
+        "deploy/helm/platform/values.yaml",
+        "--rollout-target",
+        "Deployment/platform-admin",
+        "--rollout-target",
+        "Deployment/platform-proxy",
+        "--rollout-target",
+        "Deployment/platform-broker",
+    ]
+    assert "refresh-image" not in updater["command"]
+    assert role_binding["subjects"] == [
+        {"kind": "ServiceAccount", "name": "platform-config-sync"}
+    ]
+    assert "ClusterRole" not in {doc["kind"] for doc in documents}
+    assert "ClusterRoleBinding" not in {doc["kind"] for doc in documents}
+
+    rules = role["rules"]
+    configmap_rule = next(rule for rule in rules if rule["resources"] == ["configmaps"])
+    deployment_rule = next(
+        rule for rule in rules if rule["resources"] == ["deployments"]
+    )
+    assert configmap_rule["resourceNames"] == ["platform-config"]
+    assert configmap_rule["verbs"] == ["get", "patch", "update"]
+    assert set(deployment_rule["resourceNames"]) == {
+        "platform-admin",
+        "platform-proxy",
+        "platform-broker",
+    }
+    assert deployment_rule["verbs"] == ["get", "patch", "update"]
+    assert not any(rule["resources"] == ["cronjobs"] for rule in rules)
+    assert all("secrets" not in rule.get("resources", []) for rule in rules)
+    assert all("*" not in rule.get("resources", []) for rule in rules)
+    assert all("*" not in rule.get("verbs", []) for rule in rules)
+
+
+@pytest.mark.parametrize(
+    "release, namespace, set_args, expected_targets, expected_deployments",
+    [
+        (
+            "platform-master",
+            "platform-master",
+            ["--set", "validator.enabled=false"],
+            {
+                "Deployment/platform-master-admin",
+                "Deployment/platform-master-proxy",
+                "Deployment/platform-master-broker",
+            },
+            {
+                "platform-master-admin",
+                "platform-master-proxy",
+                "platform-master-broker",
+            },
+        ),
+        (
+            "platform-validator",
+            "platform-validator",
+            ["--set", "master.enabled=false", "--set", "validator.enabled=true"],
+            {"Deployment/platform-validator-validator"},
+            {"platform-validator-validator"},
+        ),
+    ],
+)
+def test_helm_config_sync_rollout_targets_follow_master_validator_split(
+    release: str,
+    namespace: str,
+    set_args: list[str],
+    expected_targets: set[str],
+    expected_deployments: set[str],
+) -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    rendered = subprocess.check_output(
+        [
+            helm,
+            "template",
+            release,
+            str(CHART),
+            "--namespace",
+            namespace,
+            *set_args,
+        ],
+        text=True,
+    )
+    documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    cronjob = _document(documents, "CronJob", f"{release}-config-sync")
+    role = _document(documents, "Role", f"{release}-config-sync")
+    command = _named_container(_pod_spec(cronjob), "config-sync")["command"]
+    deployment_rule = next(
+        rule for rule in role["rules"] if rule["resources"] == ["deployments"]
+    )
+
+    assert set(_arg_values(command, "--rollout-target")) == expected_targets
+    assert set(deployment_rule["resourceNames"]) == expected_deployments
+    assert not any(rule["resources"] == ["cronjobs"] for rule in role["rules"])
+
+
 def test_helm_image_updater_rbac_is_namespace_scoped() -> None:
     helm = shutil.which("helm")
     if helm is None:
@@ -260,19 +390,176 @@ def test_helm_image_updater_rbac_is_namespace_scoped() -> None:
     deployment_rule = next(
         rule for rule in rules if rule["resources"] == ["deployments"]
     )
-    cronjob_rule = next(rule for rule in rules if rule["resources"] == ["cronjobs"])
     pods_rule = next(rule for rule in rules if rule["resources"] == ["pods"])
 
     assert set(deployment_rule["resourceNames"]) == {
         "platform-admin",
         "platform-proxy",
         "platform-broker",
-        "platform-validator",
     }
     assert deployment_rule["verbs"] == ["get", "patch"]
-    assert cronjob_rule["resourceNames"] == ["platform-weights"]
-    assert cronjob_rule["verbs"] == ["get", "patch"]
+    assert not any(rule["resources"] == ["cronjobs"] for rule in rules)
     assert pods_rule["verbs"] == ["get", "list"]
+
+
+def test_helm_master_mode_renders_only_master_resources_in_master_namespace() -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    rendered = subprocess.check_output(
+        [
+            helm,
+            "template",
+            "platform-master",
+            str(CHART),
+            "--namespace",
+            "platform-master",
+            "--set",
+            "validator.enabled=false",
+        ],
+        text=True,
+    )
+    documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    names = {doc["metadata"]["name"] for doc in documents if "metadata" in doc}
+
+    assert _document(documents, "Deployment", "platform-master-admin")["metadata"].get(
+        "namespace"
+    ) in (None, "platform-master")
+    assert _document(documents, "Deployment", "platform-master-proxy")["metadata"].get(
+        "namespace"
+    ) in (None, "platform-master")
+    assert _document(documents, "Deployment", "platform-master-broker")["metadata"].get(
+        "namespace"
+    ) in (None, "platform-master")
+    assert "platform-master-weights" not in names
+    assert "platform-master-validator" not in names
+    assert not any(name.endswith("validator-image-updater") for name in names)
+    assert _document(documents, "ConfigMap", "platform-master-config")["data"][
+        "master.yaml"
+    ]
+    config_sync = _document(documents, "CronJob", "platform-master-config-sync")
+    config_sync_command = _named_container(_pod_spec(config_sync), "config-sync")[
+        "command"
+    ]
+    assert set(_arg_values(config_sync_command, "--rollout-target")) == {
+        "Deployment/platform-master-admin",
+        "Deployment/platform-master-proxy",
+        "Deployment/platform-master-broker",
+    }
+    assert "Deployment/platform-master-validator" not in config_sync_command
+
+
+def test_helm_validator_mode_renders_only_validator_resources() -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    rendered = subprocess.check_output(
+        [
+            helm,
+            "template",
+            "platform-validator",
+            str(CHART),
+            "--namespace",
+            "platform-validator",
+            "--set",
+            "master.enabled=false",
+            "--set",
+            "validator.enabled=true",
+        ],
+        text=True,
+    )
+    documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    names = {doc["metadata"]["name"] for doc in documents if "metadata" in doc}
+
+    validator = _document(documents, "Deployment", "platform-validator-validator")
+    validator_pod = _pod_spec(validator)
+    assert validator_pod is not None
+    validator_container = _named_container(validator_pod, "validator")
+    assert validator["metadata"].get("namespace") in (None, "platform-validator")
+    assert validator_pod["serviceAccountName"] == "platform-validator"
+    assert {mount["name"] for mount in validator_container["volumeMounts"]} == {
+        "config",
+        "data",
+        "wallet",
+    }
+    wallet_mount = next(
+        mount
+        for mount in validator_container["volumeMounts"]
+        if mount["name"] == "wallet"
+    )
+    assert wallet_mount == {
+        "name": "wallet",
+        "mountPath": "/var/lib/platform/wallets/default/hotkeys",
+        "readOnly": True,
+    }
+    wallet_volume = next(
+        volume for volume in validator_pod["volumes"] if volume["name"] == "wallet"
+    )
+    assert wallet_volume == {
+        "name": "wallet",
+        "secret": {
+            "secretName": "platform-validator-wallet",
+            "items": [
+                {"key": "hotkey", "path": "default"},
+                {"key": "hotkeypub.txt", "path": "defaultpub.txt"},
+            ],
+        },
+    }
+    assert "platform-validator-admin" not in names
+    assert "platform-validator-proxy" not in names
+    assert "platform-validator-broker" not in names
+    assert "platform-validator-weights" not in names
+    assert not any(name.endswith("admin-image-updater") for name in names)
+    assert not any(name.endswith("proxy-image-updater") for name in names)
+    assert not any(name.endswith("broker-image-updater") for name in names)
+    assert not any(name.endswith("weights-image-updater") for name in names)
+
+    config = yaml.safe_load(
+        _document(documents, "ConfigMap", "platform-validator-config")["data"][
+            "master.yaml"
+        ]
+    )
+    assert config["kubernetes"]["namespace"] == "platform-validator"
+    assert config["validator"]["weights_url"] is None
+    assert config["validator"]["weights_interval_seconds"] == 360
+    assert config["validator"]["weights_timeout_seconds"] == 15.0
+    assert config["validator"]["weights_retries"] == 3
+    assert config["validator"]["weights_freshness_seconds"] == 720
+    config_sync = _document(documents, "CronJob", "platform-validator-config-sync")
+    config_sync_command = _named_container(_pod_spec(config_sync), "config-sync")[
+        "command"
+    ]
+    assert _arg_values(config_sync_command, "--rollout-target") == [
+        "Deployment/platform-validator-validator"
+    ]
+    assert "Deployment/platform-validator-admin" not in config_sync_command
+
+
+def test_helm_rejects_equal_master_and_validator_namespaces() -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    result = subprocess.run(
+        [
+            helm,
+            "template",
+            "platform",
+            str(CHART),
+            "--set",
+            "master.namespace=platform-shared",
+            "--set",
+            "validator.namespace=platform-shared",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "master.namespace and validator.namespace must differ" in result.stderr
 
 
 def test_helm_template_renders_target_gpu_and_remote_agent_security_values(
@@ -497,6 +784,12 @@ def test_helm_production_schema_rejects_unsafe_values(
 
     assert result.returncode != 0
     assert expected in result.stderr
+
+
+def _arg_values(command: list[str], flag: str) -> list[str]:
+    return [
+        command[index + 1] for index, value in enumerate(command[:-1]) if value == flag
+    ]
 
 
 def _containers(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:

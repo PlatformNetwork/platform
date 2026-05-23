@@ -5,61 +5,116 @@
     "policy": {
       "type": "object",
       "properties": {
-        "enforceProduction": { "type": "boolean" }
+        "enforceProduction": {
+          "type": "boolean"
+        }
       }
     },
     "environment": {
       "type": "string",
-      "enum": ["development", "staging", "production", "prod"]
+      "enum": [
+        "development",
+        "staging",
+        "production",
+        "prod"
+      ]
     },
     "runtime": {
       "type": "object",
       "properties": {
-        "backend": { "type": "string", "enum": ["kubernetes"] }
+        "backend": {
+          "type": "string",
+          "enum": [
+            "kubernetes"
+          ]
+        }
       }
     },
     "image": {
       "type": "object",
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string", "minLength": 1 },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
         "digest": {
           "type": "string",
           "pattern": "^(|sha256:[a-f0-9]{64})$"
         },
-        "production": { "type": "boolean" },
-        "pullPolicy": { "type": "string" },
+        "production": {
+          "type": "boolean"
+        },
+        "pullPolicy": {
+          "type": "string"
+        },
         "pullSecrets": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
-      "required": ["repository", "tag"]
+      "required": [
+        "repository",
+        "tag"
+      ]
     },
     "images": {
       "type": "object",
       "properties": {
-        "master": { "$ref": "#/definitions/imageReference" },
-        "validator": { "$ref": "#/definitions/imageReference" },
-        "updater": { "$ref": "#/definitions/imageReference" }
+        "master": {
+          "$ref": "#/definitions/imageReference"
+        },
+        "validator": {
+          "$ref": "#/definitions/imageReference"
+        },
+        "updater": {
+          "$ref": "#/definitions/imageReference"
+        }
       }
     },
     "imageAutoUpdate": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "schedule": { "type": "string", "minLength": 1 },
-        "registryEndpoint": { "type": "string" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "registryEndpoint": {
+          "type": "string"
+        }
       }
     },
     "network": {
       "type": "object",
       "properties": {
-        "netuid": { "type": "integer", "minimum": 0 },
-        "chainEndpoint": { "type": "string" },
-        "walletName": { "type": "string", "minLength": 1 },
-        "walletHotkey": { "type": "string", "minLength": 1 },
-        "walletPath": { "type": "string" }
+        "netuid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "chainEndpoint": {
+          "type": "string"
+        },
+        "walletName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "walletHotkey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "walletPath": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "database": {
@@ -68,93 +123,186 @@
         "urlSecret": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "minLength": 1 },
-            "key": { "type": "string", "minLength": 1 }
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            }
           },
-          "required": ["name", "key"]
+          "required": [
+            "name",
+            "key"
+          ]
         }
       }
     },
     "persistence": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "storageClass": { "type": "string" },
-        "size": { "type": "string", "minLength": 1 }
+        "enabled": {
+          "type": "boolean"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "kubernetes": {
       "type": "object",
       "properties": {
-        "serviceAccount": { "type": "string", "minLength": 1 },
-        "gpuResourceName": { "type": "string", "minLength": 1 },
-        "runtimeClassName": { "type": "string" },
+        "serviceAccount": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gpuResourceName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeClassName": {
+          "type": "string"
+        },
         "nodeSelector": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "tolerations": {
           "type": "array",
-          "items": { "type": "object" }
+          "items": {
+            "type": "object"
+          }
         },
         "targetDefaults": {
           "type": "object",
           "properties": {
             "imagePullSecrets": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
-            "gpuResourceName": { "type": "string", "minLength": 1 },
-            "runtimeClassName": { "type": "string" },
+            "gpuResourceName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runtimeClassName": {
+              "type": "string"
+            },
             "nodeSelector": {
               "type": "object",
-              "additionalProperties": { "type": "string" }
+              "additionalProperties": {
+                "type": "string"
+              }
             },
             "tolerations": {
               "type": "array",
-              "items": { "type": "object" }
+              "items": {
+                "type": "object"
+              }
             }
           }
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
     "kubernetesTargets": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "targets": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "mode": { "type": "string", "enum": ["direct", "agent"] },
-              "namespace": { "type": "string", "minLength": 1 },
-              "service_account": { "type": "string", "minLength": 1 },
-              "agent_url": { "type": "string" },
-              "api_url": { "type": "string" },
-              "kubeconfig_file": { "type": "string" },
-              "agent_token_file": { "type": "string" },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "direct",
+                  "agent"
+                ]
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1
+              },
+              "service_account": {
+                "type": "string",
+                "minLength": 1
+              },
+              "agent_url": {
+                "type": "string"
+              },
+              "api_url": {
+                "type": "string"
+              },
+              "kubeconfig_file": {
+                "type": "string"
+              },
+              "agent_token_file": {
+                "type": "string"
+              },
               "labels": {
                 "type": "object",
-                "additionalProperties": { "type": "string" }
+                "additionalProperties": {
+                  "type": "string"
+                }
               },
-              "gpu_count": { "type": "integer", "minimum": 0 },
-              "storage_class": { "type": "string" },
-              "runtime_class_name": { "type": "string" },
+              "gpu_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "storage_class": {
+                "type": "string"
+              },
+              "runtime_class_name": {
+                "type": "string"
+              },
               "node_selector": {
                 "type": "object",
-                "additionalProperties": { "type": "string" }
+                "additionalProperties": {
+                  "type": "string"
+                }
               },
               "tolerations": {
                 "type": "array",
-                "items": { "type": "object" }
+                "items": {
+                  "type": "object"
+                }
               },
-              "enabled": { "type": "boolean" },
-              "verify_tls": { "type": "boolean" },
-              "timeout_seconds": { "type": "number", "minimum": 1 },
-              "description": { "type": "string" }
+              "enabled": {
+                "type": "boolean"
+              },
+              "verify_tls": {
+                "type": "boolean"
+              },
+              "timeout_seconds": {
+                "type": "number",
+                "minimum": 1
+              },
+              "description": {
+                "type": "string"
+              }
             }
           }
         }
@@ -163,17 +311,26 @@
     "remoteAgents": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "networkPolicy": {
           "type": "object",
           "properties": {
             "egressCIDRs": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "ports": {
               "type": "array",
-              "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              }
             }
           }
         }
@@ -182,7 +339,9 @@
     "broker": {
       "type": "object",
       "properties": {
-        "publicUrl": { "type": "string" }
+        "publicUrl": {
+          "type": "string"
+        }
       }
     },
     "docker": {
@@ -190,58 +349,178 @@
       "properties": {
         "brokerAllowedImages": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "master": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
     "validator": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "replicas": { "type": "integer", "minimum": 1 },
-        "registryUrl": { "type": "string", "minLength": 1 },
-        "resources": { "type": "object" }
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "registryUrl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "registryRetrySeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "weightsUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weightsIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "weightsTimeoutSeconds": {
+          "type": "number",
+          "minimum": 1
+        },
+        "weightsRetries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "weightsFreshnessSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "walletSecretName": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object"
+        }
       }
     },
     "weights": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "schedule": { "type": "string", "minLength": 1 },
-        "resources": { "type": "object" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
+    "configSync": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "githubRepository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "githubRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valuesPaths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "resources": {
+          "type": "object"
+        }
       }
     },
     "kubernetesAgent": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "replicas": { "type": "integer", "minimum": 1 },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "tokenKey": { "type": "string", "minLength": 1 },
-        "resources": { "type": "object" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "tokenKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resources": {
+          "type": "object"
+        }
       }
     },
     "networkPolicy": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "ingress": {
           "type": "object",
           "properties": {
-            "allowRuntimePods": { "type": "boolean" },
+            "allowRuntimePods": {
+              "type": "boolean"
+            },
             "extraFrom": {
               "type": "array",
-              "items": { "type": "object" }
+              "items": {
+                "type": "object"
+              }
             }
           }
         },
         "egress": {
           "type": "object",
           "properties": {
-            "allowAll": { "type": "boolean" },
+            "allowAll": {
+              "type": "boolean"
+            },
             "extraRules": {
               "type": "array",
-              "items": { "type": "object" }
+              "items": {
+                "type": "object"
+              }
             }
           }
         }
@@ -250,7 +529,9 @@
     "keda": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": {
+          "type": "boolean"
+        }
       }
     }
   },
@@ -258,67 +539,121 @@
     "imageReference": {
       "type": "object",
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string", "minLength": 1 },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
         "digest": {
           "type": "string",
           "pattern": "^(|sha256:[a-f0-9]{64})$"
         },
-        "pullPolicy": { "type": "string" }
+        "pullPolicy": {
+          "type": "string"
+        }
       },
-      "required": ["repository", "tag"]
+      "required": [
+        "repository",
+        "tag"
+      ]
     }
   },
   "allOf": [
     {
       "if": {
-        "required": ["image"],
+        "required": [
+          "image"
+        ],
         "properties": {
           "image": {
-            "required": ["production"],
-            "properties": { "production": { "const": true } }
+            "required": [
+              "production"
+            ],
+            "properties": {
+              "production": {
+                "const": true
+              }
+            }
           }
         }
       },
       "then": {
-        "required": ["database", "networkPolicy", "docker"],
+        "required": [
+          "database",
+          "networkPolicy",
+          "docker"
+        ],
         "properties": {
           "image": {
-            "required": ["digest"],
+            "required": [
+              "digest"
+            ],
             "properties": {
               "tag": {
-                "not": { "const": "latest" },
+                "not": {
+                  "const": "latest"
+                },
                 "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
               },
-              "digest": { "pattern": "^sha256:[a-f0-9]{64}$" }
+              "digest": {
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
             }
           },
-"database": {
-            "required": ["urlSecret"],
+          "database": {
+            "required": [
+              "urlSecret"
+            ],
             "properties": {
-              "urlSecret": { "required": ["name", "key"] }
+              "urlSecret": {
+                "required": [
+                  "name",
+                  "key"
+                ]
+              }
             }
           },
           "docker": {
-            "required": ["brokerAllowedImages"],
+            "required": [
+              "brokerAllowedImages"
+            ],
             "properties": {
               "brokerAllowedImages": {
                 "minItems": 1,
                 "not": {
                   "contains": {
-                    "enum": ["*", "docker.io/", "ghcr.io/", "platformnetwork/"]
+                    "enum": [
+                      "*",
+                      "docker.io/",
+                      "ghcr.io/",
+                      "platformnetwork/"
+                    ]
                   }
                 }
               }
             }
           },
           "networkPolicy": {
-            "required": ["enabled", "egress"],
+            "required": [
+              "enabled",
+              "egress"
+            ],
             "properties": {
-              "enabled": { "const": true },
+              "enabled": {
+                "const": true
+              },
               "egress": {
-                "required": ["allowAll"],
-                "properties": { "allowAll": { "const": false } }
+                "required": [
+                  "allowAll"
+                ],
+                "properties": {
+                  "allowAll": {
+                    "const": false
+                  }
+                }
               }
             }
           }

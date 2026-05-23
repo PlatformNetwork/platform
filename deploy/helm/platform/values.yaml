@@ -55,7 +55,7 @@ network:
   chainEndpoint: ""
   walletName: default
   walletHotkey: default
-  walletPath: ""
+  walletPath: /var/lib/platform/wallets
 
 kubernetes:
   namespace: platform
@@ -78,6 +78,10 @@ kubernetes:
 kubernetesTargets:
   enabled: false
   targets: []
+
+master:
+  enabled: true
+  namespace: platform-master
 
 masterAdmin:
   replicas: 1
@@ -129,9 +133,17 @@ docker:
     - ghcr.io/platformnetwork/
 
 validator:
-  enabled: true
+  namespace: platform-validator
+  enabled: false
   replicas: 1
   registryUrl: https://chain.platform.network
+  registryRetrySeconds: 15
+  weightsUrl: null
+  weightsIntervalSeconds: 360
+  weightsTimeoutSeconds: 15.0
+  weightsRetries: 3
+  weightsFreshnessSeconds: 720
+  walletSecretName: ""
   resources:
     requests:
       cpu: 250m
@@ -150,6 +162,21 @@ weights:
     limits:
       cpu: "1"
       memory: 1Gi
+
+configSync:
+  enabled: true
+  schedule: "*/1 * * * *"
+  githubRepository: PlatformNetwork/platform
+  githubRef: main
+  valuesPaths:
+    - deploy/helm/platform/values.yaml
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
 
 gpuAgent:
   enabled: false

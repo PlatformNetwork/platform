@@ -1,0 +1,75 @@
+{{- if .Values.configSync.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "platform.fullname" . }}-config-sync
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "config-sync"
+spec:
+  schedule: {{ .Values.configSync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "platform.labels" . | nindent 12 }}
+            platform.component: "config-sync"
+        spec:
+          serviceAccountName: {{ include "platform.fullname" . }}-config-sync
+          automountServiceAccountToken: true
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- include "platform.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: config-sync
+              image: {{ include "platform.imageValue" (dict "image" .Values.images.updater) | quote }}
+              imagePullPolicy: {{ default .Values.image.pullPolicy .Values.images.updater.pullPolicy }}
+              command:
+                - platform
+                - kubernetes
+                - sync-config
+                - --namespace
+                - {{ .Release.Namespace }}
+                - --config-map
+                - {{ include "platform.fullname" . }}-config
+                - --github-repository
+                - {{ .Values.configSync.githubRepository | quote }}
+                - --ref
+                - {{ .Values.configSync.githubRef | quote }}
+                {{- range .Values.configSync.valuesPaths }}
+                - --values-path
+                - {{ . | quote }}
+                {{- end }}
+                {{- if .Values.master.enabled }}
+                - --rollout-target
+                - Deployment/{{ include "platform.fullname" . }}-admin
+                - --rollout-target
+                - Deployment/{{ include "platform.fullname" . }}-proxy
+                {{- if .Values.broker.enabled }}
+                - --rollout-target
+                - Deployment/{{ include "platform.fullname" . }}-broker
+                {{- end }}
+                {{- if and .Values.weights.enabled .Values.weights.submitOnChain }}
+                - --rollout-target
+                - CronJob/{{ include "platform.fullname" . }}-weights
+                {{- end }}
+                {{- end }}
+                {{- if .Values.validator.enabled }}
+                - --rollout-target
+                - Deployment/{{ include "platform.fullname" . }}-validator
+                {{- end }}
+              resources:
+                {{- toYaml .Values.configSync.resources | nindent 16 }}
+              securityContext:
+                {{- include "platform.containerSecurityContext" . | nindent 16 }}
+{{- end }}
