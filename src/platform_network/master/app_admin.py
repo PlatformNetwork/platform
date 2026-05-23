@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import inspect
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, NoReturn
 
 from fastapi import (
@@ -56,6 +58,7 @@ from platform_network.master.registry import (
     ChallengeNotFoundError,
     record_to_admin_view,
 )
+from platform_network.master.service import MasterWeightService, active_challenge_inputs
 from platform_network.schemas.challenge import (
     ChallengeAdminView,
     ChallengeCreate,
@@ -79,6 +82,7 @@ from platform_network.schemas.kubernetes_target import (
     KubernetesTargetUpdate,
     KubernetesTargetView,
 )
+from platform_network.schemas.weights import MasterWeightsResponse
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -96,6 +100,10 @@ def create_admin_app(
     gpu_registry: GpuServerRegistry,
     kubernetes_target_registry: KubernetesTargetRegistry | None = None,
     metrics_provider: ChallengeMetricsProvider | None = None,
+    weight_service: MasterWeightService | None = None,
+    netuid: int = 0,
+    chain_endpoint: str = "",
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     admin_token_provider: TokenProvider = load_admin_token_from_environment,
     enforce_production_policy: bool = False,
 ) -> FastAPI:
@@ -149,6 +157,29 @@ def create_admin_app(
     @app.get("/v1/registry", response_model=RegistryResponse)
     async def get_registry() -> RegistryResponse:
         return await registry_response()
+
+    @app.get("/v1/weights/latest", response_model=MasterWeightsResponse)
+    async def get_latest_weights() -> MasterWeightsResponse:
+        if weight_service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Master weight service unavailable",
+            )
+        try:
+            challenges, tokens = await active_challenge_inputs(challenge_registry)
+            return await weight_service.compute_latest_response(
+                challenges,
+                tokens,
+                netuid=netuid,
+                chain_endpoint=chain_endpoint,
+                now_fn=now_fn,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            ) from exc
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:

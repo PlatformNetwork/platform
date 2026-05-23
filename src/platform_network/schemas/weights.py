@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+MASTER_WEIGHTS_FRESHNESS_SECONDS = 720
 
 
 class ChallengeWeightsResponse(BaseModel):
@@ -26,3 +28,22 @@ class FinalWeights(BaseModel):
     uids: list[int]
     weights: list[float]
     hotkey_weights: dict[str, float] = Field(default_factory=dict)
+
+
+class MasterWeightsResponse(BaseModel):
+    netuid: int
+    chain_endpoint: str
+    uids: list[int]
+    weights: list[float]
+    hotkey_weights: dict[str, float] = Field(default_factory=dict)
+    computed_at: datetime
+    expires_at: datetime
+    source_challenges: list[ChallengeWeightsResult]
+    metagraph_updated_at: datetime
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_not_expired(cls, value: datetime) -> datetime:
+        if value <= datetime.now(UTC):
+            raise ValueError("expires_at must be in the future")
+        return value

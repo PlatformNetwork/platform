@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -30,6 +31,7 @@ from platform_network.schemas.kubernetes_target import (
     KubernetesTargetRecord,
     KubernetesTargetUpdate,
 )
+from platform_network.schemas.weights import ChallengeWeightsResult
 from platform_network.security.miner_auth import (
     MinerUploadVerifier,
     NonceReplayError,
@@ -210,6 +212,123 @@ def _proxy_app(registry: ChallengeRegistry, **kwargs: Any) -> FastAPI:
         metagraph_cache=FakeCache(),  # type: ignore[arg-type]
         **kwargs,
     )
+
+
+class FakeWeightService:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[list[str], dict[str, str]]] = []
+
+    async def compute_latest_response(
+        self,
+        challenges: list[Any],
+        tokens: dict[str, str],
+        *,
+        netuid: int,
+        chain_endpoint: str,
+        now_fn: Any,
+    ) -> Any:
+        from datetime import timedelta
+
+        from platform_network.schemas.weights import MasterWeightsResponse
+
+        self.calls.append(([challenge.slug for challenge in challenges], tokens))
+        if self.fail:
+            raise RuntimeError("challenge collection failed")
+        computed_at = now_fn()
+        return MasterWeightsResponse(
+            netuid=netuid,
+            chain_endpoint=chain_endpoint,
+            uids=[9],
+            weights=[1.0],
+            hotkey_weights={"miner-hotkey": 1.0},
+            computed_at=computed_at,
+            expires_at=computed_at + timedelta(seconds=720),
+            source_challenges=[
+                ChallengeWeightsResult(
+                    slug="weights-smoke",
+                    emission_percent=100,
+                    weights={"miner-hotkey": 1.0},
+                )
+            ],
+            metagraph_updated_at=computed_at,
+        )
+
+
+def test_weights_latest_is_public_and_computes_without_submit() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("weights-smoke"),
+                "emission_percent": "100",
+                "status": ChallengeStatus.ACTIVE,
+                "internal_base_url": "http://challenge-weights-smoke:8000",
+            }
+        )
+    )
+    service = FakeWeightService()
+    client = TestClient(
+        _admin_app(
+            registry,
+            admin_token_provider=lambda: "admin-secret",
+            weight_service=service,
+            netuid=42,
+            chain_endpoint="wss://chain.example:9944",
+            now_fn=lambda: datetime(2030, 1, 1, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    response = client.get("/v1/weights/latest")
+
+    assert response.status_code == 200
+    assert service.calls == [
+        (["weights-smoke"], {"weights-smoke": registry.get_token("weights-smoke")})
+    ]
+    assert response.json() == {
+        "netuid": 42,
+        "chain_endpoint": "wss://chain.example:9944",
+        "uids": [9],
+        "weights": [1.0],
+        "hotkey_weights": {"miner-hotkey": 1.0},
+        "computed_at": "2030-01-01T12:00:00Z",
+        "expires_at": "2030-01-01T12:12:00Z",
+        "source_challenges": [
+            {
+                "slug": "weights-smoke",
+                "emission_percent": 100.0,
+                "weights": {"miner-hotkey": 1.0},
+                "ok": True,
+                "error": None,
+            }
+        ],
+        "metagraph_updated_at": "2030-01-01T12:00:00Z",
+    }
+
+
+def test_weights_latest_returns_bad_gateway_when_collection_fails() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("weights-smoke"),
+                "emission_percent": "100",
+                "status": ChallengeStatus.ACTIVE,
+            }
+        )
+    )
+    client = TestClient(
+        _admin_app(
+            registry,
+            weight_service=FakeWeightService(fail=True),
+            now_fn=lambda: datetime(2030, 1, 1, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    response = client.get("/v1/weights/latest")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "challenge collection failed"
 
 
 def test_admin_challenge_crud_and_registry_active_only() -> None:
