@@ -30,6 +30,28 @@ def test_registry_url_defaults_and_examples_use_chain_endpoint() -> None:
 
     assert master_example["master"]["registry_url"] == expected
     assert validator_example["validator"]["registry_url"] == expected
+    assert ValidatorSettings().weights_url is None
+    assert ValidatorSettings().resolved_weights_url == expected
+    assert (
+        ValidatorSettings(registry_url="https://master.example").resolved_weights_url
+        == "https://master.example"
+    )
+    assert (
+        ValidatorSettings(
+            registry_url="https://registry.example",
+            weights_url="https://weights.example",
+        ).resolved_weights_url
+        == "https://weights.example"
+    )
+    assert ValidatorSettings().weights_interval_seconds == 360
+    assert ValidatorSettings().weights_timeout_seconds == 15.0
+    assert ValidatorSettings().weights_retries == 3
+    assert ValidatorSettings().weights_freshness_seconds == 720
+    assert validator_example["validator"]["weights_url"] is None
+    assert validator_example["validator"]["weights_interval_seconds"] == 360
+    assert validator_example["validator"]["weights_timeout_seconds"] == 15.0
+    assert validator_example["validator"]["weights_retries"] == 3
+    assert validator_example["validator"]["weights_freshness_seconds"] == 720
 
 
 def test_registry_facing_defaults_docs_and_examples_do_not_use_rpc_endpoint() -> None:

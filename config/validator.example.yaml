@@ -10,6 +10,11 @@ network:
 validator:
   registry_url: https://chain.platform.network
   registry_retry_seconds: 15
+  weights_url: null
+  weights_interval_seconds: 360
+  weights_timeout_seconds: 15.0
+  weights_retries: 3
+  weights_freshness_seconds: 720
 
 database:
   url: postgresql+asyncpg://platform:platform@postgres.platform.svc.cluster.local/platform

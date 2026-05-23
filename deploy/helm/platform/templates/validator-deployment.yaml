@@ -19,7 +19,7 @@ spec:
         {{- include "platform.labels" . | nindent 8 }}
         platform.component: "validator"
     spec:
-      serviceAccountName: {{ .Values.kubernetes.serviceAccount }}
+      serviceAccountName: {{ include "platform.serviceAccountName" . }}
       automountServiceAccountToken: true
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
@@ -39,6 +39,9 @@ spec:
             - run
             - --config
             - config/master.kubernetes.yaml
+          env:
+            - name: HOME
+              value: /var/lib/platform
           securityContext:
             {{- include "platform.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
@@ -48,6 +51,9 @@ spec:
               readOnly: true
             - name: data
               mountPath: /var/lib/platform
+            - name: wallet
+              mountPath: {{ .Values.network.walletPath }}/{{ .Values.network.walletName }}/hotkeys
+              readOnly: true
           resources:
             {{- toYaml .Values.validator.resources | nindent 12 }}
       volumes:
@@ -61,4 +67,12 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        - name: wallet
+          secret:
+            secretName: {{ .Values.validator.walletSecretName | default (printf "%s-wallet" (include "platform.fullname" .)) }}
+            items:
+              - key: hotkey
+                path: {{ .Values.network.walletHotkey }}
+              - key: hotkeypub.txt
+                path: {{ .Values.network.walletHotkey }}pub.txt
 {{- end }}
