@@ -94,6 +94,23 @@ class KubernetesTargetDefaultsSettings(BaseModel):
     tolerations: list[dict[str, object]] = Field(default_factory=list)
 
 
+class ResourceRequirementsSettings(BaseModel):
+    requests: dict[str, str] = Field(default_factory=dict)
+    limits: dict[str, str] = Field(default_factory=dict)
+
+
+class KubernetesManagedPostgresSettings(BaseModel):
+    enabled: bool = True
+    image: str = "postgres:16-alpine"
+    storage_class: str | None = None
+    storage_size: str = "10Gi"
+    retain_pvc: bool = True
+    retain_secret: bool = True
+    resources: ResourceRequirementsSettings = Field(
+        default_factory=ResourceRequirementsSettings
+    )
+
+
 class KubernetesSettings(BaseModel):
     namespace: str = "platform"
     in_cluster: bool = True
@@ -113,6 +130,9 @@ class KubernetesSettings(BaseModel):
     runtime_class_name: str | None = None
     target_defaults: KubernetesTargetDefaultsSettings = Field(
         default_factory=KubernetesTargetDefaultsSettings
+    )
+    managed_postgres: KubernetesManagedPostgresSettings = Field(
+        default_factory=KubernetesManagedPostgresSettings
     )
     autoscaling: KubernetesAutoscalingSettings = Field(
         default_factory=KubernetesAutoscalingSettings
