@@ -1,3 +1,4 @@
+{{- if .Values.master.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -28,4 +29,6 @@ spec:
       app.kubernetes.io/name: {{ include "platform.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       platform.component: "broker"
+{{- end }}
+
 {{- end }}

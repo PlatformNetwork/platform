@@ -1,4 +1,4 @@
-{{- if and .Values.masterProxy.autoscaling.enabled (not .Values.keda.enabled) }}
+{{- if and .Values.master.enabled .Values.masterProxy.autoscaling.enabled (not .Values.keda.enabled) }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -21,7 +21,7 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.masterProxy.autoscaling.targetCPUUtilizationPercentage }}
 {{- end }}
-{{- if and .Values.broker.enabled .Values.broker.autoscaling.enabled (not .Values.keda.enabled) }}
+{{- if and .Values.master.enabled .Values.broker.enabled .Values.broker.autoscaling.enabled (not .Values.keda.enabled) }}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

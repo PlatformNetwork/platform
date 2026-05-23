@@ -1,4 +1,4 @@
-{{- if and .Values.keda.enabled .Values.masterProxy.autoscaling.enabled }}
+{{- if and .Values.master.enabled .Values.keda.enabled .Values.masterProxy.autoscaling.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -17,7 +17,7 @@ spec:
       metadata:
         value: {{ .Values.masterProxy.autoscaling.targetCPUUtilizationPercentage | quote }}
 {{- end }}
-{{- if and .Values.keda.enabled .Values.broker.enabled .Values.broker.autoscaling.enabled }}
+{{- if and .Values.master.enabled .Values.keda.enabled .Values.broker.enabled .Values.broker.autoscaling.enabled }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
