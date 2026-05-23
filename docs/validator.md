@@ -46,7 +46,15 @@ platform validator run --config config/validator.kubernetes.yaml
 ```
 
 The ConfigMap must set `runtime.backend: kubernetes`,
-`validator.registry_url: https://chain.platform.network`, `database.url` to an external PostgreSQL URL such as `postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform`, `docker.broker_allowed_images` to registry-scoped prefixes such as `ghcr.io/platformnetwork/`, and `kubernetes.in_cluster: true`. SQLite URLs, wildcard prefixes, and broad prefixes such as `platformnetwork/` are rejected in Kubernetes mode.
+`validator.registry_url: https://chain.platform.network`, `database.url` or `PLATFORM_DATABASE_URL` to an external PostgreSQL URL such as `postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform`, `docker.broker_allowed_images` or `PLATFORM_BROKER_ALLOWED_IMAGES` to registry-scoped prefixes such as `ghcr.io/platformnetwork/`, and `kubernetes.in_cluster: true`. SQLite URLs, wildcard prefixes, and broad prefixes such as `platformnetwork/` are rejected in Kubernetes mode.
+
+`PLATFORM_DATABASE_URL` is the validator control-plane database credential. It is not a challenge database credential and must not be copied into challenge specs. In Kubernetes managed challenge mode, Platform creates per-challenge Postgres resources and injects each challenge's own `CHALLENGE_DATABASE_URL` from the matching Secret.
+
+## Challenge database behavior
+
+When a validator starts active challenges through Kubernetes managed mode, each challenge slug receives isolated managed Postgres resources. Platform injects `CHALLENGE_DATABASE_URL` automatically from the per-challenge Secret. The challenge `/data` PVC remains separate and is still used for artifacts, analyzer output, local files, and the generated SQLite fallback.
+
+Managed Postgres Secrets and data claims are retained by default when a challenge is removed. Manual deletion of those retained objects is destructive. Automated destructive purge is not part of this implementation.
 
 ## Safety
 

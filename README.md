@@ -36,6 +36,7 @@ together as one subnet.
 - Challenges expose a standard internal weight contract to Platform.
 - Public challenge APIs are proxied through Platform without exposing internal control routes.
 - Master PostgreSQL is private to the master process.
+- Kubernetes managed challenge mode gives each challenge only its own isolated Postgres credentials.
 - Challenge state remains owned by each challenge.
 - Validators can run all active challenge containers from the master registry.
 
@@ -59,12 +60,14 @@ together as one subnet.
 ```mermaid
 flowchart LR
     BT[Bittensor] --> M[Master]
-    M --> PG[(Postgres)]
+    M --> PG[(Control-plane Postgres)]
     M --> K8S[Kubernetes]
     K8S --> C1[Challenge A]
     K8S --> C2[Challenge B]
-    C1 --> S1[(SQLite)]
-    C2 --> S2[(SQLite)]
+    C1 --> P1[(Managed Postgres A)]
+    C2 --> P2[(Managed Postgres B)]
+    C1 --> D1[(Challenge A /data)]
+    C2 --> D2[(Challenge B /data)]
     V[Validator] --> R[Registry]
     R --> M
     U[Miners] --> P[Proxy]
@@ -156,7 +159,8 @@ Platform uses Kubernetes-only first-party deployment paths and keeps Dockerfiles
 - `scripts/install-master.sh` is a Foundation-only installer for Cortex Foundation master infrastructure. Do not run this for validators or third-party operators. Its default namespace is `PLATFORM_NAMESPACE=platform-master`, and it installs master admin, proxy, broker, and `platform-master-config-sync` only.
 - Normal validators must use `scripts/install-validator.sh` and the validator guide, not the foundation master installer.
 - First-party Platform defaults use Kubernetes runtime, the Kubernetes broker backend, and an external PostgreSQL-compatible database URL.
-- Production and Kubernetes deployments require an external PostgreSQL database provided through an explicit secret or URL. SQLite is rejected for Kubernetes control-plane state.
+- Production and Kubernetes deployments require an external PostgreSQL database provided through an explicit secret or URL for control-plane state. SQLite is rejected for Kubernetes control-plane state.
+- Kubernetes managed challenge mode creates isolated managed Postgres resources per challenge slug and injects `CHALLENGE_DATABASE_URL` automatically from the per-challenge Secret. The challenge `/data` PVC remains separate and is for artifacts, analyzer output, local files, and the SQLite fallback.
 - The default Helm chart runs first-party master admin, proxy, broker, and config sync workloads from `ghcr.io/platformnetwork/platform-master:latest`, plus one-minute image updater CronJobs for those Deployments. The updaters resolve the public GHCR tag digest and patch Deployments to `tag@sha256:<digest>` only when the digest changes; no GHCR pull secret is required for public packages.
 - Run an explicit validator release to deploy normal validator pods using `ghcr.io/platformnetwork/platform:latest`; validators fetch master-computed weights and perform final Bittensor submission.
 - Pinned production mode still uses a semver tag plus a `sha256` digest, for example `ghcr.io/platformnetwork/demo:1.2.3@sha256:<64-hex-digest>`, and disables mutable auto-update. Production rejects `latest`, untagged images, missing digests, and `imageAutoUpdate.enabled=true`. Platform release versioning starts at `3.0.0`; see `docs/versioning.md` for the SemVer, Git tag, mutable `latest`/`main`, and GHCR tag policy.

@@ -80,7 +80,7 @@ If you do not use the script, reproduce the same flow manually:
 2. Create a ServiceAccount plus a namespaced Role/RoleBinding that can manage
    Secrets, Services, Pods/logs, PVCs, Deployments, StatefulSets, Jobs, HPAs, and
    NetworkPolicies in that namespace.
-3. Create a ConfigMap containing `validator.yaml`. Kubernetes mode enables the production policy gate, so `database.url` must be an external PostgreSQL URL and `docker.broker_allowed_images` must use registry-scoped prefixes, not broad Docker Hub or wildcard prefixes.
+3. Create a ConfigMap containing `validator.yaml`. Kubernetes mode enables the production policy gate, so `database.url` or `PLATFORM_DATABASE_URL` must be an external PostgreSQL URL and `docker.broker_allowed_images` or `PLATFORM_BROKER_ALLOWED_IMAGES` must use registry-scoped prefixes, not broad Docker Hub or wildcard prefixes.
 
 ```yaml
 runtime:
@@ -104,6 +104,8 @@ network:
   wallet_path: /var/lib/platform/wallets
 ```
 
+`PLATFORM_DATABASE_URL` is for Platform control-plane state. It is not `CHALLENGE_DATABASE_URL`, and it must not be copied into challenge manifests. In Kubernetes managed challenge mode, Platform creates a separate managed Postgres server and Secret per challenge slug, then injects that challenge's `CHALLENGE_DATABASE_URL` automatically from its own Secret.
+
 4. Regenerate only the validator hotkey from its mnemonic on a local trusted
    machine and create a Kubernetes Secret containing the generated hotkey files.
    The Secret is readable by cluster admins and any subject with Secret read RBAC
@@ -121,6 +123,12 @@ state at `/var/lib/platform`, and mount the hotkey Secret at:
 ```text
 /var/lib/platform/wallets/platform-validator/hotkeys
 ```
+
+## Challenge database lifecycle
+
+For each active challenge slug, Kubernetes managed mode creates isolated managed Postgres resources. Platform injects `CHALLENGE_DATABASE_URL` from the per-challenge Secret. The challenge `/data` PVC stays separate and remains available for artifacts, analyzer output, local files, and the generated SQLite fallback.
+
+When a challenge is removed, Platform keeps the managed Postgres Secret and data claim by default. Deleting those retained resources is a manual destructive purge because it can remove database contents or the credential needed to reconnect to retained data.
 
 ## Runtime Checks
 

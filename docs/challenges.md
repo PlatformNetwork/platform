@@ -4,7 +4,11 @@
 
 ## Model
 
-A challenge is an independent repository and Docker image. It owns its logic, public routes, submissions, scoring data, and SQLite schema.
+A challenge is an independent repository and Docker image. It owns its logic, public routes, submissions, scoring data, database schema, and challenge-local files.
+
+In Kubernetes managed mode, Platform creates isolated managed Postgres resources per challenge slug and injects `CHALLENGE_DATABASE_URL` automatically from the per-challenge Secret. Local generated challenge runs and legacy Docker runtime stay SQLite-backed with `sqlite+aiosqlite:////data/challenge.sqlite3`.
+
+The challenge `/data` PVC is separate from managed Postgres. Use `/data` for artifacts, analyzer output, uploaded files, local files, and the SQLite fallback. Managed Postgres uses its own retained data claim.
 
 ## Required API
 
