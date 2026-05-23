@@ -4,7 +4,7 @@
 
 **Multi-challenge Bittensor subnet platform with master/validator orchestration**
 
-**[Miner Guide](docs/miner/README.md) • [Validator Guide](docs/validator/README.md) • [Architecture](docs/architecture.md) • [Challenges](docs/challenges.md) • [Security](docs/security.md) • [Website](https://platform.network)**
+**[Miner Guide](docs/miner/README.md) • [Validator Guide](docs/validator/README.md) • [Foundation Master Guide](docs/master/README.md) • [Architecture](docs/architecture.md) • [Challenges](docs/challenges.md) • [Security](docs/security.md) • [Website](https://platform.network)**
 
 [![CI](https://github.com/PlatformNetwork/platform/actions/workflows/ci.yml/badge.svg)](https://github.com/PlatformNetwork/platform/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/PlatformNetwork/platform)](https://github.com/PlatformNetwork/platform/blob/main/LICENSE)
@@ -22,8 +22,8 @@
 
 Platform is a **multi-challenge Bittensor subnet platform**. It lets independent challenge
 subnets run under one validator network, routes miner traffic to the right challenge, collects raw
-challenge weights, normalizes emissions, maps miner hotkeys to Bittensor UIDs, and submits final
-weights on-chain.
+challenge weights, normalizes emissions, maps miner hotkeys to Bittensor UIDs, and publishes the
+final vector for validators to submit on-chain.
 
 Each challenge lives in its own repository and owns its submissions, scoring logic, state, and
 public miner experience. Platform provides the orchestration layer that makes those challenges run
@@ -46,6 +46,7 @@ together as one subnet.
 - [Architecture](docs/architecture.md)
 - [Miner guide](docs/miner/README.md)
 - [Validator guide](docs/validator/README.md)
+- [Foundation master guide](docs/master/README.md)
 - [Challenges](docs/challenges.md)
 - [Challenge Integration Guide](docs/challenge-integration.md)
 - [Security Model](docs/security.md)
@@ -69,8 +70,9 @@ flowchart LR
     U[Miners] --> P[Proxy]
     P --> C1
     P --> C2
-    M --> W[set_weights]
-    W --> BT
+    M --> W[Weights API]
+    V --> W
+    V --> BT
 ```
 
 ---
@@ -93,7 +95,8 @@ sequenceDiagram
     B-->>M: hotkey -> weight
     M->>G: normalize + emissions
     G-->>M: uid weights
-    M->>BT: set_weights
+    M-->>V: latest uid weights
+    V->>BT: set_weights
 ```
 
 ---
@@ -108,7 +111,7 @@ Platform coordinates the full lifecycle of a multi-challenge subnet:
 4. Miners interact with the relevant challenge through Platform's public proxy.
 5. Each challenge calculates raw hotkey weights from its own scoring rules.
 6. Platform normalizes challenge outputs, applies configured emissions, and maps hotkeys to UIDs.
-7. Final weights are submitted to Bittensor at epoch boundaries.
+7. Validators fetch the master's final vector and submit weights to Bittensor at epoch boundaries.
 
 If a challenge fails, Platform can isolate that challenge's contribution without taking down the
 entire subnet.
@@ -150,9 +153,12 @@ platform/
 
 Platform uses Kubernetes-only first-party deployment paths and keeps Dockerfiles for OCI images consumed by Kubernetes:
 
+- `scripts/install-master.sh` is a Foundation-only installer for Cortex Foundation master infrastructure. Do not run this for validators or third-party operators. Its default namespace is `PLATFORM_NAMESPACE=platform-master`, and it installs master admin, proxy, broker, and `platform-master-config-sync` only.
+- Normal validators must use `scripts/install-validator.sh` and the validator guide, not the foundation master installer.
 - First-party Platform defaults use Kubernetes runtime, the Kubernetes broker backend, and an external PostgreSQL-compatible database URL.
 - Production and Kubernetes deployments require an external PostgreSQL database provided through an explicit secret or URL. SQLite is rejected for Kubernetes control-plane state.
-- The default Helm chart runs first-party master workloads from `ghcr.io/platformnetwork/platform-master:latest`, validator workloads from `ghcr.io/platformnetwork/platform:latest`, and renders one-minute image updater CronJobs. The updaters resolve the public GHCR tag digest and patch the Deployment or weights CronJob to `tag@sha256:<digest>` only when the digest changes; no GHCR pull secret is required for public packages.
+- The default Helm chart runs first-party master admin, proxy, broker, and config sync workloads from `ghcr.io/platformnetwork/platform-master:latest`, plus one-minute image updater CronJobs for those Deployments. The updaters resolve the public GHCR tag digest and patch Deployments to `tag@sha256:<digest>` only when the digest changes; no GHCR pull secret is required for public packages.
+- Run an explicit validator release to deploy normal validator pods using `ghcr.io/platformnetwork/platform:latest`; validators fetch master-computed weights and perform final Bittensor submission.
 - Pinned production mode still uses a semver tag plus a `sha256` digest, for example `ghcr.io/platformnetwork/demo:1.2.3@sha256:<64-hex-digest>`, and disables mutable auto-update. Production rejects `latest`, untagged images, missing digests, and `imageAutoUpdate.enabled=true`. Platform release versioning starts at `3.0.0`; see `docs/versioning.md` for the SemVer, Git tag, mutable `latest`/`main`, and GHCR tag policy.
 - Production remote GPU servers and Kubernetes targets must keep `verify_tls=true`; `verify_tls=false` is only acceptable for clearly local or test-only endpoints.
 - Multi-server and Kubernetes target routing trusts only enabled, healthy, non-draining targets with remaining GPU capacity. Production agent targets must use HTTPS and `verify_tls=true`; persisted insecure targets are rejected when production policy is active.

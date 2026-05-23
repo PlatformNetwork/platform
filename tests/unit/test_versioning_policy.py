@@ -59,7 +59,7 @@ def test_versioning_policy_documents_release_contract() -> None:
         "platform-master",
         "imageAutoUpdate",
         "main",
-        "one-minute image-updater CronJobs",
+        "image-updater resources",
         "type=semver,pattern={{version}}",
         "sha256",
         "latest",

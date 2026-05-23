@@ -54,7 +54,10 @@ ghcr.io/platformnetwork/platform:3.0.3@sha256:<64-hex-digest>
 
 The digest is the immutable deployment selector. The tag provides human-readable release context. Production policy rejects `latest`, untagged image references, missing digests, non-SemVer tags, and mutable auto-update CronJobs.
 
-Mutable tags such as `latest` and `main` are allowed for the default Kubernetes auto-update mode. In that mode, Helm renders master admin/proxy/broker/weights from `ghcr.io/platformnetwork/platform-master:latest`, validators from `ghcr.io/platformnetwork/platform:latest`, and one-minute image-updater CronJobs. The updaters use anonymous GHCR registry digest checks for public packages and patch Deployments or the weights CronJob to `tag@sha256:<digest>` only when a mutable tag moves. No GHCR pull secret is required while the packages remain public. To roll back or freeze a production deployment, disable `imageAutoUpdate` and pin SemVer plus digest values.
+Mutable tags such as `latest` and `main` are allowed for the default Kubernetes auto-update mode.
+In that mode, Helm renders master admin, proxy, broker, config sync, and image-updater resources from `ghcr.io/platformnetwork/platform-master:latest`.
+Validator workloads are deployed by an explicit validator release from `ghcr.io/platformnetwork/platform:latest`; validators fetch master-computed weights and perform final Bittensor submission.
+The updaters use anonymous GHCR registry digest checks for public packages and patch Deployments to `tag@sha256:<digest>` only when a mutable tag moves. No GHCR pull secret is required while the packages remain public. To roll back or freeze a production deployment, disable `imageAutoUpdate` and pin SemVer plus digest values.
 
 ## Release Execution Boundary
 

@@ -11,6 +11,7 @@ flowchart TB
       P[Proxy API]
       O[Kubernetes Orchestrator]
       G[Weight Aggregator]
+      W[Weights API]
       DB[(Postgres)]
     end
     subgraph D[Kubernetes Workloads]
@@ -24,16 +25,18 @@ flowchart TB
     O --> C1
     C1 --> CDB
     G --> C1
-    G --> BT[Bittensor]
+    G --> W
+    V --> W
+    V --> BT[Bittensor]
 ```
 
 ## Master validator
 
-The master owns registry metadata, admin operations, Kubernetes challenge lifecycle, challenge tokens, emission configuration, and final Bittensor weight submission.
+The master owns registry metadata, admin operations, Kubernetes challenge lifecycle, challenge tokens, emission configuration, and final weight computation. By default it serves the computed vector through the public weights API; normal validators perform Bittensor submission.
 
 ## Normal validator
 
-Normal validators read `/v1/registry`, launch all active challenge images as Kubernetes workloads, and keep retrying if the registry is unavailable.
+Normal validators read `/v1/registry`, launch all active challenge images as Kubernetes workloads, fetch `/v1/weights/latest`, submit the fetched vector on-chain, and keep retrying if the master is unavailable.
 
 ## Challenge isolation
 
@@ -41,7 +44,10 @@ Each challenge runs as a Kubernetes workload with its own OCI image, persistent 
 
 ## Deployment Boundaries
 
-First-party Platform deployments are Kubernetes-only. Default Helm deployments use mutable GHCR `latest` images plus one-minute digest-checking updater CronJobs for master and validator workloads. Pinned production deployments should disable mutable auto-update and use rollout controls, scoped RBAC, external PostgreSQL, and semver plus `sha256` digest image pins for control-plane and challenge images.
+First-party Platform deployments are Kubernetes-only.
+By default, Helm deploys the master admin, proxy, broker, config sync, and master image updater resources only.
+Validator workloads require an explicit validator release; those validators fetch master-computed weights and perform the final Bittensor submission.
+Pinned production deployments should disable mutable auto-update and use rollout controls, scoped RBAC, external PostgreSQL, and semver plus `sha256` digest image pins for control-plane and challenge images.
 
 Kubernetes CPU and memory requests and limits map to PodSpec fields. Docker-only `pids_limit`, `memory_swap`, and custom Docker network modes do not have parity in this path, so non-default requests are rejected or handled by cluster and admission policy outside Platform.
 
