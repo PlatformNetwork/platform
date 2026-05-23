@@ -8,10 +8,18 @@ import sys
 import tarfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
-from platform_network.kubernetes.names import broker_job_name, challenge_name, k8s_name
+import platform_network.kubernetes.resources as kubernetes_resources
+from platform_network.kubernetes.names import (
+    POSTGRES_SECRET_KEYS,
+    broker_job_name,
+    challenge_name,
+    challenge_postgres_names,
+    k8s_name,
+)
 from platform_network.kubernetes.resources import (
     build_broker_job,
     build_broker_mount_secret,
@@ -41,6 +49,422 @@ def test_k8s_name_is_dns_safe_and_stable() -> None:
     assert re.fullmatch(r"x+-[a-f0-9]{8}", long)
     with pytest.raises(ValueError):
         k8s_name("!!!")
+
+
+def test_challenge_postgres_names_contract_is_dns_safe_and_stable() -> None:
+    names = challenge_postgres_names("agent-challenge")
+
+    assert names.base_name == "challenge-agent-challenge-postgres"
+    assert names.service_name == "challenge-agent-challenge-postgres"
+    assert names.statefulset_name == "challenge-agent-challenge-postgres"
+    assert names.stateful_set_name == "challenge-agent-challenge-postgres"
+    assert names.secret_name == "challenge-agent-challenge-postgres-secret"
+    assert names.data_claim_name == "challenge-agent-challenge-postgres-data"
+    assert names.database_name == "challenge"
+    assert names.database_user == "challenge"
+    assert names.secret_keys == POSTGRES_SECRET_KEYS
+    assert names.secret_keys == (
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "CHALLENGE_DATABASE_URL",
+    )
+
+    normalized = challenge_postgres_names("Agent_Challenge")
+    assert normalized.base_name.startswith("challenge-agent-challenge-")
+    assert normalized.base_name.endswith("-postgres")
+    assert normalized.base_name != names.base_name
+
+    long = challenge_postgres_names("a" * 80)
+    for value in (
+        normalized.base_name,
+        normalized.service_name,
+        normalized.statefulset_name,
+        normalized.secret_name,
+        normalized.data_claim_name,
+        long.base_name,
+        long.service_name,
+        long.statefulset_name,
+        long.secret_name,
+        long.data_claim_name,
+    ):
+        assert len(value) <= 63
+        assert re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", value)
+
+
+def test_challenge_postgres_name_collision_resistance_for_normalized_slugs() -> None:
+    hyphen = challenge_postgres_names("agent-challenge")
+    underscore = challenge_postgres_names("agent_challenge")
+
+    assert k8s_name("agent-challenge") == k8s_name("agent_challenge")
+    assert hyphen.base_name != underscore.base_name
+    assert hyphen.secret_name != underscore.secret_name
+    assert hyphen.data_claim_name != underscore.data_claim_name
+
+
+def test_managed_postgres_secret_keys_avoid_password_snapshot() -> None:
+    names = challenge_postgres_names("agent-challenge")
+    builder = _required_managed_postgres_builder("build_challenge_postgres_secret")
+
+    secret = builder(
+        "agent-challenge",
+        namespace="platform",
+        retain=True,
+        password="unit-test-generated-credential",
+    )
+
+    assert secret["apiVersion"] == "v1"
+    assert secret["kind"] == "Secret"
+    assert secret["metadata"]["name"] == names.secret_name
+    assert secret["metadata"]["namespace"] == "platform"
+    assert secret["metadata"]["labels"]["platform.challenge.slug"] == "agent-challenge"
+    assert (
+        secret["metadata"]["labels"]["platform.component"]
+        == "challenge-postgres-secret"
+    )
+    assert secret["metadata"]["annotations"] == {"helm.sh/resource-policy": "keep"}
+    assert secret["type"] == "Opaque"
+    assert set(secret["stringData"]) == set(names.secret_keys)
+    assert secret["stringData"]["POSTGRES_DB"] == names.database_name
+    assert secret["stringData"]["POSTGRES_USER"] == names.database_user
+    assert secret["stringData"]["POSTGRES_PASSWORD"]
+    assert secret["stringData"]["CHALLENGE_DATABASE_URL"]
+    assert secret["stringData"]["POSTGRES_PASSWORD"] != "replace-me"
+    assert "replace-me" not in secret["stringData"]["CHALLENGE_DATABASE_URL"]
+
+
+def test_managed_postgres_secret_requires_explicit_password() -> None:
+    builder = _required_managed_postgres_builder("build_challenge_postgres_secret")
+
+    with pytest.raises(ValueError, match="password must be provided"):
+        builder("agent-challenge", namespace="platform", retain=True)
+
+
+def test_managed_postgres_service_manifest_targets_postgres_statefulset() -> None:
+    names = challenge_postgres_names("agent-challenge")
+    builder = _required_managed_postgres_builder("build_challenge_postgres_service")
+
+    service = builder("agent-challenge", namespace="platform")
+
+    assert service["apiVersion"] == "v1"
+    assert service["kind"] == "Service"
+    assert service["metadata"]["name"] == names.service_name
+    assert service["metadata"]["namespace"] == "platform"
+    assert service["metadata"]["labels"]["platform.challenge.slug"] == "agent-challenge"
+    assert service["metadata"]["labels"]["platform.component"] == "challenge-postgres"
+    assert service["spec"]["type"] == "ClusterIP"
+    assert service["spec"]["selector"] == {
+        "app.kubernetes.io/instance": names.statefulset_name
+    }
+    assert service["spec"]["ports"] == [
+        {"name": "postgres", "port": 5432, "targetPort": 5432}
+    ]
+
+
+def test_managed_postgres_statefulset_manifest_has_independent_data_claim() -> None:
+    names = challenge_postgres_names("agent-challenge")
+    builder = _required_managed_postgres_builder("build_challenge_postgres_statefulset")
+
+    statefulset = builder(
+        "agent-challenge",
+        namespace="platform",
+        image="postgres:16-alpine",
+        storage_class_name="fast-retain",
+        storage_size="10Gi",
+        retain_pvc=True,
+        resources={
+            "requests": {"cpu": "100m", "memory": "256Mi"},
+            "limits": {"cpu": "500m", "memory": "512Mi"},
+        },
+    )
+    pod_spec = statefulset["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    env = _env_by_name(container["env"])
+
+    assert statefulset["apiVersion"] == "apps/v1"
+    assert statefulset["kind"] == "StatefulSet"
+    assert statefulset["metadata"]["name"] == names.statefulset_name
+    assert statefulset["metadata"]["namespace"] == "platform"
+    assert (
+        statefulset["metadata"]["labels"]["platform.challenge.slug"]
+        == "agent-challenge"
+    )
+    assert (
+        statefulset["metadata"]["labels"]["platform.component"] == "challenge-postgres"
+    )
+    assert statefulset["spec"]["serviceName"] == names.service_name
+    assert statefulset["spec"]["selector"] == {
+        "matchLabels": {"app.kubernetes.io/instance": names.statefulset_name}
+    }
+    assert (
+        statefulset["spec"]["template"]["metadata"]["labels"][
+            "app.kubernetes.io/instance"
+        ]
+        == names.statefulset_name
+    )
+    assert container["name"] == "postgres"
+    assert container["image"] == "postgres:16-alpine"
+    assert pod_spec["securityContext"] == {
+        "runAsNonRoot": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+        "runAsUser": 70,
+        "runAsGroup": 70,
+        "fsGroup": 70,
+    }
+    assert container["ports"] == [{"name": "postgres", "containerPort": 5432}]
+    assert _secret_env_ref(env, "POSTGRES_DB") == {
+        "name": names.secret_name,
+        "key": "POSTGRES_DB",
+    }
+    assert _secret_env_ref(env, "POSTGRES_USER") == {
+        "name": names.secret_name,
+        "key": "POSTGRES_USER",
+    }
+    assert _secret_env_ref(env, "POSTGRES_PASSWORD") == {
+        "name": names.secret_name,
+        "key": "POSTGRES_PASSWORD",
+    }
+    assert env["PGDATA"] == {
+        "name": "PGDATA",
+        "value": "/var/lib/postgresql/data/pgdata",
+    }
+    assert {"name": names.data_claim_name, "mountPath": "/var/lib/postgresql/data"} in (
+        container["volumeMounts"]
+    )
+    assert statefulset["spec"]["volumeClaimTemplates"] == [
+        {
+            "metadata": {
+                "name": names.data_claim_name,
+                "labels": {
+                    "app.kubernetes.io/name": "platform-network",
+                    "app.kubernetes.io/managed-by": "platform-network",
+                    "platform.component": "challenge-postgres-data",
+                    "platform.challenge.slug": "agent-challenge",
+                },
+                "annotations": {"helm.sh/resource-policy": "keep"},
+            },
+            "spec": {
+                "accessModes": ["ReadWriteOnce"],
+                "resources": {"requests": {"storage": "10Gi"}},
+                "storageClassName": "fast-retain",
+            },
+        }
+    ]
+    assert names.data_claim_name != "challenge-data"
+
+
+def test_managed_postgres_challenge_runtime_env_uses_database_url_secret_ref() -> None:
+    names = challenge_postgres_names("agent-challenge")
+
+    workload = build_challenge_workload(
+        ChallengeSpec(slug="agent-challenge", image="ghcr.io/org/agent-challenge:1"),
+        namespace="platform",
+        mode="statefulset",
+        managed_postgres=True,
+    )
+    container = workload["spec"]["template"]["spec"]["containers"][0]
+    env = _env_by_name(container["env"])
+
+    assert _secret_env_ref(env, "CHALLENGE_DATABASE_URL") == {
+        "name": names.secret_name,
+        "key": "CHALLENGE_DATABASE_URL",
+    }
+
+
+def test_managed_postgres_database_url_conflict_is_rejected() -> None:
+    spec = ChallengeSpec(
+        slug="agent-challenge",
+        image="ghcr.io/org/agent-challenge:1",
+        env={"CHALLENGE_DATABASE_URL": "postgresql+asyncpg://db.example/challenge"},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CHALLENGE_DATABASE_URL.*Platform-managed Postgres",
+    ):
+        build_challenge_workload(
+            spec,
+            namespace="platform",
+            mode="statefulset",
+            managed_postgres=True,
+        )
+
+
+def test_production_managed_postgres_accepts_without_user_database_url() -> None:
+    names = challenge_postgres_names("agent-challenge")
+    spec = ChallengeSpec(
+        slug="agent-challenge",
+        image=(
+            "ghcr.io/org/agent-challenge:1.2.3@"
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ),
+        resources=ChallengeResources(cpu=1, memory="1Gi"),
+    )
+
+    workload = build_challenge_workload(
+        spec,
+        namespace="platform",
+        mode="deployment",
+        replicas=2,
+        production=True,
+        managed_postgres=True,
+    )
+    container = workload["spec"]["template"]["spec"]["containers"][0]
+    env = _env_by_name(container["env"])
+
+    assert _secret_env_ref(env, "CHALLENGE_DATABASE_URL") == {
+        "name": names.secret_name,
+        "key": "CHALLENGE_DATABASE_URL",
+    }
+
+
+def test_data_pvc_independent_from_managed_postgres_statefulset_storage() -> None:
+    names = challenge_postgres_names("agent-challenge")
+    challenge_workload = build_challenge_workload(
+        ChallengeSpec(slug="agent-challenge", image="ghcr.io/org/agent-challenge:1"),
+        namespace="platform",
+        mode="statefulset",
+    )
+    challenge_container = challenge_workload["spec"]["template"]["spec"]["containers"][
+        0
+    ]
+    postgres_builder = _required_managed_postgres_builder(
+        "build_challenge_postgres_statefulset"
+    )
+
+    assert {"name": "challenge-data", "mountPath": "/data"} in (
+        challenge_container["volumeMounts"]
+    )
+    assert challenge_workload["spec"]["volumeClaimTemplates"][0]["metadata"][
+        "name"
+    ] == ("challenge-data")
+
+    postgres_statefulset = postgres_builder(
+        "agent-challenge",
+        namespace="platform",
+        image="postgres:16-alpine",
+        storage_size="10Gi",
+    )
+    postgres_container = postgres_statefulset["spec"]["template"]["spec"]["containers"][
+        0
+    ]
+
+    assert {"name": names.data_claim_name, "mountPath": "/var/lib/postgresql/data"} in (
+        postgres_container["volumeMounts"]
+    )
+    assert names.data_claim_name != "challenge-data"
+    assert all(
+        volume_mount["name"] != names.data_claim_name
+        for volume_mount in challenge_container["volumeMounts"]
+    )
+
+
+def test_multi_challenge_postgres_isolation_uses_distinct_resources() -> None:
+    slugs = ("agent-challenge-a", "agent-challenge-b")
+    names_by_slug = {slug: challenge_postgres_names(slug) for slug in slugs}
+    secret_builder = _required_managed_postgres_builder(
+        "build_challenge_postgres_secret"
+    )
+    service_builder = _required_managed_postgres_builder(
+        "build_challenge_postgres_service"
+    )
+    statefulset_builder = _required_managed_postgres_builder(
+        "build_challenge_postgres_statefulset"
+    )
+
+    secrets = {
+        slug: secret_builder(
+            slug,
+            namespace="platform",
+            retain=True,
+            password=f"unit-test-generated-credential-{index}",
+        )
+        for index, slug in enumerate(slugs)
+    }
+    services = {slug: service_builder(slug, namespace="platform") for slug in slugs}
+    statefulsets = {
+        slug: statefulset_builder(slug, namespace="platform") for slug in slugs
+    }
+    workloads = {
+        slug: build_challenge_workload(
+            ChallengeSpec(slug=slug, image=f"ghcr.io/org/{slug}:1"),
+            namespace="platform",
+            mode="statefulset",
+            managed_postgres=True,
+        )
+        for slug in slugs
+    }
+
+    first, second = slugs
+    first_names = names_by_slug[first]
+    second_names = names_by_slug[second]
+
+    assert first_names.secret_name != second_names.secret_name
+    assert first_names.service_name != second_names.service_name
+    assert first_names.statefulset_name != second_names.statefulset_name
+    assert first_names.data_claim_name != second_names.data_claim_name
+
+    for slug in slugs:
+        names = names_by_slug[slug]
+        secret = secrets[slug]
+        service = services[slug]
+        statefulset = statefulsets[slug]
+        workload = workloads[slug]
+
+        assert secret["metadata"]["name"] == names.secret_name
+        assert service["metadata"]["name"] == names.service_name
+        assert service["spec"]["selector"] == {
+            "app.kubernetes.io/instance": names.statefulset_name
+        }
+        assert statefulset["metadata"]["name"] == names.statefulset_name
+        assert statefulset["spec"]["serviceName"] == names.service_name
+        assert (
+            statefulset["spec"]["volumeClaimTemplates"][0]["metadata"]["name"]
+            == names.data_claim_name
+        )
+
+        postgres_env = _env_by_name(
+            statefulset["spec"]["template"]["spec"]["containers"][0]["env"]
+        )
+        assert _secret_env_ref(postgres_env, "POSTGRES_DB") == {
+            "name": names.secret_name,
+            "key": "POSTGRES_DB",
+        }
+        assert _secret_env_ref(postgres_env, "POSTGRES_USER") == {
+            "name": names.secret_name,
+            "key": "POSTGRES_USER",
+        }
+        assert _secret_env_ref(postgres_env, "POSTGRES_PASSWORD") == {
+            "name": names.secret_name,
+            "key": "POSTGRES_PASSWORD",
+        }
+
+        challenge_env = _env_by_name(
+            workload["spec"]["template"]["spec"]["containers"][0]["env"]
+        )
+        assert _secret_env_ref(challenge_env, "CHALLENGE_DATABASE_URL") == {
+            "name": names.secret_name,
+            "key": "CHALLENGE_DATABASE_URL",
+        }
+
+    first_url = _database_url_parts(
+        secrets[first]["stringData"]["CHALLENGE_DATABASE_URL"]
+    )
+    second_url = _database_url_parts(
+        secrets[second]["stringData"]["CHALLENGE_DATABASE_URL"]
+    )
+
+    assert first_url["scheme"] == "postgresql+asyncpg"
+    assert second_url["scheme"] == "postgresql+asyncpg"
+    assert first_url["username"] == first_names.database_user
+    assert second_url["username"] == second_names.database_user
+    assert first_url["hostname"] == first_names.service_name
+    assert second_url["hostname"] == second_names.service_name
+    assert first_url["hostname"] != second_url["hostname"]
+    assert first_url["port"] == 5432
+    assert second_url["port"] == 5432
+    assert first_url["path"] == f"/{first_names.database_name}"
+    assert second_url["path"] == f"/{second_names.database_name}"
 
 
 def test_challenge_resources_include_secrets_gpu_and_pull_secrets() -> None:
@@ -419,6 +843,36 @@ def test_broker_job_rejects_unsupported_docker_only_limits() -> None:
                 namespace="platform",
                 service_account_name="platform-master",
             )
+
+
+def _required_managed_postgres_builder(name: str) -> Any:
+    builder = getattr(kubernetes_resources, name, None)
+    assert builder is not None, f"missing managed Postgres Kubernetes builder: {name}"
+    return builder
+
+
+def _env_by_name(env: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {item["name"]: item for item in env}
+
+
+def _secret_env_ref(env: dict[str, dict[str, Any]], name: str) -> dict[str, str]:
+    item = env[name]
+    assert "value" not in item
+    secret_key_ref = item.get("valueFrom", {}).get("secretKeyRef")
+    assert secret_key_ref is not None
+    return secret_key_ref
+
+
+def _database_url_parts(database_url: str) -> dict[str, Any]:
+    parsed = urlsplit(database_url)
+    assert parsed.password
+    return {
+        "scheme": parsed.scheme,
+        "username": parsed.username,
+        "hostname": parsed.hostname,
+        "port": parsed.port,
+        "path": parsed.path,
+    }
 
 
 def _archive_b64(name: str = "input.txt") -> str:

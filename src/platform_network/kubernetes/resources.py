@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from platform_network.config.policy import (
     ProductionPolicyError,
     validate_image_reference,
 )
 from platform_network.kubernetes.names import (
+    POSTGRES_SECRET_KEY_DATABASE_URL,
+    POSTGRES_SECRET_KEY_DB,
+    POSTGRES_SECRET_KEY_PASSWORD,
+    POSTGRES_SECRET_KEY_USER,
     broker_job_name,
     challenge_name,
+    challenge_postgres_names,
     challenge_secret_name,
 )
 from platform_network.master.docker_orchestrator import (
@@ -83,6 +89,130 @@ def build_challenge_service(spec: ChallengeSpec, *, namespace: str) -> dict[str,
     }
 
 
+def build_challenge_postgres_secret(
+    slug: str,
+    *,
+    namespace: str,
+    retain: bool = True,
+    password: str | None = None,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    names = challenge_postgres_names(slug)
+    if not password:
+        raise ValueError("managed Postgres password must be provided")
+    password_value = password
+    database_url_value = database_url or (
+        f"postgresql+asyncpg://{names.database_user}:{quote(password_value, safe='')}"
+        f"@{names.service_name}:5432/{names.database_name}"
+    )
+    metadata: dict[str, Any] = {
+        "name": names.secret_name,
+        "namespace": namespace,
+        "labels": common_labels("challenge-postgres-secret", challenge_slug=slug),
+    }
+    if retain:
+        metadata["annotations"] = {"helm.sh/resource-policy": "keep"}
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": metadata,
+        "type": "Opaque",
+        "stringData": {
+            POSTGRES_SECRET_KEY_DB: names.database_name,
+            POSTGRES_SECRET_KEY_USER: names.database_user,
+            POSTGRES_SECRET_KEY_PASSWORD: password_value,
+            POSTGRES_SECRET_KEY_DATABASE_URL: database_url_value,
+        },
+    }
+
+
+def build_challenge_postgres_service(slug: str, *, namespace: str) -> dict[str, Any]:
+    names = challenge_postgres_names(slug)
+    return {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": names.service_name,
+            "namespace": namespace,
+            "labels": _challenge_postgres_labels(slug),
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"app.kubernetes.io/instance": names.statefulset_name},
+            "ports": [{"name": "postgres", "port": 5432, "targetPort": 5432}],
+        },
+    }
+
+
+def build_challenge_postgres_statefulset(
+    slug: str,
+    *,
+    namespace: str,
+    image: str = "postgres:16-alpine",
+    storage_class_name: str | None = None,
+    storage_size: str = "10Gi",
+    retain_pvc: bool = True,
+    resources: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    names = challenge_postgres_names(slug)
+    labels = _challenge_postgres_labels(slug) | {
+        "app.kubernetes.io/instance": names.statefulset_name
+    }
+    claim_metadata: dict[str, Any] = {
+        "name": names.data_claim_name,
+        "labels": common_labels("challenge-postgres-data", challenge_slug=slug),
+    }
+    if retain_pvc:
+        claim_metadata["annotations"] = {"helm.sh/resource-policy": "keep"}
+    claim_spec: dict[str, Any] = {
+        "accessModes": ["ReadWriteOnce"],
+        "resources": {"requests": {"storage": storage_size}},
+    }
+    if storage_class_name:
+        claim_spec["storageClassName"] = storage_class_name
+    container: dict[str, Any] = {
+        "name": "postgres",
+        "image": image,
+        "ports": [{"name": "postgres", "containerPort": 5432}],
+        "env": [
+            _secret_env_var(POSTGRES_SECRET_KEY_DB, names.secret_name),
+            _secret_env_var(POSTGRES_SECRET_KEY_USER, names.secret_name),
+            _secret_env_var(POSTGRES_SECRET_KEY_PASSWORD, names.secret_name),
+            {"name": "PGDATA", "value": "/var/lib/postgresql/data/pgdata"},
+        ],
+        "volumeMounts": [
+            {"name": names.data_claim_name, "mountPath": "/var/lib/postgresql/data"}
+        ],
+    }
+    if resources is not None:
+        container["resources"] = resources
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": names.statefulset_name,
+            "namespace": namespace,
+            "labels": _challenge_postgres_labels(slug),
+        },
+        "spec": {
+            "replicas": 1,
+            "serviceName": names.service_name,
+            "selector": {
+                "matchLabels": {"app.kubernetes.io/instance": names.statefulset_name}
+            },
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "automountServiceAccountToken": False,
+                    "securityContext": _postgres_pod_security_context(),
+                    "containers": [container],
+                },
+            },
+            "volumeClaimTemplates": [{"metadata": claim_metadata, "spec": claim_spec}],
+        },
+    }
+
+
 def validate_broker_kubernetes_limits(limits: BrokerLimits) -> None:
     defaults = BrokerLimits()
     if limits.pids_limit != defaults.pids_limit:
@@ -131,6 +261,7 @@ def build_challenge_workload(
     image_pull_secrets: list[str] | None = None,
     docker_broker_url: str = "http://platform-broker:8082",
     production: bool = False,
+    managed_postgres: bool = False,
 ) -> dict[str, Any]:
     if mode not in {"statefulset", "deployment"}:
         raise ValueError("mode must be 'statefulset' or 'deployment'")
@@ -149,6 +280,7 @@ def build_challenge_workload(
         docker_broker_url=docker_broker_url,
         with_pvc=mode == "statefulset",
         production=production,
+        managed_postgres=managed_postgres,
     )
     base: dict[str, Any] = {
         "apiVersion": "apps/v1",
@@ -507,9 +639,15 @@ def _pod_template(
     docker_broker_url: str,
     with_pvc: bool,
     production: bool,
+    managed_postgres: bool,
 ) -> dict[str, Any]:
+    if managed_postgres and "CHALLENGE_DATABASE_URL" in spec.env:
+        raise ValueError(
+            "CHALLENGE_DATABASE_URL is owned by Platform-managed Postgres when "
+            "managed_postgres=True; remove it from challenge env"
+        )
     if production:
-        _validate_production_challenge_spec(spec)
+        _validate_production_challenge_spec(spec, managed_postgres=managed_postgres)
     volumes: list[dict[str, Any]] = []
     volume_mounts: list[dict[str, Any]] = []
     if with_pvc:
@@ -539,7 +677,11 @@ def _pod_template(
                 "name": "challenge",
                 "image": spec.image,
                 "ports": [{"name": "http", "containerPort": spec.port}],
-                "env": _challenge_env(spec, docker_broker_url=docker_broker_url),
+                "env": _challenge_env(
+                    spec,
+                    docker_broker_url=docker_broker_url,
+                    managed_postgres=managed_postgres,
+                ),
                 "volumeMounts": volume_mounts,
                 "resources": _challenge_resources(spec, gpu_resource_name),
                 "readinessProbe": _http_probe("/health", spec.port),
@@ -569,13 +711,14 @@ def _pod_template(
 
 
 def _challenge_env(
-    spec: ChallengeSpec, *, docker_broker_url: str
-) -> list[dict[str, str]]:
+    spec: ChallengeSpec, *, docker_broker_url: str, managed_postgres: bool
+) -> list[dict[str, Any]]:
     env = dict(spec.env)
     env.setdefault("PLATFORM_CHALLENGE_SLUG", spec.slug)
-    env.setdefault(
-        "CHALLENGE_DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_SQLITE_PATH}"
-    )
+    if not managed_postgres:
+        env.setdefault(
+            "CHALLENGE_DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_SQLITE_PATH}"
+        )
     for secret_name in spec.all_secrets():
         env.setdefault(
             f"{secret_name.upper()}_FILE",
@@ -594,10 +737,37 @@ def _challenge_env(
             "CHALLENGE_DOCKER_BROKER_TOKEN_FILE",
             f"{DEFAULT_SECRET_MOUNT_DIR}/docker_broker_token",
         )
-    return [{"name": key, "value": value} for key, value in sorted(env.items())]
+    env_items: list[dict[str, Any]] = [
+        {"name": key, "value": value} for key, value in sorted(env.items())
+    ]
+    if managed_postgres:
+        env_items = [
+            item for item in env_items if item["name"] != "CHALLENGE_DATABASE_URL"
+        ]
+        env_items.append(
+            _secret_env_var(
+                POSTGRES_SECRET_KEY_DATABASE_URL,
+                challenge_postgres_names(spec.slug).secret_name,
+            )
+        )
+        env_items.sort(key=lambda item: item["name"])
+    return env_items
 
 
-def _validate_production_challenge_spec(spec: ChallengeSpec) -> None:
+def _secret_env_var(name: str, secret_name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "valueFrom": {"secretKeyRef": {"name": secret_name, "key": name}},
+    }
+
+
+def _challenge_postgres_labels(slug: str) -> dict[str, str]:
+    return common_labels("challenge-postgres", challenge_slug=slug)
+
+
+def _validate_production_challenge_spec(
+    spec: ChallengeSpec, *, managed_postgres: bool = False
+) -> None:
     try:
         validate_image_reference(spec.image, production=True)
     except ProductionPolicyError as exc:
@@ -606,7 +776,7 @@ def _validate_production_challenge_spec(spec: ChallengeSpec) -> None:
             "digest-pinned images"
         ) from exc
     database_url = spec.env.get("CHALLENGE_DATABASE_URL", "")
-    if not database_url.startswith(
+    if not managed_postgres and not database_url.startswith(
         ("postgres://", "postgresql://", "postgresql+asyncpg://")
     ):
         raise ValueError("production Kubernetes challenges require PostgreSQL")
@@ -656,8 +826,15 @@ def _challenge_resources(spec: ChallengeSpec, gpu_resource_name: str) -> dict[st
 def _pod_security_context() -> dict[str, Any]:
     return {
         "runAsNonRoot": True,
+        "fsGroup": 1000,
         "seccompProfile": {"type": "RuntimeDefault"},
     }
+
+
+def _postgres_pod_security_context() -> dict[str, Any]:
+    context = _pod_security_context()
+    context.update({"runAsUser": 70, "runAsGroup": 70, "fsGroup": 70})
+    return context
 
 
 def _container_security_context(*, read_only: bool = False) -> dict[str, Any]:
