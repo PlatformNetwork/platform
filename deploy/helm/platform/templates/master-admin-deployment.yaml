@@ -1,1 +1,3 @@
+{{- if .Values.master.enabled }}
 {{- include "platform.deployment" (dict "root" . "name" "admin" "replicas" .Values.masterAdmin.replicas "port" .Values.masterAdmin.port "resources" .Values.masterAdmin.resources "automountToken" true "image" .Values.images.master "command" (list "platform" "master" "run" "--config" "config/master.kubernetes.yaml")) }}
+{{- end }}
