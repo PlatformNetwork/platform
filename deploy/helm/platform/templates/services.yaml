@@ -1,3 +1,4 @@
+{{- if .Values.master.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -64,4 +65,6 @@ spec:
     - name: http
       port: {{ .Values.kubernetesAgent.port }}
       targetPort: http
+{{- end }}
+
 {{- end }}

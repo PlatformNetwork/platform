@@ -19,7 +19,7 @@ spec:
         {{- include "platform.labels" . | nindent 8 }}
         platform.component: "k8s-agent"
     spec:
-      serviceAccountName: {{ .Values.kubernetes.serviceAccount }}
+      serviceAccountName: {{ include "platform.serviceAccountName" . }}
       automountServiceAccountToken: true
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
