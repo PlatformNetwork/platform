@@ -1,4 +1,4 @@
-{{- if .Values.weights.enabled }}
+{{- if and .Values.master.enabled .Values.weights.enabled .Values.weights.submitOnChain }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -17,7 +17,7 @@ spec:
             {{- include "platform.labels" . | nindent 12 }}
             platform.component: "weights"
         spec:
-          serviceAccountName: {{ .Values.kubernetes.serviceAccount }}
+          serviceAccountName: {{ include "platform.serviceAccountName" . }}
           automountServiceAccountToken: false
           {{- with .Values.image.pullSecrets }}
           imagePullSecrets:
@@ -39,6 +39,7 @@ spec:
                 - --config
                 - config/master.kubernetes.yaml
                 - --once
+                - --submit-on-chain
               env:
                 - name: HOME
                   value: /var/lib/platform
