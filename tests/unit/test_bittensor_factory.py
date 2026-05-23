@@ -9,6 +9,7 @@ import pytest
 from platform_network.bittensor.factory import (
     BittensorDependencyError,
     create_bittensor_runtime,
+    create_bittensor_submit_runtime,
 )
 from platform_network.config.loader import load_settings
 
@@ -33,7 +34,7 @@ def _settings(tmp_path: Path):
     return load_settings(config)
 
 
-def test_bittensor_runtime_uses_configured_network_and_wallet(
+def test_bittensor_compute_runtime_uses_configured_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
@@ -56,6 +57,61 @@ def test_bittensor_runtime_uses_configured_network_and_wallet(
 
     assert runtime.metagraph_cache.netuid == 42
     assert runtime.metagraph_cache.ttl_seconds == 5
+    assert runtime.weight_setter is None
+    assert calls == [("subtensor", {"network": "ws://localhost:9944"})]
+
+
+def test_bittensor_compute_runtime_does_not_create_wallet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Subtensor:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("subtensor", kwargs))
+
+    class Wallet:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("wallet", kwargs))
+            raise AssertionError("compute runtime must not create wallet")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "bittensor",
+        SimpleNamespace(Subtensor=Subtensor, Wallet=Wallet),
+    )
+
+    runtime = create_bittensor_runtime(_settings(tmp_path))
+
+    assert runtime.metagraph_cache.netuid == 42
+    assert runtime.metagraph_cache.ttl_seconds == 5
+    assert runtime.weight_setter is None
+    assert calls == [("subtensor", {"network": "ws://localhost:9944"})]
+
+
+def test_bittensor_submit_runtime_uses_configured_wallet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Subtensor:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("subtensor", kwargs))
+
+    class Wallet:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(("wallet", kwargs))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "bittensor",
+        SimpleNamespace(Subtensor=Subtensor, Wallet=Wallet),
+    )
+
+    runtime = create_bittensor_submit_runtime(_settings(tmp_path))
+
+    assert runtime.metagraph_cache.netuid == 42
+    assert runtime.weight_setter is not None
     assert runtime.weight_setter.netuid == 42
     assert calls == [
         ("subtensor", {"network": "ws://localhost:9944"}),

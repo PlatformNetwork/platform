@@ -16,7 +16,7 @@ class BittensorDependencyError(RuntimeError):
 @dataclass(frozen=True)
 class BittensorRuntime:
     metagraph_cache: MetagraphCache
-    weight_setter: WeightSetter
+    weight_setter: WeightSetter | None = None
 
 
 def _load_bittensor() -> Any:
@@ -29,20 +29,39 @@ def _load_bittensor() -> Any:
         ) from exc
 
 
-def create_bittensor_runtime(settings: Settings) -> BittensorRuntime:
+def _create_subtensor(settings: Settings) -> Any:
     bittensor = _load_bittensor()
     subtensor_kwargs = {}
     if settings.network.chain_endpoint:
         subtensor_kwargs["network"] = settings.network.chain_endpoint
-    subtensor = bittensor.Subtensor(**subtensor_kwargs)
+    return bittensor.Subtensor(**subtensor_kwargs)
+
+
+def _create_wallet(settings: Settings) -> Any:
+    bittensor = _load_bittensor()
     wallet_kwargs = {
         "name": settings.network.wallet_name,
         "hotkey": settings.network.wallet_hotkey,
     }
     if settings.network.wallet_path:
         wallet_kwargs["path"] = settings.network.wallet_path
-    wallet = bittensor.Wallet(**wallet_kwargs)
+    return bittensor.Wallet(**wallet_kwargs)
 
+
+def create_bittensor_runtime(settings: Settings) -> BittensorRuntime:
+    subtensor = _create_subtensor(settings)
+    return BittensorRuntime(
+        metagraph_cache=MetagraphCache(
+            netuid=settings.network.netuid,
+            ttl_seconds=settings.master.metagraph_cache_ttl_seconds,
+            subtensor=subtensor,
+        ),
+    )
+
+
+def create_bittensor_submit_runtime(settings: Settings) -> BittensorRuntime:
+    subtensor = _create_subtensor(settings)
+    wallet = _create_wallet(settings)
     return BittensorRuntime(
         metagraph_cache=MetagraphCache(
             netuid=settings.network.netuid,
