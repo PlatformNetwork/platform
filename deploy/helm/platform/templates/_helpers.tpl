@@ -14,6 +14,9 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "platform.validatePolicy" -}}
+{{- if eq .Values.master.namespace .Values.validator.namespace -}}
+{{- fail "master.namespace and validator.namespace must differ" -}}
+{{- end -}}
 {{- if .Values.policy.enforceProduction -}}
 {{- if or (not .Values.database.urlSecret.name) (not .Values.database.urlSecret.key) -}}
 {{- fail "production policy requires database.urlSecret.name and database.urlSecret.key" -}}
@@ -88,4 +91,12 @@ capabilities:
   drop:
     - ALL
 privileged: false
+{{- end -}}
+
+{{- define "platform.serviceAccountName" -}}
+{{- if .Values.master.enabled -}}
+{{ .Values.kubernetes.serviceAccount }}
+{{- else -}}
+{{ include "platform.fullname" . }}
+{{- end -}}
 {{- end -}}

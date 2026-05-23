@@ -20,7 +20,7 @@ spec:
         {{- include "platform.labels" .root | nindent 8 }}
         platform.component: {{ .name | quote }}
     spec:
-      serviceAccountName: {{ .root.Values.kubernetes.serviceAccount }}
+      serviceAccountName: {{ include "platform.serviceAccountName" .root }}
       automountServiceAccountToken: {{ .automountToken }}
       {{- with .root.Values.image.pullSecrets }}
       imagePullSecrets:
