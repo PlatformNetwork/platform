@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -335,17 +336,47 @@ def test_admin_challenge_crud_and_registry_active_only() -> None:
     registry = ChallengeRegistry()
     app = _admin_app(registry, admin_token_provider=lambda: "admin-secret")
     client = TestClient(app)
+    payload = {
+        **_payload("agent-challenge"),
+        "name": "Agent Challenge",
+        "description": "Build and evaluate coding agents.",
+        "metadata": {
+            "tagline": "Compete with production-grade agents",
+            "summary": "Agent Challenge benchmark and leaderboard",
+            "docs_url": "https://docs.example.com/agent-challenge",
+            "miner_docs_url": "https://docs.example.com/agent-challenge/miners",
+            "validator_docs_url": "https://docs.example.com/agent-challenge/validators",
+            "repository_url": "https://github.com/example/agent-challenge",
+            "website_url": "https://example.com/agent-challenge",
+            "banner_url": "https://cdn.example.com/agent-challenge/banner.png",
+            "icon_url": "https://cdn.example.com/agent-challenge/icon.png",
+            "category": "agents",
+            "difficulty": "hard",
+            "benchmark_label": "Terminal-Bench",
+            "submission_format": "zip",
+            "evaluation_timeout_seconds": 1800,
+            "rate_limit_label": "10 submissions/hour",
+            "token": "challenge-token",
+            "secret": "shared-secret",
+            "password": "password",
+            "private_key": "private-key",
+            "database_url": "postgres://secret",
+            "internal_base_url": "http://internal:8000",
+            "operator_notes": "do not publish",
+            "nested": {"arbitrary": "object"},
+        },
+    }
 
-    assert client.post("/v1/admin/challenges", json=_payload()).status_code == 401
+    assert client.post("/v1/admin/challenges", json=payload).status_code == 401
 
     create_response = client.post(
         "/v1/admin/challenges",
-        json=_payload(),
+        json=payload,
         headers={"X-Admin-Token": "admin-secret"},
     )
     assert create_response.status_code == 201
     body = create_response.json()
-    assert body["challenge"]["slug"] == "demo"
+    assert body["challenge"]["slug"] == "agent-challenge"
     assert body["challenge"]["token_hint"]
     assert body["challenge_token"]
     assert "token_hash" not in body["challenge"]
@@ -355,7 +386,7 @@ def test_admin_challenge_crud_and_registry_active_only() -> None:
     assert registry_response.json()["challenges"] == []
 
     activate_response = client.post(
-        "/v1/admin/challenges/demo/activate",
+        "/v1/admin/challenges/agent-challenge/activate",
         headers={"X-Admin-Token": "admin-secret"},
     )
     assert activate_response.status_code == 200
@@ -365,9 +396,51 @@ def test_admin_challenge_crud_and_registry_active_only() -> None:
     assert registry_response.status_code == 200
     challenges = registry_response.json()["challenges"]
     assert len(challenges) == 1
-    assert challenges[0]["slug"] == "demo"
-    assert "token_hash" not in challenges[0]
-    assert "challenge_token" not in challenges[0]
+    challenge = challenges[0]
+    assert challenge["slug"] == "agent-challenge"
+    assert challenge["name"] == "Agent Challenge"
+    assert challenge["description"] == "Build and evaluate coding agents."
+    assert challenge["public_proxy_base_path"] == "/challenges/agent-challenge"
+    assert challenge["internal_base_url"] == "http://challenge-agent-challenge:8000"
+    assert challenge["image"] == "ghcr.io/platformnetwork/demo:1.0.0"
+    assert challenge["version"] == "1.0.0"
+    assert challenge["emission_percent"] == "40.0"
+    assert challenge["status"] == "active"
+    assert challenge["required_capabilities"] == ["get_weights", "proxy_routes"]
+    assert challenge["resources"] == {}
+    assert challenge["volumes"] == {"sqlite": "platform_agent_challenge_sqlite"}
+    assert challenge["env"] == {}
+    assert challenge["secrets"] == []
+    assert challenge["metadata"] == {
+        "tagline": "Compete with production-grade agents",
+        "summary": "Agent Challenge benchmark and leaderboard",
+        "docs_url": "https://docs.example.com/agent-challenge",
+        "miner_docs_url": "https://docs.example.com/agent-challenge/miners",
+        "validator_docs_url": "https://docs.example.com/agent-challenge/validators",
+        "repository_url": "https://github.com/example/agent-challenge",
+        "website_url": "https://example.com/agent-challenge",
+        "banner_url": "https://cdn.example.com/agent-challenge/banner.png",
+        "icon_url": "https://cdn.example.com/agent-challenge/icon.png",
+        "category": "agents",
+        "difficulty": "hard",
+        "benchmark_label": "Terminal-Bench",
+        "submission_format": "zip",
+        "evaluation_timeout_seconds": 1800,
+        "rate_limit_label": "10 submissions/hour",
+    }
+    assert "token_hash" not in challenge
+    assert "token_hint" not in challenge
+    assert "broker_token_hash" not in challenge
+    assert "broker_token_hint" not in challenge
+    assert "challenge_token" not in challenge
+    assert "token" not in challenge["metadata"]
+    assert "secret" not in challenge["metadata"]
+    assert "password" not in challenge["metadata"]
+    assert "private_key" not in challenge["metadata"]
+    assert "database_url" not in challenge["metadata"]
+    assert "internal_base_url" not in challenge["metadata"]
+    assert "operator_notes" not in challenge["metadata"]
+    assert "nested" not in challenge["metadata"]
 
 
 def test_registry_sets_defaults_without_exposing_clear_token() -> None:
@@ -561,6 +634,377 @@ def test_admin_kubernetes_targets_pages_api_and_health_without_secret_leak() -> 
     assert delete_response.status_code == 204
 
 
+def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("agent-challenge"),
+                "name": "Agent Challenge",
+                "status": ChallengeStatus.ACTIVE,
+                "internal_base_url": "http://challenge-agent-challenge:8000",
+            }
+        )
+    )
+
+    challenge_app = FastAPI()
+    captured: dict[str, dict[str, Any]] = {}
+    sensitive_headers = (
+        "authorization",
+        "x-admin-token",
+        "x-hotkey",
+        "x-signature",
+    )
+
+    async def record_read_route(
+        route_name: str, request: Request, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        headers = dict(request.headers)
+        captured[route_name] = {
+            "headers": headers,
+            "path": request.url.path,
+            "query": request.url.query,
+        }
+        return {"route": route_name, "query": request.url.query, **payload}
+
+    @challenge_app.get("/benchmarks")
+    async def benchmarks(request: Request) -> dict[str, Any]:
+        return await record_read_route(
+            "benchmarks",
+            request,
+            {"benchmarks": [{"id": "terminal-bench", "tasks": 2}]},
+        )
+
+    @challenge_app.get("/benchmarks/tasks")
+    async def benchmark_tasks(request: Request) -> dict[str, Any]:
+        return await record_read_route(
+            "benchmark_tasks",
+            request,
+            {"tasks": [{"id": "task-1", "benchmark_id": "terminal-bench"}]},
+        )
+
+    @challenge_app.get("/submissions")
+    async def submissions(request: Request) -> dict[str, Any]:
+        return await record_read_route(
+            "submissions",
+            request,
+            {"submissions": [{"id": "submission-1", "status": "queued"}]},
+        )
+
+    @challenge_app.get("/submissions/count")
+    async def submissions_count(request: Request) -> dict[str, Any]:
+        return await record_read_route(
+            "submissions_count", request, {"count": 1}
+        )
+
+    @challenge_app.get("/submissions/{submission_id}")
+    async def submission_detail(
+        submission_id: str, request: Request
+    ) -> dict[str, Any]:
+        return await record_read_route(
+            "submission_detail",
+            request,
+            {"submission": {"id": submission_id, "score": 0.91}},
+        )
+
+    @challenge_app.get("/submissions/{submission_id}/status")
+    async def submission_status(
+        submission_id: str, request: Request
+    ) -> dict[str, Any]:
+        return await record_read_route(
+            "submission_status",
+            request,
+            {"id": submission_id, "status": "running"},
+        )
+
+    @challenge_app.get("/leaderboard")
+    async def leaderboard(request: Request) -> dict[str, Any]:
+        return await record_read_route(
+            "leaderboard",
+            request,
+            {"leaderboard": [{"agent_hash": "agent-abc", "rank": 1}]},
+        )
+
+    @challenge_app.get("/agents/{agent_hash}/evaluation")
+    async def agent_evaluation(agent_hash: str, request: Request) -> dict[str, Any]:
+        return await record_read_route(
+            "agent_evaluation",
+            request,
+            {"agent_hash": agent_hash, "evaluation": {"score": 0.98}},
+        )
+
+    @asynccontextmanager
+    async def client_factory():
+        transport = httpx.ASGITransport(app=challenge_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://challenge-agent-challenge:8000"
+        ) as client:
+            yield client
+
+    proxy_client = TestClient(_proxy_app(registry, client_factory=client_factory))
+    headers = {
+        "Authorization": "Bearer should-not-forward",
+        "X-Admin-Token": "should-not-forward",
+        "X-Hotkey": "should-not-forward",
+        "X-Signature": "should-not-forward",
+        "X-Public-Header": "forward-me",
+    }
+    requests = [
+        (
+            "/challenges/agent-challenge/benchmarks?suite=terminal-bench",
+            "benchmarks",
+            {"benchmarks": [{"id": "terminal-bench", "tasks": 2}]},
+        ),
+        (
+            "/challenges/agent-challenge/benchmarks/tasks?benchmark_id=terminal-bench",
+            "benchmark_tasks",
+            {"tasks": [{"id": "task-1", "benchmark_id": "terminal-bench"}]},
+        ),
+        (
+            "/challenges/agent-challenge/submissions?limit=25",
+            "submissions",
+            {"submissions": [{"id": "submission-1", "status": "queued"}]},
+        ),
+        (
+            "/challenges/agent-challenge/submissions/count?status=queued",
+            "submissions_count",
+            {"count": 1},
+        ),
+        (
+            "/challenges/agent-challenge/submissions/submission-1",
+            "submission_detail",
+            {"submission": {"id": "submission-1", "score": 0.91}},
+        ),
+        (
+            "/challenges/agent-challenge/submissions/submission-1/status",
+            "submission_status",
+            {"id": "submission-1", "status": "running"},
+        ),
+        (
+            "/challenges/agent-challenge/leaderboard?benchmark_id=terminal-bench",
+            "leaderboard",
+            {"leaderboard": [{"agent_hash": "agent-abc", "rank": 1}]},
+        ),
+        (
+            "/challenges/agent-challenge/agents/agent-abc/evaluation?benchmark_id=terminal-bench",
+            "agent_evaluation",
+            {"agent_hash": "agent-abc", "evaluation": {"score": 0.98}},
+        ),
+    ]
+
+    for path, route_name, expected_payload in requests:
+        response = proxy_client.get(path, headers=headers)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["route"] == route_name
+        for key, value in expected_payload.items():
+            assert body[key] == value
+
+    assert captured["benchmarks"]["query"] == "suite=terminal-bench"
+    assert set(captured) == {route_name for _, route_name, _ in requests}
+    expected_upstream_paths = {
+        "benchmarks": "/benchmarks",
+        "benchmark_tasks": "/benchmarks/tasks",
+        "submissions": "/submissions",
+        "submissions_count": "/submissions/count",
+        "submission_detail": "/submissions/submission-1",
+        "submission_status": "/submissions/submission-1/status",
+        "leaderboard": "/leaderboard",
+        "agent_evaluation": "/agents/agent-abc/evaluation",
+    }
+    for route_name, upstream_path in expected_upstream_paths.items():
+        assert captured[route_name]["path"] == upstream_path
+    for request_capture in captured.values():
+        upstream_headers = request_capture["headers"]
+        for header in sensitive_headers:
+            assert header not in upstream_headers
+        assert upstream_headers["x-platform-proxy"] == "true"
+        assert upstream_headers["x-platform-challenge-slug"] == "agent-challenge"
+        assert upstream_headers["x-public-header"] == "forward-me"
+
+
+async def test_proxy_streams_agent_challenge_sse_status_events() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("agent-challenge"),
+                "internal_base_url": "http://challenge-agent-challenge:8000",
+            }
+        )
+    )
+    registry.set_status("agent-challenge", ChallengeStatus.ACTIVE)
+    first_event_sent = asyncio.Event()
+    release_stream = asyncio.Event()
+    captured: dict[str, Any] = {}
+
+    class ControlledSseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            yield (
+                b"id: 101\n"
+                b"event: submission.status\n"
+                b'data: {"id":101,"sequence":1,"submission_id":42,'
+                b'"status":"queued","public_state":"queued",'
+                b'"phase":"analysis","created_at":"2030-01-01T00:00:00Z"}\n\n'
+            )
+            first_event_sent.set()
+            await release_stream.wait()
+            yield (
+                b"id: 102\n"
+                b"event: submission.status\n"
+                b'data: {"id":102,"sequence":2,"submission_id":42,'
+                b'"status":"valid","public_state":"valid",'
+                b'"phase":"complete","created_at":"2030-01-01T00:00:01Z"}\n\n'
+            )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["headers"] = dict(request.headers)
+        captured["query"] = request.url.query.decode()
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "text/event-stream; charset=utf-8",
+                "cache-control": "no-cache",
+                "transfer-encoding": "chunked",
+            },
+            stream=ControlledSseStream(),
+        )
+
+    @asynccontextmanager
+    async def client_factory():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://challenge-agent-challenge:8000"
+        ) as client:
+            yield client
+
+    app = _proxy_app(registry, client_factory=client_factory)
+    response_started = asyncio.Event()
+    first_body_sent = asyncio.Event()
+    messages: list[dict[str, Any]] = []
+    request_delivered = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal request_delivered
+        if not request_delivered:
+            request_delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+        if message["type"] == "http.response.start":
+            response_started.set()
+        if message["type"] == "http.response.body" and message.get("body"):
+            first_body_sent.set()
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/challenges/agent-challenge/submissions/42/events",
+        "raw_path": b"/challenges/agent-challenge/submissions/42/events",
+        "query_string": b"tail=1",
+        "headers": [
+            (b"host", b"platform.test"),
+            (b"last-event-id", b"100"),
+            (b"authorization", b"Bearer should-not-forward"),
+            (b"x-admin-token", b"should-not-forward"),
+            (b"x-public-header", b"forward-me"),
+        ],
+        "client": ("testclient", 50000),
+        "server": ("platform.test", 80),
+    }
+    task = asyncio.create_task(app(scope, receive, send))
+
+    await asyncio.wait_for(response_started.wait(), timeout=1)
+    await asyncio.wait_for(first_body_sent.wait(), timeout=1)
+    assert await asyncio.wait_for(first_event_sent.wait(), timeout=1) is True
+    assert not task.done()
+
+    start = next(
+        message for message in messages if message["type"] == "http.response.start"
+    )
+    response_headers = {
+        key.decode().lower(): value.decode() for key, value in start["headers"]
+    }
+    assert start["status"] == 200
+    assert response_headers["content-type"].startswith("text/event-stream")
+    assert response_headers["cache-control"] == "no-cache"
+    assert "transfer-encoding" not in response_headers
+
+    first_body = next(
+        message["body"]
+        for message in messages
+        if message["type"] == "http.response.body" and message.get("body")
+    )
+    assert first_body.startswith(b"id: 101\nevent: submission.status\n")
+    assert b'"submission_id":42' in first_body
+    assert captured["path"] == "/submissions/42/events"
+    assert captured["query"] == "tail=1"
+    upstream_headers = captured["headers"]
+    assert upstream_headers["last-event-id"] == "100"
+    assert upstream_headers["x-platform-proxy"] == "true"
+    assert upstream_headers["x-platform-challenge-slug"] == "agent-challenge"
+    assert upstream_headers["x-public-header"] == "forward-me"
+    assert "authorization" not in upstream_headers
+    assert "x-admin-token" not in upstream_headers
+
+    release_stream.set()
+    await asyncio.wait_for(task, timeout=1)
+    body = b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    assert b"id: 102" in body
+
+
+def test_proxy_preserves_agent_challenge_sse_replay_conflict() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("agent-challenge"),
+                "internal_base_url": "http://challenge-agent-challenge:8000",
+            }
+        )
+    )
+    registry.set_status("agent-challenge", ChallengeStatus.ACTIVE)
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(
+            409,
+            json={"detail": "unknown Last-Event-ID", "replay_from": 101},
+            headers={"content-type": "application/json"},
+        )
+
+    @asynccontextmanager
+    async def client_factory():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://challenge-agent-challenge:8000"
+        ) as client:
+            yield client
+
+    proxy_client = TestClient(_proxy_app(registry, client_factory=client_factory))
+    response = proxy_client.get(
+        "/challenges/agent-challenge/submissions/42/events",
+        headers={"Last-Event-ID": "99"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "unknown Last-Event-ID", "replay_from": 101}
+    assert captured["headers"]["last-event-id"] == "99"
+
+
 def test_proxy_blocks_internal_health_and_version_paths() -> None:
     for path in (
         "internal/v1/get_weights",
@@ -677,7 +1121,7 @@ def test_signed_upload_bridge_verifies_and_forwards_internal_request() -> None:
     registry = ChallengeRegistry()
     registry.create(ChallengeCreate(**_payload()))
     registry.set_status("demo", ChallengeStatus.ACTIVE)
-    captured: dict[str, Any] = {}
+    captured: dict[str, Any] = {"paths": []}
 
     class Cache:
         def get(self) -> dict[str, int]:
@@ -687,9 +1131,18 @@ def test_signed_upload_bridge_verifies_and_forwards_internal_request() -> None:
 
     @challenge_app.post("/internal/v1/bridge/submissions")
     async def bridge(request: Request) -> dict[str, object]:
+        captured["paths"].append(request.url.path)
         captured["headers"] = dict(request.headers)
         captured["body"] = await request.body()
         return {"id": "sub-1", "status": "pending"}
+
+    @challenge_app.get("/v1/submissions/{submission_id}")
+    async def submission_detail(
+        submission_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        captured["paths"].append(request.url.path)
+        return {"id": submission_id, "status": "received"}
 
     @asynccontextmanager
     async def client_factory():
@@ -740,6 +1193,15 @@ def test_signed_upload_bridge_verifies_and_forwards_internal_request() -> None:
     assert headers["x-platform-verified-nonce"] == "nonce-1"  # type: ignore[index]
     assert headers["x-submission-filename"] == "project.zip"  # type: ignore[index]
     assert captured["body"] == b"zip-bytes"
+
+    status_response = proxy_client.get("/v1/challenges/demo/submissions/sub-1")
+
+    assert status_response.status_code == 200
+    assert status_response.json() == {"id": "sub-1", "status": "received"}
+    assert captured["paths"] == [
+        "/internal/v1/bridge/submissions",
+        "/v1/submissions/sub-1",
+    ]
 
 
 def test_signed_upload_bridge_rejects_replay_and_bad_time() -> None:

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from posixpath import normpath
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
+from starlette.background import BackgroundTask
+from starlette.responses import StreamingResponse
 
 from platform_network.bittensor.metagraph_cache import MetagraphCache
 from platform_network.kubernetes.agent import KubernetesAgentClient
@@ -97,6 +99,12 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
         for key, value in response.headers.items()
         if key.lower() not in HOP_BY_HOP_HEADERS
     }
+
+
+def _is_event_stream(response: httpx.Response) -> bool:
+    return response.headers.get("content-type", "").lower().startswith(
+        "text/event-stream"
+    )
 
 
 def _target_url(base_url: str, path: str, query: str) -> str:
@@ -254,6 +262,66 @@ def create_proxy_app(
                 headers=headers,
             )
 
+    async def forward_proxy_response(
+        challenge: ChallengeRecord,
+        *,
+        method: str,
+        path: str,
+        query: str,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> Response:
+        agent = _agent_client_for_challenge(kubernetes_target_registry, challenge.slug)
+        if agent is not None:
+            upstream = await agent.forward_challenge_request(
+                slug=challenge.slug,
+                method=method,
+                path=path,
+                query=query,
+                content=body,
+                headers=headers,
+            )
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=_response_headers(upstream),
+                media_type=upstream.headers.get("content-type"),
+            )
+
+        url = _target_url(challenge.internal_base_url, path, query)
+        stack = AsyncExitStack()
+        try:
+            client = await stack.enter_async_context(client_factory())
+            upstream = await stack.enter_async_context(
+                client.stream(
+                    method,
+                    url,
+                    content=body,
+                    headers=headers,
+                )
+            )
+            if _is_event_stream(upstream):
+                return StreamingResponse(
+                    upstream.aiter_raw(),
+                    status_code=upstream.status_code,
+                    headers=_response_headers(upstream),
+                    media_type=upstream.headers.get("content-type"),
+                    background=BackgroundTask(stack.aclose),
+                )
+
+            content = await upstream.aread()
+        except Exception:
+            await stack.aclose()
+            raise
+
+        await stack.aclose()
+        return Response(
+            content=content,
+            status_code=upstream.status_code,
+            headers=_response_headers(upstream),
+            media_type=upstream.headers.get("content-type"),
+        )
+
     async def proxy_request(slug: str, path: str, request: Request) -> Response:
         if is_blocked_proxy_path(path):
             raise HTTPException(
@@ -267,7 +335,7 @@ def create_proxy_app(
         headers = _forward_headers(request)
         headers["X-Platform-Challenge-Slug"] = slug
         try:
-            upstream = await forward_upstream(
+            return await forward_proxy_response(
                 challenge,
                 method=request.method,
                 path=path,
@@ -279,13 +347,6 @@ def create_proxy_app(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail="Challenge unavailable"
             ) from exc
-
-        return Response(
-            content=upstream.content,
-            status_code=upstream.status_code,
-            headers=_response_headers(upstream),
-            media_type=upstream.headers.get("content-type"),
-        )
 
     async def bridge_upload(challenge_name: str, request: Request) -> Response:
         challenge = await _active_challenge(challenge_registry, challenge_name)
