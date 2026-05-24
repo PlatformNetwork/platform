@@ -33,7 +33,7 @@ rules:
       {{- end }}
       {{- end }}
       {{- if .Values.validator.enabled }}
-      - {{ include "platform.fullname" . }}-validator
+      - {{ include "platform.validatorDeploymentName" . }}
       {{- end }}
     verbs: ["get", "patch", "update"]
   {{- end }}

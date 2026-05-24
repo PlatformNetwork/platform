@@ -27,7 +27,7 @@ rules:
       {{- end }}
       {{- end }}
       {{- if .Values.validator.enabled }}
-      - {{ include "platform.fullname" . }}-validator
+      - {{ include "platform.validatorDeploymentName" . }}
       {{- end }}
     verbs: ["get", "patch"]
   {{- if and .Values.master.enabled .Values.weights.enabled .Values.weights.submitOnChain }}

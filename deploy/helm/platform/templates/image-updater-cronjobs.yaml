@@ -12,7 +12,7 @@
 {{- end }}
 {{- end }}
 {{- if .Values.validator.enabled }}
-{{- $targets = append $targets (dict "name" "validator" "kind" "deployment" "resource" (printf "%s-validator" (include "platform.fullname" .)) "container" "validator" "image" .Values.images.validator) }}
+{{- $targets = append $targets (dict "name" "validator" "kind" "deployment" "resource" (include "platform.validatorDeploymentName" .) "container" "validator" "image" .Values.images.validator) }}
 {{- end }}
 {{- range $index, $target := $targets }}
 {{- if gt $index 0 }}

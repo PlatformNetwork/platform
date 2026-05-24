@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "platform.fullname" . }}-validator
+  name: {{ include "platform.validatorDeploymentName" . }}
   labels:
     {{- include "platform.labels" . | nindent 4 }}
     platform.component: "validator"
@@ -42,6 +42,11 @@ spec:
           env:
             - name: HOME
               value: /var/lib/platform
+            - name: PLATFORM_DATABASE__URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.urlSecret.name | quote }}
+                  key: {{ .Values.database.urlSecret.key | quote }}
           securityContext:
             {{- include "platform.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
@@ -63,16 +68,16 @@ spec:
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "platform.fullname" . }}-data
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "platform.fullname" .)) | quote }}
           {{- else }}
           emptyDir: {}
           {{- end }}
         - name: wallet
           secret:
-            secretName: {{ .Values.validator.walletSecretName | default (printf "%s-wallet" (include "platform.fullname" .)) }}
+            secretName: {{ .Values.validator.walletSecretName | default (printf "%s-wallet" (include "platform.fullname" .)) | quote }}
             items:
               - key: hotkey
-                path: {{ .Values.network.walletHotkey }}
+                path: {{ .Values.network.walletHotkey | quote }}
               - key: hotkeypub.txt
-                path: {{ .Values.network.walletHotkey }}pub.txt
+                path: {{ printf "%spub.txt" .Values.network.walletHotkey | quote }}
 {{- end }}

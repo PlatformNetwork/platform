@@ -106,3 +106,7 @@ privileged: false
 {{ include "platform.fullname" . }}
 {{- end -}}
 {{- end -}}
+
+{{- define "platform.validatorDeploymentName" -}}
+{{- .Values.validator.deploymentNameOverride | default (printf "%s-validator" (include "platform.fullname" .)) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
