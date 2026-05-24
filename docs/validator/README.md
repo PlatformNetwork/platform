@@ -29,17 +29,18 @@ Run from the repository root:
 The script performs these actions:
 
 1. Deletes only prior installer-managed validator objects in the selected namespace.
-2. Applies Namespace, validator ServiceAccount/RBAC, updater ServiceAccount/RBAC, PVC, ConfigMap, Deployment, and updater CronJob.
+2. Applies Namespace, validator ServiceAccount/RBAC, Helm-upgrader ServiceAccount/RBAC, PVC, ConfigMap, Deployment, and Helm auto-upgrade CronJob.
 3. Prompts silently for the validator hotkey mnemonic.
 4. Creates the `platform-validator-wallet` Kubernetes Secret from generated hotkey files.
-5. Starts the validator Deployment in Kubernetes mode and schedules digest-gated updater checks.
+5. Starts the validator Deployment in Kubernetes mode and schedules full Helm upgrade checks.
 
 Useful options:
 
 ```bash
 ./scripts/install-validator.sh --namespace platform-validator
 ./scripts/install-validator.sh --image ghcr.io/platformnetwork/platform:v1.2.3@sha256:<digest>
-./scripts/install-validator.sh --auto-update-schedule '*/5 * * * *'
+./scripts/install-validator.sh --auto-upgrade-schedule '*/5 * * * *'
+./scripts/install-validator.sh --auto-upgrade-helm-image alpine/helm:3.15.4
 ./scripts/install-validator.sh --database-url postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
 ./scripts/install-validator.sh --broker-allowed-images ghcr.io/platformnetwork/,registry.example.com/platform/
 ./scripts/install-validator.sh --registry-url https://chain.platform.network
@@ -49,28 +50,24 @@ Useful options:
 ```
 
 The installer always performs a real cluster installation and always imports a
-hotkey Secret. It also installs a scoped CronJob that periodically restarts the
-validator image tag digest and patches the Deployment only when mutable GHCR
-tags such as `latest` point to new image content. Automated validation must use a disposable cluster, disposable
-namespace, and disposable test mnemonic supplied through a secure channel.
+hotkey Secret. It also installs `cronjob/platform-validator-helm-upgrader`, a scoped CronJob that periodically downloads the configured GitHub chart source and runs `helm upgrade --install platform-validator ... --atomic --wait --cleanup-on-fail`. The job sets `HELM_DRIVER=configmap`, uses `concurrencyPolicy: Forbid`, and references `platform-validator-wallet` by name instead of reading or printing wallet data. Automated validation must use a disposable cluster, disposable namespace, and disposable test mnemonic supplied through a secure channel.
 
 `--cleanup` is scoped to objects created by this installer:
 
 ```text
-cronjob/platform-validator-image-updater
-role/platform-validator-image-updater
-rolebinding/platform-validator-image-updater
-serviceaccount/platform-validator-image-updater
+cronjob/platform-validator-helm-upgrader
+role/platform-validator-helm-upgrader
+rolebinding/platform-validator-helm-upgrader
+serviceaccount/platform-validator-helm-upgrader
 deployment/platform-validator
 configmap/platform-validator-config
-secret/platform-validator-wallet
 role/platform-validator-runtime
 rolebinding/platform-validator-runtime
 serviceaccount/platform-validator
 ```
 
-It does not run broad cluster cleanup commands and it does not delete unrelated
-workloads.
+It does not run broad cluster cleanup commands, does not delete unrelated
+workloads, and intentionally preserves `secret/platform-validator-wallet`.
 
 ## Manual Kubernetes Installation
 

@@ -12,9 +12,7 @@ Automatic Kubernetes install:
 ```
 
 The installer performs real Kubernetes changes and prompts for the validator
-hotkey mnemonic. It creates a validator image-updater CronJob that periodically
-resolves the configured validator image tag digest and patches the Deployment
-only when that digest changes. Unchanged tags do not trigger restarts. Validate the full install flow only against a disposable cluster or
+hotkey mnemonic. It creates `platform-validator-helm-upgrader`, a CronJob that periodically downloads the configured GitHub chart source and runs a full `helm upgrade --install platform-validator` with `--atomic`, `--wait`, and `--cleanup-on-fail`. It uses `HELM_DRIVER=configmap`, `concurrencyPolicy: Forbid`, and references the validator wallet Secret by name without printing its contents. Validate the full install flow only against a disposable cluster or
 namespace with disposable test hotkey material.
 
 Stop only installer-managed validator objects:
@@ -53,13 +51,13 @@ PLATFORM_WALLET_NAME=platform-validator
 PLATFORM_WALLET_HOTKEY=validator
 PLATFORM_DATABASE_URL=postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform
 PLATFORM_BROKER_ALLOWED_IMAGES=ghcr.io/platformnetwork/,registry.example.com/platform/
-PLATFORM_VALIDATOR_AUTO_UPDATE_SCHEDULE=*/5 * * * *
-PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE=ghcr.io/platformnetwork/platform:latest
+PLATFORM_AUTO_UPGRADE_SCHEDULE=*/5 * * * *
+PLATFORM_AUTO_UPGRADE_HELM_IMAGE=alpine/helm:3.15.4
+PLATFORM_AUTO_UPGRADE_REPO=PlatformNetwork/platform
+PLATFORM_AUTO_UPGRADE_REF=main
 ```
 
-The auto-update image must contain the `platform` CLI because the CronJob runs
-`platform validator refresh-image`. Leave `PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE`
-unset to reuse the validator image, or set it to a Platform image tag/digest.
+The auto-upgrade image must contain the `helm` CLI and basic archive download tools. The default is `alpine/helm:3.15.4`.
 
 The validator pod sees the hotkey at:
 
@@ -70,12 +68,12 @@ The validator pod sees the hotkey at:
 ## Kubernetes Scope
 
 The installer applies only namespaced resources needed by the validator:
-Namespace, validator ServiceAccount/RBAC, updater ServiceAccount/RBAC, PVC,
-ConfigMap, Secret, Deployment, and updater CronJob. Cleanup removes only the
-installer-managed updater CronJob/RBAC/ServiceAccount plus the validator
-Deployment, ConfigMap, Secret, Role, RoleBinding, and ServiceAccount. The PVC is
-preserved intentionally so validator state is not destroyed by an update; delete
-it manually only when you intentionally want to erase local validator state.
+Namespace, validator ServiceAccount/RBAC, Helm-upgrader ServiceAccount/RBAC, PVC,
+ConfigMap, Secret, Deployment, and Helm-upgrader CronJob. Cleanup removes only the
+installer-managed Helm-upgrader CronJob/RBAC/ServiceAccount plus the validator
+Deployment, ConfigMap, Role, RoleBinding, and ServiceAccount. The PVC and wallet Secret are
+preserved intentionally so validator state and key material are not destroyed by an update; delete
+them manually only when you intentionally want to erase local validator state and credentials.
 
 Kubernetes mode requires an external PostgreSQL `PLATFORM_DATABASE_URL` and
 registry-scoped `PLATFORM_BROKER_ALLOWED_IMAGES`. SQLite URLs, wildcards, and
@@ -96,8 +94,8 @@ The full installer is an interactive real install. Run it only when the current
 Kubernetes context, namespace, and hotkey material are safe to mutate. CI
 publishes Docker images to GHCR only from trusted events: PRs build with
 `push: false`, while `main`, `v*.*.*` tags, and confirmed manual runs publish.
-Kubernetes does not notice GHCR tag changes by itself; the installed CronJob
-checks the tag digest and creates a rollout only when the digest changed.
+Kubernetes does not notice GitHub or chart changes by itself; the installed CronJob
+runs a full Helm upgrade from the configured repo/ref and lets Helm reconcile the namespace.
 
 If Kubernetes or a Python tool is unavailable, record the missing tool as a
 blocker instead of marking that surface as tested.
