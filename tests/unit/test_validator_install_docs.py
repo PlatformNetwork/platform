@@ -99,8 +99,8 @@ def test_validator_docs_document_kubernetes_policy_and_secret_behavior() -> None
     assert "SQLite URLs" in docs
     assert "platformnetwork/" in docs
     assert "Secret read RBAC" in docs
-    assert "platform-validator-image-updater" in docs
-    assert "cronjob/platform-validator-image-updater" in docs
+    assert "platform-validator-helm-upgrader" in docs
+    assert "cronjob/platform-validator-helm-upgrader" in docs
     assert "encryption at rest" in docs
 
 
@@ -252,13 +252,16 @@ def test_cleanup_requires_only_kubectl(tmp_path: Path) -> None:
     assert "python with bittensor" not in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert calls == [
+        "-n validator-test delete cronjob platform-validator-helm-upgrader",
+        "-n validator-test delete role platform-validator-helm-upgrader",
+        "-n validator-test delete rolebinding platform-validator-helm-upgrader",
+        "-n validator-test delete serviceaccount platform-validator-helm-upgrader",
         "-n validator-test delete cronjob platform-validator-image-updater",
         "-n validator-test delete role platform-validator-image-updater",
         "-n validator-test delete rolebinding platform-validator-image-updater",
         "-n validator-test delete serviceaccount platform-validator-image-updater",
         "-n validator-test delete deployment platform-validator",
         "-n validator-test delete configmap platform-validator-config",
-        "-n validator-test delete secret platform-validator-wallet",
         "-n validator-test delete role platform-validator-runtime",
         "-n validator-test delete rolebinding platform-validator-runtime",
         "-n validator-test delete serviceaccount platform-validator",
@@ -295,7 +298,7 @@ def test_installer_cleanup_is_scoped_to_kubernetes_validator_objects() -> None:
     assert 'APP="platform-validator"' in script
     assert 'delete deployment "$APP"' in script
     assert 'delete configmap "$APP-config"' in script
-    assert 'delete secret "$APP-wallet"' in script
+    assert 'delete secret "$APP-wallet"' not in script
     assert 'delete role "$APP-runtime"' in script
     assert 'delete rolebinding "$APP-runtime"' in script
     assert 'delete serviceaccount "$APP"' in script
@@ -458,22 +461,31 @@ def test_validator_installer_renders_auto_update_cronjob() -> None:
     script = _read(SCRIPT)
 
     assert (
-        'AUTO_UPDATE_SCHEDULE="${PLATFORM_VALIDATOR_AUTO_UPDATE_SCHEDULE:-*/5 * * * *}"'
+        'AUTO_UPGRADE_SCHEDULE="${PLATFORM_AUTO_UPGRADE_SCHEDULE:-*/5 * * * *}"'
         in script
     )
-    assert 'AUTO_UPDATE_IMAGE="${PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE:-}"' in script
-    assert 'AUTO_UPDATE_IMAGE="$IMAGE"' in script
-    assert "AUTO_UPDATE_REGISTRY_ENDPOINT=" in script
+    assert (
+        'AUTO_UPGRADE_HELM_IMAGE="${PLATFORM_AUTO_UPGRADE_HELM_IMAGE:-alpine/helm:3.15.4}"'
+        in script
+    )
+    assert (
+        'AUTO_UPGRADE_REPO="${PLATFORM_AUTO_UPGRADE_REPO:-PlatformNetwork/platform}"'
+        in script
+    )
+    assert 'AUTO_UPGRADE_REF="${PLATFORM_AUTO_UPGRADE_REF:-main}"' in script
     assert "kind: CronJob" in script
-    assert "name: ${APP}-image-updater" in script
-    assert "refresh-image" in script
-    assert "rollout" not in script
-    assert 'resources: ["jobs"]' in script
-    assert 'resources: ["deployments"]' in script
-    assert 'resources: ["pods"]' in script
-    assert 'resourceNames: ["${APP}"]' in script
-    assert 'delete cronjob "$APP-image-updater"' in script
-    assert 'delete serviceaccount "$APP-image-updater"' in script
+    assert "name: ${APP}-helm-upgrader" in script
+    assert "set -- upgrade --install ${APP}" in script
+    assert 'helm "\\$@"' in script
+    assert "HELM_DRIVER" in script
+    assert "--atomic" in script
+    assert "--wait" in script
+    assert "--cleanup-on-fail" in script
+    assert "--take-ownership" in script
+    assert "refresh-image" not in script
+    assert 'resources: ["deployments", "statefulsets"]' in script
+    assert 'delete cronjob "$APP-helm-upgrader"' in script
+    assert 'delete serviceaccount "$APP-helm-upgrader"' in script
 
 
 def test_validator_installer_image_update_changes_deployment_template(
@@ -511,11 +523,12 @@ def test_validator_installer_auto_updater_uses_scoped_service_account(
     container = pod_spec["containers"][0]
 
     assert cronjob["spec"]["schedule"] == "*/5 * * * *"
-    assert pod_spec["serviceAccountName"] == "platform-validator-image-updater"
+    assert pod_spec["serviceAccountName"] == "platform-validator-helm-upgrader"
     assert pod_spec["automountServiceAccountToken"] is True
     assert pod_spec["restartPolicy"] == "OnFailure"
-    assert container["image"] == "ghcr.io/platformnetwork/platform:latest"
+    assert container["image"] == "alpine/helm:3.15.4"
     assert container["imagePullPolicy"] == "Always"
+    assert container["env"] == [{"name": "HELM_DRIVER", "value": "configmap"}]
     assert container["volumeMounts"] == [
         {
             "name": "kube-api-access",
@@ -527,37 +540,24 @@ def test_validator_installer_auto_updater_uses_scoped_service_account(
     assert pod_spec["volumes"][0]["projected"]["sources"][0] == {
         "serviceAccountToken": {"path": "token", "expirationSeconds": 3600}
     }
-    assert container["command"] == [
-        "platform",
-        "validator",
-        "refresh-image",
-        "--namespace",
-        "validator-test",
-        "--deployment",
-        "platform-validator",
-        "--container",
-        "validator",
-        "--image",
-        "ghcr.io/platformnetwork/platform:latest",
-        "--registry-endpoint",
-        "",
-    ]
+    command = " ".join(container["command"])
+    assert "set -x" not in command
+    assert "set -- upgrade --install platform-validator" in command
+    assert 'helm "$@"' in command
+    assert "--namespace validator-test" in command
+    assert "--atomic" in command
+    assert "--wait" in command
+    assert "--cleanup-on-fail" in command
+    assert "--take-ownership" in command
+    assert "codeload.github.com/PlatformNetwork/platform/tar.gz/main" in command
     updater_role = next(
         doc
         for doc in manifests
         if doc.get("kind") == "Role"
-        and doc.get("metadata", {}).get("name") == "platform-validator-image-updater"
+        and doc.get("metadata", {}).get("name") == "platform-validator-helm-upgrader"
     )
-    assert updater_role["rules"] == [
-        {
-            "apiGroups": ["apps"],
-            "resources": ["deployments"],
-            "resourceNames": ["platform-validator"],
-            "verbs": ["get", "patch"],
-        },
-        {
-            "apiGroups": [""],
-            "resources": ["pods"],
-            "verbs": ["get", "list"],
-        },
-    ]
+    assert not any(
+        "secrets" in rule.get("resources", []) for rule in updater_role["rules"]
+    )
+    assert any("deployments" in rule["resources"] for rule in updater_role["rules"])
+    assert any(rule["resources"] == ["configmaps"] for rule in updater_role["rules"])

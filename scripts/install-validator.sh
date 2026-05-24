@@ -5,9 +5,15 @@ umask 077
 APP="platform-validator"
 NAMESPACE="${PLATFORM_NAMESPACE:-platform-validator}"
 IMAGE="${PLATFORM_IMAGE:-ghcr.io/platformnetwork/platform:latest}"
-AUTO_UPDATE_SCHEDULE="${PLATFORM_VALIDATOR_AUTO_UPDATE_SCHEDULE:-*/5 * * * *}"
-AUTO_UPDATE_IMAGE="${PLATFORM_VALIDATOR_AUTO_UPDATE_IMAGE:-}"
-AUTO_UPDATE_REGISTRY_ENDPOINT="${PLATFORM_VALIDATOR_AUTO_UPDATE_REGISTRY_ENDPOINT:-}"
+AUTO_UPGRADE_SCHEDULE="${PLATFORM_AUTO_UPGRADE_SCHEDULE:-*/5 * * * *}"
+AUTO_UPGRADE_HELM_IMAGE="${PLATFORM_AUTO_UPGRADE_HELM_IMAGE:-alpine/helm:3.15.4}"
+AUTO_UPGRADE_REPO="${PLATFORM_AUTO_UPGRADE_REPO:-PlatformNetwork/platform}"
+AUTO_UPGRADE_REF="${PLATFORM_AUTO_UPGRADE_REF:-main}"
+AUTO_UPGRADE_CHART_PATH="${PLATFORM_AUTO_UPGRADE_CHART_PATH:-deploy/helm/platform}"
+AUTO_UPGRADE_VALUES_PATH="${PLATFORM_AUTO_UPGRADE_VALUES_PATH:-deploy/helm/platform/values.yaml}"
+AUTO_UPGRADE_TIMEOUT="${PLATFORM_AUTO_UPGRADE_TIMEOUT:-10m}"
+AUTO_UPGRADE_HISTORY_MAX="${PLATFORM_AUTO_UPGRADE_HISTORY_MAX:-5}"
+AUTO_UPGRADE_TAKE_OWNERSHIP="${PLATFORM_AUTO_UPGRADE_TAKE_OWNERSHIP:-true}"
 REGISTRY_URL="${PLATFORM_VALIDATOR_REGISTRY_URL:-https://chain.platform.network}"
 NETUID="${PLATFORM_NETUID:-0}"
 CHAIN_ENDPOINT="${PLATFORM_CHAIN_ENDPOINT:-}"
@@ -31,9 +37,11 @@ Options:
   --cleanup                  Delete this installer-managed validator deployment and exit.
   --namespace NAME           Kubernetes namespace. Default: platform-validator
   --image IMAGE              Platform validator image. Default: ghcr.io/platformnetwork/platform:latest
-  --auto-update-schedule S   Cron schedule for validator image digest checks. Default: */5 * * * *
-  --auto-update-image IMAGE  Image used by the updater CronJob. Default: same as --image
-  --auto-update-registry-endpoint URL  Optional registry API endpoint override for digest checks.
+  --auto-upgrade-schedule S  Cron schedule for full Helm upgrades. Default: */5 * * * *
+  --auto-upgrade-helm-image IMAGE  Helm image used by the upgrader CronJob. Default: alpine/helm:3.15.4
+  --auto-upgrade-repo REPO   GitHub repo for Helm chart source. Default: PlatformNetwork/platform
+  --auto-upgrade-ref REF     Git ref for Helm chart source. Default: main
+  --auto-upgrade-chart-path PATH  Chart path inside the repo. Default: deploy/helm/platform
   --registry-url URL         Registry API URL. Default: https://chain.platform.network
   --netuid NETUID            Bittensor subnet UID. Default: 0
   --chain-endpoint ENDPOINT  Optional Bittensor chain endpoint.
@@ -51,9 +59,11 @@ while [ "$#" -gt 0 ]; do
     --cleanup) CLEANUP_ONLY=1 ;;
     --namespace) NAMESPACE="${2:?missing NAME}"; shift ;;
     --image) IMAGE="${2:?missing IMAGE}"; shift ;;
-    --auto-update-schedule) AUTO_UPDATE_SCHEDULE="${2:?missing SCHEDULE}"; shift ;;
-    --auto-update-image) AUTO_UPDATE_IMAGE="${2:?missing IMAGE}"; shift ;;
-    --auto-update-registry-endpoint) AUTO_UPDATE_REGISTRY_ENDPOINT="${2:?missing URL}"; shift ;;
+    --auto-upgrade-schedule) AUTO_UPGRADE_SCHEDULE="${2:?missing SCHEDULE}"; shift ;;
+    --auto-upgrade-helm-image) AUTO_UPGRADE_HELM_IMAGE="${2:?missing IMAGE}"; shift ;;
+    --auto-upgrade-repo) AUTO_UPGRADE_REPO="${2:?missing REPO}"; shift ;;
+    --auto-upgrade-ref) AUTO_UPGRADE_REF="${2:?missing REF}"; shift ;;
+    --auto-upgrade-chart-path) AUTO_UPGRADE_CHART_PATH="${2:?missing PATH}"; shift ;;
     --registry-url) REGISTRY_URL="${2:?missing URL}"; shift ;;
     --netuid) NETUID="${2:?missing NETUID}"; shift ;;
     --chain-endpoint) CHAIN_ENDPOINT="${2:?missing ENDPOINT}"; shift ;;
@@ -67,10 +77,6 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-
-if [ -z "$AUTO_UPDATE_IMAGE" ]; then
-  AUTO_UPDATE_IMAGE="$IMAGE"
-fi
 
 cleanup_tmp() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
@@ -124,13 +130,16 @@ render_broker_allowed_images() {
 }
 
 cleanup_validator() {
+  kubectl_delete -n "$NAMESPACE" delete cronjob "$APP-helm-upgrader"
+  kubectl_delete -n "$NAMESPACE" delete role "$APP-helm-upgrader"
+  kubectl_delete -n "$NAMESPACE" delete rolebinding "$APP-helm-upgrader"
+  kubectl_delete -n "$NAMESPACE" delete serviceaccount "$APP-helm-upgrader"
   kubectl_delete -n "$NAMESPACE" delete cronjob "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete role "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete rolebinding "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete serviceaccount "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete deployment "$APP"
   kubectl_delete -n "$NAMESPACE" delete configmap "$APP-config"
-  kubectl_delete -n "$NAMESPACE" delete secret "$APP-wallet"
   kubectl_delete -n "$NAMESPACE" delete role "$APP-runtime"
   kubectl_delete -n "$NAMESPACE" delete rolebinding "$APP-runtime"
   kubectl_delete -n "$NAMESPACE" delete serviceaccount "$APP"
@@ -180,6 +189,38 @@ wallet.regenerate_hotkey(
     --from-file=hotkeypub.txt="$HOTKEY_DIR/${WALLET_HOTKEY}pub.txt"
 }
 
+render_helm_upgrade_command() {
+  cat <<SCRIPT
+set -eu
+WORKDIR="\$(mktemp -d)"
+trap 'rm -rf "\${WORKDIR}"' EXIT
+mkdir -p "\${WORKDIR}/source"
+wget -qO "\${WORKDIR}/source.tar.gz" "https://codeload.github.com/${AUTO_UPGRADE_REPO}/tar.gz/${AUTO_UPGRADE_REF}"
+tar -xzf "\${WORKDIR}/source.tar.gz" -C "\${WORKDIR}/source" --strip-components=1
+set -- upgrade --install ${APP} "\${WORKDIR}/source/${AUTO_UPGRADE_CHART_PATH}" \
+  -f "\${WORKDIR}/source/${AUTO_UPGRADE_VALUES_PATH}" \
+  --namespace ${NAMESPACE} \
+  --create-namespace \
+  --atomic \
+  --wait \
+  --cleanup-on-fail \
+  --history-max ${AUTO_UPGRADE_HISTORY_MAX} \
+  --timeout ${AUTO_UPGRADE_TIMEOUT}
+if [ "${AUTO_UPGRADE_TAKE_OWNERSHIP}" = "true" ]; then
+  set -- "\$@" --take-ownership
+fi
+helm "\$@" \
+  --set autoUpgrade.enabled=true \
+  --set autoUpgrade.mode=validator \
+  --set master.enabled=false \
+  --set validator.enabled=true \
+  --set validator.walletSecretName=${APP}-wallet \
+  --set imageAutoUpdate.enabled=false \
+  --set configSync.enabled=false
+SCRIPT
+}
+
+
 render_manifests() {
   cat <<YAML
 apiVersion: v1
@@ -202,11 +243,13 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ${APP}-image-updater
+  name: ${APP}-helm-upgrader
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/name: platform-network
     app.kubernetes.io/part-of: ${APP}
+    platform.component: helm-upgrader
+automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -236,19 +279,33 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: ${APP}-image-updater
+  name: ${APP}-helm-upgrader
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/name: platform-network
     app.kubernetes.io/part-of: ${APP}
 rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    resourceNames: ["${APP}"]
-    verbs: ["get", "patch"]
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "serviceaccounts", "persistentvolumeclaims", "pods"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -269,18 +326,18 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: ${APP}-image-updater
+  name: ${APP}-helm-upgrader
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/name: platform-network
     app.kubernetes.io/part-of: ${APP}
 subjects:
   - kind: ServiceAccount
-    name: ${APP}-image-updater
+    name: ${APP}-helm-upgrader
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: ${APP}-image-updater
+  name: ${APP}-helm-upgrader
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -413,14 +470,14 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: ${APP}-image-updater
+  name: ${APP}-helm-upgrader
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/name: platform-network
     app.kubernetes.io/part-of: ${APP}
-    platform.component: validator-image-updater
+    platform.component: helm-upgrader
 spec:
-  schedule: "${AUTO_UPDATE_SCHEDULE}"
+  schedule: "${AUTO_UPGRADE_SCHEDULE}"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
@@ -431,9 +488,9 @@ spec:
           labels:
             app.kubernetes.io/name: platform-network
             app.kubernetes.io/part-of: ${APP}
-            platform.component: validator-image-updater
+            platform.component: helm-upgrader
         spec:
-          serviceAccountName: ${APP}-image-updater
+          serviceAccountName: ${APP}-helm-upgrader
           automountServiceAccountToken: true
           restartPolicy: OnFailure
           securityContext:
@@ -443,23 +500,17 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           containers:
-            - name: updater
-              image: ${AUTO_UPDATE_IMAGE}
+            - name: helm-upgrader
+              image: ${AUTO_UPGRADE_HELM_IMAGE}
               imagePullPolicy: Always
+              env:
+                - name: HELM_DRIVER
+                  value: configmap
               command:
-                - platform
-                - validator
-                - refresh-image
-                - --namespace
-                - ${NAMESPACE}
-                - --deployment
-                - ${APP}
-                - --container
-                - validator
-                - --image
-                - ${IMAGE}
-                - --registry-endpoint
-                - "${AUTO_UPDATE_REGISTRY_ENDPOINT}"
+                - sh
+                - -ec
+                - |
+$(render_helm_upgrade_command | sed 's/^/                  /')
               volumeMounts:
                 - name: kube-api-access
                   mountPath: /var/run/secrets/kubernetes.io/serviceaccount
