@@ -24,6 +24,12 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- if .Values.imageAutoUpdate.enabled -}}
 {{- fail "production policy rejects imageAutoUpdate.enabled=true" -}}
 {{- end -}}
+{{- if .Values.autoUpgrade.enabled -}}
+{{- if eq .Values.autoUpgrade.githubRef "main" -}}
+{{- fail "autoUpgrade.githubRef must be immutable in production" -}}
+{{- end -}}
+{{- include "platform.validateImagePolicy" (dict "image" .Values.autoUpgrade.helmImage "name" "autoUpgrade.helmImage") -}}
+{{- end -}}
 {{- include "platform.validateImagePolicy" (dict "image" .Values.image "name" "image") -}}
 {{- include "platform.validateImagePolicy" (dict "image" .Values.images.master "name" "images.master") -}}
 {{- include "platform.validateImagePolicy" (dict "image" .Values.images.validator "name" "images.validator") -}}

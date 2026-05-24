@@ -93,6 +93,57 @@
         }
       }
     },
+    "autoUpgrade": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "githubRepository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "githubRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chartPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valuesPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "helmImage": {
+          "$ref": "#/definitions/imageReference"
+        },
+        "timeout": {
+          "type": "string",
+          "minLength": 1
+        },
+        "historyMax": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "takeOwnership": {
+          "type": "boolean"
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
     "network": {
       "type": "object",
       "properties": {

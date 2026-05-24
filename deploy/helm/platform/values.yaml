@@ -33,6 +33,31 @@ imageAutoUpdate:
   schedule: "*/1 * * * *"
   registryEndpoint: ""
 
+autoUpgrade:
+  enabled: false
+  mode: ""
+  schedule: "*/5 * * * *"
+  githubRepository: PlatformNetwork/platform
+  githubRef: main
+  chartPath: deploy/helm/platform
+  valuesPaths:
+    - deploy/helm/platform/values.yaml
+  helmImage:
+    repository: alpine/helm
+    tag: 3.15.4
+    digest: ""
+    pullPolicy: Always
+  timeout: 10m
+  historyMax: 5
+  takeOwnership: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
 runtime:
   backend: kubernetes
 

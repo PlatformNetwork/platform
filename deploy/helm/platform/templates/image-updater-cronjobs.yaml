@@ -1,4 +1,4 @@
-{{- if .Values.imageAutoUpdate.enabled }}
+{{- if and .Values.imageAutoUpdate.enabled (not .Values.autoUpgrade.enabled) }}
 {{- $root := . }}
 {{- $targets := list }}
 {{- if .Values.master.enabled }}

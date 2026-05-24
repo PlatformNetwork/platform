@@ -1,0 +1,87 @@
+{{- if .Values.autoUpgrade.enabled }}
+{{- $mode := .Values.autoUpgrade.mode -}}
+{{- if not $mode -}}
+{{- if and .Values.validator.enabled (not .Values.master.enabled) -}}
+{{- $mode = "validator" -}}
+{{- else -}}
+{{- $mode = "master" -}}
+{{- end -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "platform.fullname" . }}-helm-upgrader
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "helm-upgrader"
+spec:
+  schedule: {{ .Values.autoUpgrade.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "platform.labels" . | nindent 12 }}
+            platform.component: "helm-upgrader"
+        spec:
+          serviceAccountName: {{ include "platform.fullname" . }}-helm-upgrader
+          automountServiceAccountToken: true
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- include "platform.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: helm-upgrader
+              image: {{ include "platform.imageValue" (dict "image" .Values.autoUpgrade.helmImage) | quote }}
+              imagePullPolicy: {{ default .Values.image.pullPolicy .Values.autoUpgrade.helmImage.pullPolicy }}
+              env:
+                - name: HELM_DRIVER
+                  value: configmap
+              command:
+                - sh
+                - -ec
+                - |
+                  set -eu
+                  WORKDIR="$(mktemp -d)"
+                  trap 'rm -rf "${WORKDIR}"' EXIT
+                  mkdir -p "${WORKDIR}/source"
+                  wget -qO "${WORKDIR}/source.tar.gz" "https://codeload.github.com/{{ .Values.autoUpgrade.githubRepository }}/tar.gz/{{ .Values.autoUpgrade.githubRef }}"
+                  tar -xzf "${WORKDIR}/source.tar.gz" -C "${WORKDIR}/source" --strip-components=1
+                  helm upgrade --install {{ include "platform.fullname" . }} "${WORKDIR}/source/{{ .Values.autoUpgrade.chartPath }}" \
+                  {{- range .Values.autoUpgrade.valuesPaths }}
+                    -f ${WORKDIR}/source/{{ . }} \
+                  {{- end }}
+                    --namespace {{ .Release.Namespace }} \
+                    --create-namespace \
+                    --atomic \
+                    --wait \
+                    --cleanup-on-fail \
+                    --history-max {{ .Values.autoUpgrade.historyMax }} \
+                    --timeout {{ .Values.autoUpgrade.timeout }} \
+                  {{- if .Values.autoUpgrade.takeOwnership }}
+                    --take-ownership \
+                  {{- end }}
+                    --set autoUpgrade.enabled=true \
+                    --set autoUpgrade.mode={{ $mode }} \
+                  {{- if eq $mode "validator" }}
+                    --set master.enabled=false \
+                    --set validator.enabled=true \
+                  {{- else }}
+                    --set master.enabled=true \
+                    --set validator.enabled=false \
+                  {{- end }}
+                    --set imageAutoUpdate.enabled=false \
+                    --set configSync.enabled=false
+              resources:
+                {{- toYaml .Values.autoUpgrade.resources | nindent 16 }}
+              securityContext:
+                {{- include "platform.containerSecurityContext" . | nindent 16 }}
+{{- end }}

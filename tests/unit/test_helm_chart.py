@@ -15,6 +15,17 @@ CHART = Path(__file__).resolve().parents[2] / "deploy" / "helm" / "platform"
 PRODUCTION_VALUES = CHART / "values.production.example.yaml"
 
 
+def _helm_template(*args: str) -> list[dict[str, Any]]:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+    rendered = subprocess.check_output(
+        [helm, "template", *args],
+        text=True,
+    )
+    return [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+
+
 def test_helm_template_renders_secure_kubernetes_control_plane() -> None:
     helm = shutil.which("helm")
     if helm is None:
@@ -301,6 +312,120 @@ def test_helm_renders_one_minute_github_config_sync_resources() -> None:
     assert all("secrets" not in rule.get("resources", []) for rule in rules)
     assert all("*" not in rule.get("resources", []) for rule in rules)
     assert all("*" not in rule.get("verbs", []) for rule in rules)
+
+
+@pytest.mark.parametrize(
+    "release, namespace, set_args, expected_release, expected_mode",
+    [
+        (
+            "platform-master",
+            "platform-master",
+            ["--set", "validator.enabled=false"],
+            "platform-master",
+            "master",
+        ),
+        (
+            "platform-validator",
+            "platform-validator",
+            ["--set", "master.enabled=false", "--set", "validator.enabled=true"],
+            "platform-validator",
+            "validator",
+        ),
+    ],
+)
+def test_helm_auto_upgrade_renders_full_helm_upgrade_cronjob(
+    release: str,
+    namespace: str,
+    set_args: list[str],
+    expected_release: str,
+    expected_mode: str,
+) -> None:
+    documents = _helm_template(
+        release,
+        str(CHART),
+        "--namespace",
+        namespace,
+        "--set",
+        "autoUpgrade.enabled=true",
+        *set_args,
+    )
+    cronjob = _document(documents, "CronJob", f"{release}-helm-upgrader")
+    pod_spec = _pod_spec(cronjob)
+    assert pod_spec is not None
+    upgrader = _named_container(pod_spec, "helm-upgrader")
+    command = " ".join(upgrader["command"])
+
+    assert cronjob["spec"]["schedule"] == "*/5 * * * *"
+    assert cronjob["spec"]["concurrencyPolicy"] == "Forbid"
+    assert pod_spec["serviceAccountName"] == f"{release}-helm-upgrader"
+    assert pod_spec["restartPolicy"] == "OnFailure"
+    assert upgrader["env"] == [{"name": "HELM_DRIVER", "value": "configmap"}]
+    assert "set -x" not in command
+    assert "codeload.github.com/PlatformNetwork/platform/tar.gz/main" in command
+    assert "helm upgrade" in command
+    assert f"helm upgrade --install {expected_release}" in command
+    assert f"--namespace {namespace}" in command
+    assert "--atomic" in command
+    assert "--wait" in command
+    assert "--cleanup-on-fail" in command
+    assert "--history-max 5" in command
+    assert "--timeout 10m" in command
+    assert "--take-ownership" in command
+    assert "-f ${WORKDIR}/source/deploy/helm/platform/values.yaml" in command
+    assert f"--set autoUpgrade.mode={expected_mode}" in command
+
+
+def test_helm_auto_upgrade_rbac_is_namespace_scoped_without_secret_access() -> None:
+    documents = _helm_template(
+        "platform-master",
+        str(CHART),
+        "--namespace",
+        "platform-master",
+        "--set",
+        "autoUpgrade.enabled=true",
+        "--set",
+        "validator.enabled=false",
+    )
+    service_account = _document(
+        documents, "ServiceAccount", "platform-master-helm-upgrader"
+    )
+    role = _document(documents, "Role", "platform-master-helm-upgrader")
+    role_binding = _document(documents, "RoleBinding", "platform-master-helm-upgrader")
+
+    assert service_account["automountServiceAccountToken"] is True
+    assert role_binding["subjects"] == [
+        {"kind": "ServiceAccount", "name": "platform-master-helm-upgrader"}
+    ]
+    assert "ClusterRole" not in {doc["kind"] for doc in documents}
+    assert "ClusterRoleBinding" not in {doc["kind"] for doc in documents}
+    for rule in role["rules"]:
+        assert "secrets" not in rule.get("resources", [])
+        assert "*" not in rule.get("resources", [])
+        assert "*" not in rule.get("verbs", [])
+
+
+def test_helm_auto_upgrade_suppresses_patch_only_updaters() -> None:
+    documents = _helm_template(
+        "platform-master",
+        str(CHART),
+        "--namespace",
+        "platform-master",
+        "--set",
+        "autoUpgrade.enabled=true",
+        "--set",
+        "validator.enabled=false",
+    )
+    names = {
+        doc.get("metadata", {}).get("name")
+        for doc in documents
+        if doc.get("kind") == "CronJob"
+    }
+
+    assert "platform-master-helm-upgrader" in names
+    assert "platform-master-config-sync" not in names
+    assert "platform-master-admin-image-updater" not in names
+    assert "platform-master-proxy-image-updater" not in names
+    assert "platform-master-broker-image-updater" not in names
 
 
 @pytest.mark.parametrize(
@@ -978,6 +1103,11 @@ def test_helm_production_policy_rejects_unsafe_values(tmp_path: Path) -> None:
             "mutable-autoupdate.yaml",
             "imageAutoUpdate:\n  enabled: true\n",
             "imageAutoUpdate.enabled=true",
+        ),
+        (
+            "mutable-helm-autoupgrade.yaml",
+            "autoUpgrade:\n  enabled: true\n  githubRef: main\n",
+            "autoUpgrade.githubRef must be immutable in production",
         ),
         (
             "missing-db-secret.yaml",
