@@ -95,6 +95,26 @@ jobs:
         run: helm template platform deploy/helm/platform -f deploy/helm/platform/values.production.example.yaml > /tmp/platform-production.yaml
       - name: kubeconform production values
         run: kubeconform -strict -summary /tmp/platform-production.yaml
+      - name: Helm template master auto-upgrade values
+        run: >-
+          helm template platform-master deploy/helm/platform
+          --namespace platform-master
+          --set validator.enabled=false
+          --set autoUpgrade.enabled=true
+          > /tmp/platform-master-auto-upgrade.yaml
+      - name: kubeconform master auto-upgrade values
+        run: kubeconform -strict -summary /tmp/platform-master-auto-upgrade.yaml
+      - name: Helm template validator auto-upgrade values
+        run: >-
+          helm template platform-validator deploy/helm/platform
+          --namespace platform-validator
+          --set master.enabled=false
+          --set validator.enabled=true
+          --set autoUpgrade.enabled=true
+          --set validator.walletSecretName=platform-validator-wallet
+          > /tmp/platform-validator-auto-upgrade.yaml
+      - name: kubeconform validator auto-upgrade values
+        run: kubeconform -strict -summary /tmp/platform-validator-auto-upgrade.yaml
 
   production-policy:
     runs-on: ubuntu-latest
