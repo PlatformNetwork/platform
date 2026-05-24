@@ -302,7 +302,7 @@ metadata:
     app.kubernetes.io/part-of: ${APP}
 rules:
   - apiGroups: [""]
-    resources: ["services", "pods", "pods/log", "persistentvolumeclaims", "configmaps"]
+    resources: ["secrets", "services", "pods", "pods/log", "persistentvolumeclaims", "configmaps"]
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
