@@ -156,8 +156,9 @@ platform/
 
 Platform uses Kubernetes-only first-party deployment paths and keeps Dockerfiles for OCI images consumed by Kubernetes:
 
-- `scripts/install-master.sh` is a Foundation-only installer for Cortex Foundation master infrastructure. Do not run this for validators or third-party operators. Its default namespace is `PLATFORM_NAMESPACE=platform-master`, and it installs master admin, proxy, broker, and `platform-master-config-sync` only.
+- `scripts/install-master.sh` is a Foundation-only installer for Cortex Foundation master infrastructure. Do not run this for validators or third-party operators. Its default namespace is `PLATFORM_NAMESPACE=platform-master`, and it installs master admin, proxy, broker, and `platform-master-helm-upgrader` only.
 - Normal validators must use `scripts/install-validator.sh` and the validator guide, not the foundation master installer.
+- The master and validator installers now bootstrap full namespace-scoped Helm auto-upgrade CronJobs. They run `helm upgrade --install` from the configured GitHub repo/ref with `--atomic`, `--wait`, and `--cleanup-on-fail`; they do not print or read Kubernetes Secret contents.
 - First-party Platform defaults use Kubernetes runtime, the Kubernetes broker backend, and an external PostgreSQL-compatible database URL.
 - Production and Kubernetes deployments require an external PostgreSQL database provided through an explicit secret or URL for control-plane state. SQLite is rejected for Kubernetes control-plane state.
 - Kubernetes managed challenge mode creates isolated managed Postgres resources per challenge slug and injects `CHALLENGE_DATABASE_URL` automatically from the per-challenge Secret. The challenge `/data` PVC remains separate and is for artifacts, analyzer output, local files, and the SQLite fallback.
