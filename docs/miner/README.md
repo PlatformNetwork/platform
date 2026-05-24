@@ -33,6 +33,32 @@ GET /challenges/{challenge_slug}/...
 The exact path after the challenge slug belongs to the challenge repository. Platform does not define
 the artifact format, task rules, scoring rubric, or leaderboard fields for each challenge.
 
+
+## Agent Challenge Frontend API
+
+Frontend reads for Agent Challenge should use the Platform master/proxy base:
+
+```http
+GET /v1/registry
+GET /challenges/agent-challenge/benchmarks
+GET /challenges/agent-challenge/submissions/{id}/status
+GET /challenges/agent-challenge/submissions/{id}/events
+GET /challenges/agent-challenge/leaderboard
+```
+
+Uploads have two public paths:
+
+```http
+POST /v1/challenges/agent-challenge/submissions
+POST /challenges/agent-challenge/submissions
+```
+
+Use `POST /v1/challenges/agent-challenge/submissions` for raw ZIP bridge uploads. Platform verifies the miner upload and forwards it to Agent Challenge. Use `POST /challenges/agent-challenge/submissions` for the JSON base64 generic proxy path when the client signs the challenge-local `/submissions` request.
+
+For v1 lists, `/challenges/agent-challenge/submissions` returns the latest 100 submissions newest-first. `/challenges/agent-challenge/leaderboard` returns one best scoring row per hotkey. Pagination, filtering, and client-selected sorting are deferred to future v2.
+
+The public proxy blocks `/internal/*`, `/health`, and `/version`.
+
 ## What Platform Does For Miners
 
 Platform provides:
