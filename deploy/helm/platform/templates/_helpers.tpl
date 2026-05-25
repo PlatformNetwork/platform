@@ -49,11 +49,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "platform.validateImagePolicy" -}}
-{{- if eq .image.tag "latest" -}}
-{{- fail (printf "production policy rejects %s.tag=latest" .name) -}}
-{{- end -}}
-{{- if not (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" .image.tag) -}}
-{{- fail (printf "production policy requires a semver %s.tag" .name) -}}
+{{- if and (ne .image.tag "latest") (not (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" .image.tag)) -}}
+{{- fail (printf "production policy requires a semver or latest %s.tag" .name) -}}
 {{- end -}}
 {{- if not .image.digest -}}
 {{- fail (printf "production policy requires %s.digest" .name) -}}

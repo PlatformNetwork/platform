@@ -52,7 +52,7 @@ Pinned production deployment references must use a SemVer image tag plus a diges
 ghcr.io/platformnetwork/platform:3.0.3@sha256:<64-hex-digest>
 ```
 
-The digest is the immutable deployment selector. The tag provides human-readable release context. Production policy rejects `latest`, untagged image references, missing digests, non-SemVer tags, and mutable auto-update CronJobs.
+The digest is the immutable deployment selector. The tag provides human-readable release context. Production policy accepts digest-pinned `latest` only for the autonomous update channel, and rejects untagged image references, missing digests, non-SemVer non-`latest` tags, and mutable auto-update CronJobs in pinned production mode.
 
 Mutable tags such as `latest` and `main` are allowed for the default Kubernetes auto-update mode.
 In that mode, Helm renders master admin, proxy, broker, config sync, and image-updater resources from `ghcr.io/platformnetwork/platform-master:latest`.

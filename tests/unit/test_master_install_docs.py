@@ -144,6 +144,7 @@ def test_master_installer_renders_master_only_resources(tmp_path: Path) -> None:
     assert ("Deployment", "platform-master-proxy") in kinds_by_name
     assert ("Deployment", "platform-master-broker") in kinds_by_name
     assert ("CronJob", "platform-master-helm-upgrader") in kinds_by_name
+    assert ("CronJob", "platform-master-challenge-image-updater") in kinds_by_name
     assert ("ConfigMap", "platform-master-config") in kinds_by_name
     assert ("Secret", "platform-master-database-url") in kinds_by_name
     assert ("Secret", "platform-master-wallet") not in kinds_by_name
@@ -323,7 +324,12 @@ def test_master_installer_can_suspend_helm_upgrader(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    cronjob = next(doc for doc in manifests if doc.get("kind") == "CronJob")
+    cronjob = next(
+        doc
+        for doc in manifests
+        if doc.get("kind") == "CronJob"
+        and doc.get("metadata", {}).get("name") == "platform-master-helm-upgrader"
+    )
     assert cronjob["spec"]["suspend"] is True
 
 

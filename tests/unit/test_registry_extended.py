@@ -225,8 +225,18 @@ def test_production_registry_rejects_mutable_and_untagged_images() -> None:
     )
     assert accepted.image.endswith(digest)
 
+    latest, _ = registry.create(
+        ChallengeCreate(
+            slug="prod-latest-demo",
+            name="Prod Latest",
+            image=f"ghcr.io/platformnetwork/demo:latest@{digest}",
+            version="1.2.3",
+        )
+    )
+    assert latest.image == f"ghcr.io/platformnetwork/demo:latest@{digest}"
+
     for image, message in (
-        ("ghcr.io/platformnetwork/demo:latest", "latest"),
+        ("ghcr.io/platformnetwork/demo:latest", "digest"),
         ("ghcr.io/platformnetwork/demo", "tag"),
         ("ghcr.io/platformnetwork/demo:1.2.3", "digest"),
     ):

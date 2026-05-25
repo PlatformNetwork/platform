@@ -107,3 +107,45 @@ def test_incluster_client_sets_bearer_token_alias(
     configuration = cast(FakeConfiguration, created["configuration"])
     assert configuration.api_key["BearerToken"] == "token-value"
     assert configuration.api_key_prefix["BearerToken"] == "Bearer"
+
+
+def test_patch_workload_image_uses_strategic_merge_patch() -> None:
+    calls: list[dict[str, object]] = []
+    image = "ghcr.io/platformnetwork/demo:latest@sha256:" + "a" * 64
+
+    class FakeApi:
+        def patch(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    client = KubernetesClient.__new__(KubernetesClient)
+    client.namespace = "platform"
+    client._api_by_kind = lambda kind: FakeApi()  # type: ignore[method-assign]
+
+    client.patch_workload_image(
+        kind="StatefulSet",
+        name="challenge-demo",
+        container="challenge",
+        image=image,
+    )
+
+    assert calls == [
+        {
+            "body": {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "challenge",
+                                    "image": image,
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "namespace": "platform",
+            "name": "challenge-demo",
+            "content_type": "application/strategic-merge-patch+json",
+        }
+    ]

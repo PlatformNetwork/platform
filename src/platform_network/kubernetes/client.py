@@ -83,6 +83,27 @@ class KubernetesClient:
             return None
         return result.to_dict() if hasattr(result, "to_dict") else dict(result)
 
+    def patch_workload_image(
+        self, *, kind: str, name: str, container: str, image: str
+    ) -> None:
+        body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {"name": container, "image": image},
+                        ]
+                    }
+                }
+            }
+        }
+        self._api_by_kind(kind).patch(
+            body=body,
+            namespace=self.namespace,
+            name=name,
+            content_type="application/strategic-merge-patch+json",
+        )
+
     def wait_workload_ready(
         self, *, kind: str, name: str, replicas: int = 1, timeout_seconds: int = 120
     ) -> None:

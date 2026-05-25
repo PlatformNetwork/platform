@@ -1,0 +1,84 @@
+{{- if and .Values.master.enabled .Values.imageAutoUpdate.enabled .Values.imageAutoUpdate.challenges.enabled (not .Values.autoUpgrade.enabled) }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "platform.fullname" . }}-challenge-image-updater
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    platform.component: "challenge-image-updater"
+spec:
+  schedule: {{ .Values.imageAutoUpdate.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "platform.labels" . | nindent 12 }}
+            platform.component: "challenge-image-updater"
+        spec:
+          serviceAccountName: {{ include "platform.serviceAccountName" . }}
+          automountServiceAccountToken: true
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- include "platform.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: challenge-image-updater
+              image: {{ include "platform.imageValue" (dict "image" .Values.images.master) | quote }}
+              imagePullPolicy: {{ default .Values.image.pullPolicy .Values.images.master.pullPolicy }}
+              command:
+                - platform
+                - master
+                - refresh-challenge-images
+                - --config
+                - config/master.kubernetes.yaml
+                - --tag
+                - {{ .Values.imageAutoUpdate.challenges.tag | quote }}
+              env:
+                - name: PLATFORM_DATABASE__URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.urlSecret.name | quote }}
+                      key: {{ .Values.database.urlSecret.key | quote }}
+              volumeMounts:
+                - name: config
+                  mountPath: /app/config/master.kubernetes.yaml
+                  subPath: master.yaml
+                  readOnly: true
+                - name: data
+                  mountPath: /var/lib/platform
+                - name: secrets
+                  mountPath: /var/lib/platform/secrets
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                {{- include "platform.containerSecurityContext" . | nindent 16 }}
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "platform.fullname" . }}-config
+            - name: data
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "platform.fullname" .)) | quote }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+            - name: secrets
+              secret:
+                secretName: {{ .Values.security.existingSecret | quote }}
+{{- end }}

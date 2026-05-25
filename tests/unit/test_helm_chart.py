@@ -317,6 +317,35 @@ def test_helm_renders_one_minute_image_updaters_for_master_and_validator() -> No
         ]
 
 
+def test_helm_renders_challenge_image_updater_for_master() -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    rendered = subprocess.check_output(
+        [helm, "template", "platform", str(CHART)],
+        text=True,
+    )
+    documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    cronjob = _document(documents, "CronJob", "platform-challenge-image-updater")
+    pod_spec = _pod_spec(cronjob)
+    assert pod_spec is not None
+    updater = _named_container(pod_spec, "challenge-image-updater")
+
+    assert cronjob["spec"]["schedule"] == "*/1 * * * *"
+    assert pod_spec["serviceAccountName"] == "platform-master"
+    assert updater["image"] == "ghcr.io/platformnetwork/platform-master:latest"
+    assert updater["command"] == [
+        "platform",
+        "master",
+        "refresh-challenge-images",
+        "--config",
+        "config/master.kubernetes.yaml",
+        "--tag",
+        "latest",
+    ]
+
+
 def test_helm_renders_one_minute_github_config_sync_resources() -> None:
     helm = shutil.which("helm")
     if helm is None:
@@ -1300,13 +1329,6 @@ def test_helm_production_values_render_safe_control_plane() -> None:
         (
             """
             image:
-              tag: latest
-            """,
-            "/image/tag",
-        ),
-        (
-            """
-            image:
               digest: ""
             """,
             "digest",
@@ -1356,6 +1378,41 @@ def test_helm_production_schema_rejects_unsafe_values(
 
     assert result.returncode != 0
     assert expected in result.stderr
+
+
+def test_helm_production_schema_accepts_latest_with_digest(tmp_path: Path) -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    values_file = tmp_path / "latest-digest.yaml"
+    values_file.write_text(
+        textwrap.dedent(
+            """
+            image:
+              tag: latest
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            helm,
+            "template",
+            "platform",
+            str(CHART),
+            "-f",
+            str(PRODUCTION_VALUES),
+            "-f",
+            str(values_file),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _arg_values(command: list[str], flag: str) -> list[str]:
@@ -1428,7 +1485,6 @@ def test_helm_production_policy_rejects_unsafe_values(tmp_path: Path) -> None:
         pytest.skip("helm is not installed")
 
     cases = [
-        ("latest.yaml", "image:\n  tag: latest\n", "/image/tag"),
         ("missing-digest.yaml", "image:\n  digest: ''\n", "/image/digest"),
         (
             "verify-tls.yaml",

@@ -1517,7 +1517,7 @@ def test_production_admin_rejects_unsafe_challenge_image() -> None:
     assert "digest" in response.text
 
 
-def test_production_admin_accepts_pinned_image_and_rejects_update() -> None:
+def test_production_admin_accepts_pinned_image_and_latest_digest_update() -> None:
     registry = ChallengeRegistry()
     client = TestClient(
         _admin_app(
@@ -1537,11 +1537,19 @@ def test_production_admin_accepts_pinned_image_and_rejects_update() -> None:
 
     patch = client.patch(
         "/v1/admin/challenges/demo",
+        json={"image": f"ghcr.io/platformnetwork/demo:latest@{digest}"},
+        headers={"X-Admin-Token": "admin-secret"},
+    )
+    assert patch.status_code == 200
+    assert patch.json()["image"] == f"ghcr.io/platformnetwork/demo:latest@{digest}"
+
+    unsafe_patch = client.patch(
+        "/v1/admin/challenges/demo",
         json={"image": "ghcr.io/platformnetwork/demo:latest"},
         headers={"X-Admin-Token": "admin-secret"},
     )
-    assert patch.status_code == 400
-    assert "latest" in patch.text
+    assert unsafe_patch.status_code == 400
+    assert "digest" in unsafe_patch.text
 
 
 def test_production_admin_rejects_verify_tls_false_targets() -> None:

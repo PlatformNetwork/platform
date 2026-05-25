@@ -531,15 +531,8 @@ def test_pull_rejects_non_ghcr_images() -> None:
         orchestrator.pull_image("docker.io/org/demo:1")
 
 
-@pytest.mark.parametrize(
-    "image",
-    [
-        "ghcr.io/org/demo@sha256:" + "a" * 64,
-        "ghcr.io/org/demo:latest@sha256:" + "a" * 64,
-    ],
-)
-def test_from_settings_production_policy_rejects_unpinned_challenge_images(
-    image: str, monkeypatch: pytest.MonkeyPatch
+def test_from_settings_production_policy_rejects_untagged_challenge_image(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = FakeKubernetesClient()
     monkeypatch.setattr(
@@ -552,7 +545,9 @@ def test_from_settings_production_policy_rejects_unpinned_challenge_images(
 
     assert orchestrator.production_policy is True
     with pytest.raises(ValueError, match="semver-tagged digest-pinned"):
-        orchestrator.start_challenge(_production_spec(image))
+        orchestrator.start_challenge(
+            _production_spec("ghcr.io/org/demo@sha256:" + "a" * 64)
+        )
 
 
 def test_from_settings_production_policy_rejects_secret_spec_before_apply(

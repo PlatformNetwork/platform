@@ -32,6 +32,9 @@ imageAutoUpdate:
   enabled: true
   schedule: "*/1 * * * *"
   registryEndpoint: ""
+  challenges:
+    enabled: true
+    tag: latest
 
 autoUpgrade:
   enabled: false

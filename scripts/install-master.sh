@@ -428,7 +428,83 @@ YAML
   echo "---"
   render_deployment "${APP}-broker" "master-broker" "$BROKER_PORT" "broker" "true"
   echo "---"
+  render_challenge_image_updater
+  echo "---"
   render_helm_upgrader
+}
+
+
+render_challenge_image_updater() {
+  cat <<YAML
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${APP}-challenge-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: challenge-image-updater
+spec:
+  schedule: "*/1 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: platform-network
+            app.kubernetes.io/part-of: ${APP}
+            platform.component: challenge-image-updater
+        spec:
+          serviceAccountName: ${APP}
+          automountServiceAccountToken: true
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: challenge-image-updater
+              image: ${IMAGE}
+              imagePullPolicy: Always
+              command:
+                - platform
+                - master
+                - refresh-challenge-images
+                - --config
+                - config/master.kubernetes.yaml
+                - --tag
+                - latest
+              env:
+                - name: PLATFORM_DATABASE__URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: platform-master-database-url
+                      key: url
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: config
+                  mountPath: /app/config/master.kubernetes.yaml
+                  subPath: master.yaml
+                  readOnly: true
+                - name: state
+                  mountPath: /var/lib/platform
+          volumes:
+            - name: config
+              configMap:
+                name: ${APP}-config
+            - name: state
+              emptyDir: {}
+YAML
 }
 
 render_helm_upgrade_command() {

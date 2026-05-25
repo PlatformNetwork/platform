@@ -95,12 +95,10 @@ def validate_image_reference(image: str, *, production: bool) -> None:
     tag = reference[colon_index + 1 :] if has_tag else ""
     if not has_tag:
         raise ProductionPolicyError("production image references must include a tag")
-    if tag == "latest":
-        raise ProductionPolicyError("production image references must not use latest")
-    if not _SEMVER_TAG_RE.match(tag):
-        raise ProductionPolicyError("production image tags must be semver")
     if not separator or not digest:
         raise ProductionPolicyError("production image references must include a digest")
+    if tag != "latest" and not _SEMVER_TAG_RE.match(tag):
+        raise ProductionPolicyError("production image tags must be semver or latest")
     if not _SHA256_DIGEST_RE.match(digest):
         raise ProductionPolicyError("production image digest must be sha256")
 

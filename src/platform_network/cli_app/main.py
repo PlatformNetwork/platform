@@ -736,6 +736,83 @@ def k8s_server_remove(
     _admin_request(config, "DELETE", f"/v1/admin/kubernetes-targets/{target_id}")
 
 
+@master_app.command("refresh-challenge-images")
+def master_refresh_challenge_images(
+    config: Path = typer.Option(Path("config/master.example.yaml")),
+    tag: str = typer.Option("latest", "--tag"),
+):
+    settings = load_settings(config)
+    registry = _master_registry(settings)
+    controller = DockerRuntimeController(registry, _challenge_orchestrator(settings))
+
+    def mutable_base(image: str) -> str | None:
+        from platform_network.validator.image_updater import parse_image_reference
+
+        parsed = parse_image_reference(image)
+        if parsed.registry != "ghcr.io":
+            return None
+        if parsed.tag.startswith("sha-"):
+            return None
+        return f"{parsed.registry}/{parsed.repository}:{tag}"
+
+    async def refresh() -> None:
+        from platform_network.kubernetes.client import KubernetesClient
+        from platform_network.kubernetes.names import challenge_name
+        from platform_network.schemas.challenge import ChallengeStatus, ChallengeUpdate
+        from platform_network.validator.image_updater import (
+            parse_image_reference,
+            resolve_remote_digest,
+        )
+
+        kube_client = (
+            KubernetesClient(
+                namespace=settings.kubernetes.namespace,
+                in_cluster=settings.kubernetes.in_cluster,
+                kubeconfig=settings.kubernetes.kubeconfig,
+            )
+            if settings.runtime.backend == "kubernetes"
+            else None
+        )
+
+        for record in await registry.list():
+            if record.status in {ChallengeStatus.DRAFT, ChallengeStatus.DISABLED}:
+                continue
+            base = mutable_base(record.image)
+            if base is None:
+                typer.echo(f"{record.slug}: skipped {record.image}")
+                continue
+            digest = resolve_remote_digest(parse_image_reference(base))
+            desired = f"{base}@{digest}"
+            changed = desired != record.image
+            if changed:
+                await registry.update(record.slug, ChallengeUpdate(image=desired))
+                typer.echo(f"{record.slug}: updated {desired}")
+            else:
+                typer.echo(f"{record.slug}: already-current {desired}")
+            if record.status == ChallengeStatus.ACTIVE:
+                if kube_client is not None:
+                    workload_name = challenge_name(record.slug)
+                    workload_kind = (
+                        "StatefulSet"
+                        if settings.kubernetes.challenge_mode == "statefulset"
+                        else "Deployment"
+                    )
+                    kube_client.patch_workload_image(
+                        kind=workload_kind,
+                        name=workload_name,
+                        container="challenge",
+                        image=desired,
+                    )
+                    typer.echo(
+                        f"{record.slug}: patched {workload_kind}/{workload_name}"
+                    )
+                elif changed:
+                    result = await controller.restart(record.slug)
+                    typer.echo(f"{record.slug}: restarted {result['status']}")
+
+    asyncio.run(refresh())
+
+
 @master_app.command("weights")
 def master_weights(
     config: Path = typer.Option(Path("config/master.example.yaml")),
