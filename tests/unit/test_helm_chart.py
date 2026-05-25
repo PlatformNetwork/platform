@@ -123,6 +123,54 @@ def test_helm_template_renders_validator_registry_url_default_and_override(
         assert config["master"]["registry_url"] == "http://platform-admin:8000"
 
 
+def test_helm_master_upload_registration_defaults_to_required() -> None:
+    documents = _helm_template("platform", str(CHART))
+    config = yaml.safe_load(
+        _document(documents, "ConfigMap", "platform-config")["data"]["master.yaml"]
+    )
+
+    assert config["master"]["upload_require_registered_hotkey"] is True
+
+
+def test_helm_master_upload_registration_can_be_disabled_for_local_runtime() -> None:
+    documents = _helm_template(
+        "platform",
+        str(CHART),
+        "--set",
+        "masterProxy.uploadRequireRegisteredHotkey=false",
+    )
+    config = yaml.safe_load(
+        _document(documents, "ConfigMap", "platform-config")["data"]["master.yaml"]
+    )
+
+    assert config["master"]["upload_require_registered_hotkey"] is False
+
+
+def test_helm_production_policy_rejects_disabled_upload_registration() -> None:
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm is not installed")
+
+    result = subprocess.run(
+        [
+            helm,
+            "template",
+            "platform",
+            str(CHART),
+            "-f",
+            str(PRODUCTION_VALUES),
+            "--set",
+            "masterProxy.uploadRequireRegisteredHotkey=false",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "masterProxy.uploadRequireRegisteredHotkey=true" in result.stderr
+
+
 def test_helm_validator_deployment_uses_configured_image_pull_policy() -> None:
     helm = shutil.which("helm")
     if helm is None:

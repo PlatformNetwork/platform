@@ -24,6 +24,9 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- if .Values.imageAutoUpdate.enabled -}}
 {{- fail "production policy rejects imageAutoUpdate.enabled=true" -}}
 {{- end -}}
+{{- if not .Values.masterProxy.uploadRequireRegisteredHotkey -}}
+{{- fail "production policy requires masterProxy.uploadRequireRegisteredHotkey=true" -}}
+{{- end -}}
 {{- if .Values.autoUpgrade.enabled -}}
 {{- if eq .Values.autoUpgrade.githubRef "main" -}}
 {{- fail "autoUpgrade.githubRef must be immutable in production" -}}

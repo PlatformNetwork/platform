@@ -139,6 +139,7 @@ masterAdmin:
 masterProxy:
   replicas: 2
   port: 8080
+  uploadRequireRegisteredHotkey: true
   resources:
     requests:
       cpu: 250m

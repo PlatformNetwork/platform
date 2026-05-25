@@ -62,6 +62,7 @@ masterAdmin:
 
 masterProxy:
   replicas: 2
+  uploadRequireRegisteredHotkey: true
   autoscaling:
     enabled: true
     minReplicas: 2

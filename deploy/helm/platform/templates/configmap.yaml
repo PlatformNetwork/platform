@@ -36,6 +36,7 @@ data:
       admin_port: {{ .Values.masterAdmin.port }}
       proxy_host: "0.0.0.0"
       proxy_port: {{ .Values.masterProxy.port }}
+      upload_require_registered_hotkey: {{ .Values.masterProxy.uploadRequireRegisteredHotkey }}
     docker:
       broker_host: "0.0.0.0"
       broker_port: {{ .Values.broker.port }}
