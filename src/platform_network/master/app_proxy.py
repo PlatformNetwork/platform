@@ -44,6 +44,13 @@ SENSITIVE_REQUEST_HEADERS = {
     "x-platform-request-hash",
 }
 
+MINER_SIGNATURE_HEADERS = {
+    "x-hotkey",
+    "x-signature",
+    "x-nonce",
+    "x-timestamp",
+}
+
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -73,15 +80,40 @@ def is_blocked_proxy_path(path: str) -> bool:
     )
 
 
-def _forward_headers(request: Request) -> dict[str, str]:
+def _is_agent_challenge_env_route(slug: str, method: str, path: str) -> bool:
+    if slug != "agent-challenge":
+        return False
+
+    normalized = normpath(f"/{path.lstrip('/')}")
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) == 3 and parts[0] == "submissions" and parts[2] == "env":
+        return method.upper() in {"GET", "PUT"}
+    if (
+        len(parts) == 4
+        and parts[0] == "submissions"
+        and parts[2] == "env"
+        and parts[3] == "confirm-empty"
+    ):
+        return method.upper() == "POST"
+    if len(parts) == 3 and parts[0] == "submissions" and parts[2] == "launch":
+        return method.upper() == "POST"
+    return False
+
+
+def _forward_headers(
+    request: Request, *, preserve_miner_signature_headers: bool = False
+) -> dict[str, str]:
     """Copy safe request headers for forwarding to a public challenge route."""
 
     headers: dict[str, str] = {}
     for key, value in request.headers.items():
         lowered = key.lower()
+        preserve_header = (
+            preserve_miner_signature_headers and lowered in MINER_SIGNATURE_HEADERS
+        )
         if (
             lowered in HOP_BY_HOP_HEADERS
-            or lowered in SENSITIVE_REQUEST_HEADERS
+            or (lowered in SENSITIVE_REQUEST_HEADERS and not preserve_header)
             or lowered == "host"
         ):
             continue
@@ -332,7 +364,12 @@ def create_proxy_app(
         challenge = await _active_challenge(challenge_registry, slug)
 
         body = await request.body()
-        headers = _forward_headers(request)
+        headers = _forward_headers(
+            request,
+            preserve_miner_signature_headers=_is_agent_challenge_env_route(
+                slug, request.method, path
+            ),
+        )
         headers["X-Platform-Challenge-Slug"] = slug
         try:
             return await forward_proxy_response(

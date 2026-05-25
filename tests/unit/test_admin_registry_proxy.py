@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections.abc import Mapping, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -1370,6 +1371,179 @@ def test_proxy_forwards_public_request_without_sensitive_headers() -> None:
     assert "x-signature" not in captured
     assert "x-nonce" not in captured
     assert "x-timestamp" not in captured
+
+
+def test_proxy_preserves_signed_agent_challenge_env_headers_for_env_routes() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("agent-challenge"),
+                "internal_base_url": "http://challenge-agent-challenge:8000",
+            }
+        )
+    )
+    registry.set_status("agent-challenge", ChallengeStatus.ACTIVE)
+    sentinel_body = f"TOKEN_{secrets.token_urlsafe(24)}".encode()
+    captured: list[dict[str, Any]] = []
+
+    challenge_app = FastAPI()
+
+    async def record_env_route(submission_id: str, request: Request) -> dict[str, str]:
+        captured.append(
+            {
+                "submission_id": submission_id,
+                "method": request.method,
+                "path": request.url.path,
+                "query": request.url.query,
+                "headers": dict(request.headers),
+                "body": await request.body(),
+            }
+        )
+        return {"ok": "true", "method": request.method, "path": request.url.path}
+
+    @challenge_app.get("/submissions/{submission_id}/env")
+    async def get_env(submission_id: str, request: Request) -> dict[str, str]:
+        return await record_env_route(submission_id, request)
+
+    @challenge_app.put("/submissions/{submission_id}/env")
+    async def put_env(submission_id: str, request: Request) -> dict[str, str]:
+        return await record_env_route(submission_id, request)
+
+    @challenge_app.post("/submissions/{submission_id}/env/confirm-empty")
+    async def confirm_empty(submission_id: str, request: Request) -> dict[str, str]:
+        return await record_env_route(submission_id, request)
+
+    @challenge_app.post("/submissions/{submission_id}/launch")
+    async def launch(submission_id: str, request: Request) -> dict[str, str]:
+        return await record_env_route(submission_id, request)
+
+    @asynccontextmanager
+    async def client_factory():
+        transport = httpx.ASGITransport(app=challenge_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://challenge-agent-challenge:8000"
+        ) as client:
+            yield client
+
+    proxy_client = TestClient(_proxy_app(registry, client_factory=client_factory))
+    signed_headers = {
+        "X-Hotkey": "miner-hotkey",
+        "X-Signature": "miner-signature",
+        "X-Nonce": "miner-nonce",
+        "X-Timestamp": "1700000000",
+        "X-Admin-Token": "admin-secret",
+        "X-Platform-Internal-Token": "internal-secret",
+        "X-Platform-Verified-Hotkey": "spoofed-hotkey",
+        "X-Platform-Request-Hash": "spoofed-hash",
+        "Authorization": "Bearer should-not-forward",
+        "X-Public-Header": "forward-me",
+    }
+    requests = [
+        (
+            "GET",
+            "/challenges/agent-challenge/submissions/sub-1/env?include_schema=1",
+            b"",
+        ),
+        ("PUT", "/challenges/agent-challenge/submissions/sub-1/env", sentinel_body),
+        (
+            "POST",
+            "/challenges/agent-challenge/submissions/sub-1/env/confirm-empty",
+            b"",
+        ),
+        ("POST", "/challenges/agent-challenge/submissions/sub-1/launch", b""),
+    ]
+
+    for method, path, body in requests:
+        response = proxy_client.request(
+            method, path, content=body, headers=signed_headers
+        )
+
+        assert response.status_code == 200
+        assert sentinel_body.decode() not in response.text
+
+    assert [item["method"] for item in captured] == ["GET", "PUT", "POST", "POST"]
+    assert [item["path"] for item in captured] == [
+        "/submissions/sub-1/env",
+        "/submissions/sub-1/env",
+        "/submissions/sub-1/env/confirm-empty",
+        "/submissions/sub-1/launch",
+    ]
+    assert captured[0]["query"] == "include_schema=1"
+    assert captured[1]["body"] == sentinel_body
+    assert captured[0]["body"] == b""
+    for request_capture in captured:
+        upstream_headers = request_capture["headers"]
+        assert upstream_headers["x-hotkey"] == "miner-hotkey"
+        assert upstream_headers["x-signature"] == "miner-signature"
+        assert upstream_headers["x-nonce"] == "miner-nonce"
+        assert upstream_headers["x-timestamp"] == "1700000000"
+        assert upstream_headers["x-public-header"] == "forward-me"
+        assert upstream_headers["x-platform-proxy"] == "true"
+        assert upstream_headers["x-platform-challenge-slug"] == "agent-challenge"
+        assert "authorization" not in upstream_headers
+        assert "x-admin-token" not in upstream_headers
+        assert "x-platform-internal-token" not in upstream_headers
+        assert "x-platform-verified-hotkey" not in upstream_headers
+        assert "x-platform-request-hash" not in upstream_headers
+
+    registry_response = TestClient(_admin_app(registry)).get("/v1/registry")
+    assert registry_response.status_code == 200
+    registry_text = registry_response.text
+    assert sentinel_body.decode() not in registry_text
+    assert "miner-signature" not in registry_text
+    assert "miner-nonce" not in registry_text
+
+
+def test_agent_challenge_env_proxy_transport_failure_redacts_body_and_headers() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("agent-challenge"),
+                "internal_base_url": "http://challenge-agent-challenge:8000",
+            }
+        )
+    )
+    registry.set_status("agent-challenge", ChallengeStatus.ACTIVE)
+    sentinel_body = f"TOKEN_{secrets.token_urlsafe(24)}".encode()
+
+    @asynccontextmanager
+    async def failing_client_factory():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError(
+                "failed with miner-signature and upstream-token", request=request
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://challenge-agent-challenge:8000"
+        ) as client:
+            yield client
+
+    proxy_client = TestClient(
+        _proxy_app(registry, client_factory=failing_client_factory)
+    )
+    response = proxy_client.put(
+        "/challenges/agent-challenge/submissions/sub-1/env",
+        content=sentinel_body,
+        headers={
+            "X-Hotkey": "miner-hotkey",
+            "X-Signature": "miner-signature",
+            "X-Nonce": "miner-nonce",
+            "X-Timestamp": "1700000000",
+            "Authorization": "Bearer upstream-token",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Challenge unavailable"}
+    body = response.text
+    assert sentinel_body.decode() not in body
+    assert "miner-signature" not in body
+    assert "miner-nonce" not in body
+    assert "upstream-token" not in body
+    assert "traceback" not in body.lower()
 
 
 def test_proxy_transport_failure_returns_safe_502_without_sensitive_detail() -> None:
