@@ -11,6 +11,7 @@
 * Internal challenge calls require per-challenge shared tokens.
 * Public proxy strips sensitive headers.
 * Public proxy blocks internal challenge paths.
+* Agent Challenge env and launch proxy routes preserve only `X-Hotkey`, `X-Signature`, `X-Nonce`, and `X-Timestamp` for signed miner actions.
 
 ## Production Policy Boundaries
 
@@ -43,6 +44,10 @@ Kubernetes broker runs attempt to delete the Job, NetworkPolicy, and mount Secre
 
 Admin tokens, challenge tokens, kubeconfigs, production database URLs, per-challenge database URLs, registry credentials, and wallet material must come from files, environment variables, or Kubernetes Secrets. Don't store clear text secrets in registry metadata responses, docs, or evidence files.
 
+Agent Challenge miner env values are per-submission secrets owned by the challenge, not by Platform registry. They are master-validator scoped, encrypted at rest by Agent Challenge, injected into Harbor/Terminal-Bench runtime, and cannot be retrieved after submission. Platform proxy forwards the request body to the challenge but must not parse, persist, log, registry-serialize, or evidence-capture submitted env values. Public responses can expose metadata only: env keys, count, empty confirmation, lock state, and timestamps.
+
 ## Failure Behavior
 
 If a challenge fails health checks or `get_weights`, its contribution is zero for that epoch. The master doesn't auto-disable it.
+
+For public challenge requests, transport failures at ingress, Platform proxy, challenge service discovery, or Kubernetes target routing become safe 502 responses. Challenge-origin non-2xx responses should pass through when they are safe. User interfaces should render unavailable copy and must not display raw text such as `Platform request failed with status 502`.
