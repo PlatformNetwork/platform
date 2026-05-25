@@ -18,6 +18,15 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- if eq .service "admin" }}
+          - path: "/v1/challenges"
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "platform.fullname" $ }}-proxy
+                port:
+                  name: http
+          {{- end }}
           - path: {{ .path | default "/" | quote }}
             pathType: Prefix
             backend:

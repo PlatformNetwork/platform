@@ -132,6 +132,30 @@ def test_helm_master_upload_registration_defaults_to_required() -> None:
     assert config["master"]["upload_require_registered_hotkey"] is True
 
 
+def test_helm_admin_ingress_routes_signed_upload_bridge_to_proxy() -> None:
+    documents = _helm_template(
+        "platform",
+        str(CHART),
+        "--set",
+        "ingress.enabled=true",
+        "--set",
+        "ingress.hosts[0].name=public",
+        "--set",
+        "ingress.hosts[0].host=chain.platform.network",
+        "--set",
+        "ingress.hosts[0].service=admin",
+        "--set",
+        "ingress.hosts[0].path=/",
+    )
+    ingress = _document(documents, "Ingress", "platform-public")
+
+    paths = ingress["spec"]["rules"][0]["http"]["paths"]
+    assert {(path["path"], path["backend"]["service"]["name"]) for path in paths} == {
+        ("/", "platform-admin"),
+        ("/v1/challenges", "platform-proxy"),
+    }
+
+
 def test_helm_master_upload_registration_can_be_disabled_for_local_runtime() -> None:
     documents = _helm_template(
         "platform",

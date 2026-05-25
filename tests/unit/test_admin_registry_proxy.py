@@ -653,6 +653,10 @@ def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
     sensitive_headers = (
         "authorization",
         "x-admin-token",
+        "x-hotkey",
+        "x-signature",
+        "x-nonce",
+        "x-timestamp",
     )
 
     async def record_read_route(
@@ -738,10 +742,10 @@ def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
     headers = {
         "Authorization": "Bearer should-not-forward",
         "X-Admin-Token": "should-not-forward",
-        "X-Hotkey": "miner-hotkey",
-        "X-Signature": "miner-signature",
-        "X-Nonce": "miner-nonce",
-        "X-Timestamp": "1779732500",
+        "X-Hotkey": "should-not-forward",
+        "X-Signature": "should-not-forward",
+        "X-Nonce": "should-not-forward",
+        "X-Timestamp": "should-not-forward",
         "X-Public-Header": "forward-me",
     }
     requests: list[tuple[str, str, Mapping[str, Any]]] = [
@@ -814,10 +818,6 @@ def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
         upstream_headers = request_capture["headers"]
         for header in sensitive_headers:
             assert header not in upstream_headers
-        assert upstream_headers["x-hotkey"] == "miner-hotkey"
-        assert upstream_headers["x-signature"] == "miner-signature"
-        assert upstream_headers["x-nonce"] == "miner-nonce"
-        assert upstream_headers["x-timestamp"] == "1779732500"
         assert upstream_headers["x-platform-proxy"] == "true"
         assert upstream_headers["x-platform-challenge-slug"] == "agent-challenge"
         assert upstream_headers["x-public-header"] == "forward-me"
@@ -1350,10 +1350,10 @@ def test_proxy_forwards_public_request_without_sensitive_headers() -> None:
         headers={
             "Authorization": "Bearer should-not-forward",
             "X-Admin-Token": "should-not-forward",
-            "X-Hotkey": "miner-hotkey",
-            "X-Signature": "miner-signature",
-            "X-Nonce": "miner-nonce",
-            "X-Timestamp": "1779732500",
+            "X-Hotkey": "should-not-forward",
+            "X-Signature": "should-not-forward",
+            "X-Nonce": "should-not-forward",
+            "X-Timestamp": "should-not-forward",
             "X-Public-Header": "forward-me",
         },
     )
@@ -1363,13 +1363,13 @@ def test_proxy_forwards_public_request_without_sensitive_headers() -> None:
     assert captured["x-platform-proxy"] == "true"
     assert captured["x-platform-challenge-slug"] == "demo"
     assert captured["x-public-header"] == "forward-me"
-    assert captured["x-hotkey"] == "miner-hotkey"
-    assert captured["x-signature"] == "miner-signature"
-    assert captured["x-nonce"] == "miner-nonce"
-    assert captured["x-timestamp"] == "1779732500"
     assert "authorization" not in captured
     assert "x-admin-token" not in captured
     assert "x-platform-verified-hotkey" not in captured
+    assert "x-hotkey" not in captured
+    assert "x-signature" not in captured
+    assert "x-nonce" not in captured
+    assert "x-timestamp" not in captured
 
 
 def test_proxy_routes_assigned_kubernetes_agent_request(
