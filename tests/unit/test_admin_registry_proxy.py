@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -693,14 +694,10 @@ def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
 
     @challenge_app.get("/submissions/count")
     async def submissions_count(request: Request) -> dict[str, Any]:
-        return await record_read_route(
-            "submissions_count", request, {"count": 1}
-        )
+        return await record_read_route("submissions_count", request, {"count": 1})
 
     @challenge_app.get("/submissions/{submission_id}")
-    async def submission_detail(
-        submission_id: str, request: Request
-    ) -> dict[str, Any]:
+    async def submission_detail(submission_id: str, request: Request) -> dict[str, Any]:
         return await record_read_route(
             "submission_detail",
             request,
@@ -708,9 +705,7 @@ def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
         )
 
     @challenge_app.get("/submissions/{submission_id}/status")
-    async def submission_status(
-        submission_id: str, request: Request
-    ) -> dict[str, Any]:
+    async def submission_status(submission_id: str, request: Request) -> dict[str, Any]:
         return await record_read_route(
             "submission_status",
             request,
@@ -749,7 +744,7 @@ def test_proxy_serves_agent_challenge_frontend_read_contract() -> None:
         "X-Signature": "should-not-forward",
         "X-Public-Header": "forward-me",
     }
-    requests = [
+    requests: list[tuple[str, str, Mapping[str, Any]]] = [
         (
             "/challenges/agent-challenge/benchmarks?suite=terminal-bench",
             "benchmarks",
@@ -883,10 +878,10 @@ async def test_proxy_streams_agent_challenge_sse_status_events() -> None:
     app = _proxy_app(registry, client_factory=client_factory)
     response_started = asyncio.Event()
     first_body_sent = asyncio.Event()
-    messages: list[dict[str, Any]] = []
+    messages: list[MutableMapping[str, Any]] = []
     request_delivered = False
 
-    async def receive() -> dict[str, object]:
+    async def receive() -> MutableMapping[str, Any]:
         nonlocal request_delivered
         if not request_delivered:
             request_delivered = True
@@ -894,14 +889,14 @@ async def test_proxy_streams_agent_challenge_sse_status_events() -> None:
         await asyncio.Event().wait()
         return {"type": "http.disconnect"}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: MutableMapping[str, Any]) -> None:
         messages.append(message)
         if message["type"] == "http.response.start":
             response_started.set()
         if message["type"] == "http.response.body" and message.get("body"):
             first_body_sent.set()
 
-    scope = {
+    scope: MutableMapping[str, Any] = {
         "type": "http",
         "asgi": {"version": "3.0"},
         "http_version": "1.1",

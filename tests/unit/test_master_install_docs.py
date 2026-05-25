@@ -238,9 +238,7 @@ def test_master_installer_manifest_has_no_validator_or_submit_path(
         if doc.get("kind") == "Role"
         and doc.get("metadata", {}).get("name") == "platform-master-runtime"
     )
-    assert any(
-        "secrets" in rule.get("resources", []) for rule in runtime_role["rules"]
-    )
+    assert any("secrets" in rule.get("resources", []) for rule in runtime_role["rules"])
     assert not any(
         "secrets" in rule.get("resources", []) for rule in updater_role["rules"]
     )

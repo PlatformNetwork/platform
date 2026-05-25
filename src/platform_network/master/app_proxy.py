@@ -102,8 +102,8 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
 
 
 def _is_event_stream(response: httpx.Response) -> bool:
-    return response.headers.get("content-type", "").lower().startswith(
-        "text/event-stream"
+    return (
+        response.headers.get("content-type", "").lower().startswith("text/event-stream")
     )
 
 
