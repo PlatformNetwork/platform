@@ -103,6 +103,33 @@ class KubernetesClient:
             name=name,
             content_type="application/strategic-merge-patch+json",
         )
+        if kind == "StatefulSet":
+            self._delete_statefulset_pods_with_stale_image(
+                name=name,
+                container=container,
+                image=image,
+            )
+
+    def _delete_statefulset_pods_with_stale_image(
+        self, *, name: str, container: str, image: str
+    ) -> None:
+        statefulset = self.get("StatefulSet", name)
+        selector = _statefulset_label_selector(statefulset)
+        if not selector:
+            return
+        pods = self._core.list_namespaced_pod(
+            namespace=self.namespace,
+            label_selector=selector,
+        )
+        for pod in getattr(pods, "items", []):
+            pod_name = _pod_name(pod)
+            if not pod_name or _pod_container_image(pod, container) == image:
+                continue
+            self._core.delete_namespaced_pod(
+                name=pod_name,
+                namespace=self.namespace,
+                propagation_policy="Background",
+            )
 
     def wait_workload_ready(
         self, *, kind: str, name: str, replicas: int = 1, timeout_seconds: int = 120
@@ -210,3 +237,24 @@ class KubernetesClient:
             "ScaledObject": "keda.sh/v1alpha1",
         }
         return self._dynamic.resources.get(api_version=versions[kind], kind=kind)
+
+
+def _statefulset_label_selector(statefulset: dict[str, Any] | None) -> str | None:
+    selector = ((statefulset or {}).get("spec") or {}).get("selector") or {}
+    match_labels = selector.get("match_labels") or selector.get("matchLabels") or {}
+    if not match_labels:
+        return None
+    return ",".join(f"{key}={value}" for key, value in sorted(match_labels.items()))
+
+
+def _pod_name(pod: Any) -> str | None:
+    metadata = getattr(pod, "metadata", None)
+    return getattr(metadata, "name", None)
+
+
+def _pod_container_image(pod: Any, container_name: str) -> str | None:
+    spec = getattr(pod, "spec", None)
+    for container in getattr(spec, "containers", []) or []:
+        if getattr(container, "name", None) == container_name:
+            return getattr(container, "image", None)
+    return None

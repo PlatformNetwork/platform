@@ -149,3 +149,119 @@ def test_patch_workload_image_uses_strategic_merge_patch() -> None:
             "content_type": "application/strategic-merge-patch+json",
         }
     ]
+
+
+def test_patch_statefulset_image_deletes_only_pods_on_stale_image() -> None:
+    calls: list[dict[str, object]] = []
+    deleted: list[dict[str, object]] = []
+    old_image = "ghcr.io/platformnetwork/demo:latest@sha256:" + "a" * 64
+    new_image = "ghcr.io/platformnetwork/demo:latest@sha256:" + "b" * 64
+
+    class FakeApi:
+        def patch(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    class FakeCore:
+        def list_namespaced_pod(self, **kwargs: object) -> object:
+            calls.append({"list_pods": kwargs})
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(name="challenge-demo-0"),
+                        spec=SimpleNamespace(
+                            containers=[
+                                SimpleNamespace(name="challenge", image=old_image)
+                            ]
+                        ),
+                    ),
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(name="challenge-demo-1"),
+                        spec=SimpleNamespace(
+                            containers=[
+                                SimpleNamespace(name="challenge", image=new_image)
+                            ]
+                        ),
+                    ),
+                ]
+            )
+
+        def delete_namespaced_pod(self, **kwargs: object) -> None:
+            deleted.append(kwargs)
+
+    client = KubernetesClient.__new__(KubernetesClient)
+    client.namespace = "platform"
+    client._core = FakeCore()
+    client._api_by_kind = lambda kind: FakeApi()  # type: ignore[method-assign]
+    client.get = lambda kind, name: {  # type: ignore[method-assign]
+        "spec": {
+            "selector": {
+                "matchLabels": {"app.kubernetes.io/instance": "challenge-demo"}
+            }
+        }
+    }
+
+    client.patch_workload_image(
+        kind="StatefulSet",
+        name="challenge-demo",
+        container="challenge",
+        image=new_image,
+    )
+
+    assert calls[0] == {
+        "body": {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "challenge",
+                                "image": new_image,
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        "namespace": "platform",
+        "name": "challenge-demo",
+        "content_type": "application/strategic-merge-patch+json",
+    }
+    assert calls[1] == {
+        "list_pods": {
+            "namespace": "platform",
+            "label_selector": "app.kubernetes.io/instance=challenge-demo",
+        }
+    }
+    assert deleted == [
+        {
+            "name": "challenge-demo-0",
+            "namespace": "platform",
+            "propagation_policy": "Background",
+        }
+    ]
+
+
+def test_patch_deployment_image_does_not_delete_pods() -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeApi:
+        def patch(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    class FakeCore:
+        def delete_namespaced_pod(self, **kwargs: object) -> None:
+            raise AssertionError("Deployment image patch must not delete pods")
+
+    client = KubernetesClient.__new__(KubernetesClient)
+    client.namespace = "platform"
+    client._core = FakeCore()
+    client._api_by_kind = lambda kind: FakeApi()  # type: ignore[method-assign]
+
+    client.patch_workload_image(
+        kind="Deployment",
+        name="challenge-demo",
+        container="challenge",
+        image="ghcr.io/platformnetwork/demo:latest@sha256:" + "b" * 64,
+    )
+
+    assert len(calls) == 1
