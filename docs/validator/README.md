@@ -28,11 +28,11 @@ Run from the repository root:
 
 The script performs these actions:
 
-1. Applies Namespace, validator ServiceAccount/RBAC, Helm-upgrader ServiceAccount/RBAC, PVC, ConfigMap, Deployment, and Helm auto-upgrade CronJob without deleting healthy existing workloads.
+1. Applies Namespace, validator ServiceAccount/RBAC, image-updater ServiceAccount/RBAC, Helm-upgrader ServiceAccount/RBAC, PVC, ConfigMap, Deployment, image auto-update CronJob, and Helm auto-upgrade CronJob without deleting healthy existing workloads.
 2. Stores the required database URL in the configured database Secret and references it from the Deployment.
 3. Prompts silently for the validator hotkey mnemonic.
 4. Creates the `platform-validator-wallet` Kubernetes Secret from generated hotkey files.
-5. Starts the validator Deployment in Kubernetes mode and schedules suspended full Helm upgrade checks.
+5. Starts the validator Deployment in Kubernetes mode, schedules active image digest refreshes, and schedules suspended full Helm upgrade checks.
 
 Useful options:
 
@@ -40,16 +40,18 @@ Useful options:
 export PLATFORM_DATABASE_URL='postgresql+asyncpg://platform:<password>@postgres.platform.svc.cluster.local/platform'
 ./scripts/install-validator.sh --namespace platform-validator
 ./scripts/install-validator.sh --image ghcr.io/platformnetwork/platform:v1.2.3@sha256:<digest>
+./scripts/install-validator.sh --image-update-schedule '*/1 * * * *'
+./scripts/install-validator.sh --image-updater-image ghcr.io/platformnetwork/platform:latest
 ./scripts/install-validator.sh --auto-upgrade-schedule '*/5 * * * *'
 ./scripts/install-validator.sh --auto-upgrade-helm-image alpine/helm:3.15.4
 ./scripts/install-validator.sh --broker-allowed-images ghcr.io/platformnetwork/,registry.example.com/platform/
 ./scripts/install-validator.sh --registry-url https://chain.platform.network
-./scripts/install-validator.sh --netuid 0
+./scripts/install-validator.sh --netuid 100
 ./scripts/install-validator.sh --wallet-name platform-validator --wallet-hotkey validator
 ./scripts/install-validator.sh --cleanup
 ```
 
-Normal install performs a real cluster installation and imports a hotkey Secret. It also installs `cronjob/platform-validator-helm-upgrader`, a scoped CronJob that periodically downloads the configured GitHub chart source and runs `helm upgrade --install platform-validator ... --atomic --wait --cleanup-on-fail`. The job sets `HELM_DRIVER=configmap`, uses `concurrencyPolicy: Forbid`, and pins live-safe non-secret references for future self-upgrades: the database URL Secret name/key, namespace, wallet Secret name, wallet name/hotkey labels, `validator.deploymentNameOverride=platform-validator`, and `persistence.existingClaim=platform-validator-state`. It references `platform-validator-wallet` and `platform-validator-state` by name instead of reading or printing wallet data, database URLs, or PVC contents. Set `PLATFORM_DATABASE_URL_SECRET_NAME` and `PLATFORM_DATABASE_URL_SECRET_KEY` before running the installer if your live database URL Secret is not `platform-validator-database-url` key `url`. Automated validation must use a disposable cluster, disposable namespace, and disposable test mnemonic supplied through a secure channel.
+Normal install performs a real cluster installation and imports a hotkey Secret. It installs `cronjob/platform-validator-image-updater`, a scoped CronJob that refreshes the validator Deployment to the latest digest for the configured image tag without downloading or applying mutable Helm chart source. It also installs `cronjob/platform-validator-helm-upgrader`, a scoped CronJob for full chart changes that is suspended by default; unsuspend it only when you intentionally trust the configured repo/ref to run `helm upgrade --install platform-validator ... --atomic --wait --cleanup-on-fail`. The Helm job sets `HELM_DRIVER=configmap`, uses `concurrencyPolicy: Forbid`, and pins live-safe non-secret references for future self-upgrades: the database URL Secret name/key, namespace, wallet Secret name, wallet name/hotkey labels, `validator.deploymentNameOverride=platform-validator`, and `persistence.existingClaim=platform-validator-state`. It references `platform-validator-wallet` and `platform-validator-state` by name instead of reading or printing wallet data, database URLs, or PVC contents. Set `PLATFORM_DATABASE_URL_SECRET_NAME` and `PLATFORM_DATABASE_URL_SECRET_KEY` before running the installer if your live database URL Secret is not `platform-validator-database-url` key `url`. Automated validation must use a disposable cluster, disposable namespace, and disposable test mnemonic supplied through a secure channel.
 
 Before relying on self-upgrades, verify the referenced objects and keys exist without printing their values:
 
@@ -58,6 +60,7 @@ kubectl -n platform-validator get secret platform-validator-database-url -o json
 kubectl -n platform-validator get secret platform-validator-wallet -o jsonpath='{.data.hotkey}' >/dev/null
 kubectl -n platform-validator get secret platform-validator-wallet -o jsonpath='{.data.hotkeypub\.txt}' >/dev/null
 kubectl -n platform-validator get pvc platform-validator-state
+kubectl -n platform-validator get cronjob platform-validator-image-updater
 kubectl -n platform-validator get cronjob platform-validator-helm-upgrader
 ```
 

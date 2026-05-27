@@ -15,10 +15,13 @@ AUTO_UPGRADE_TIMEOUT="${PLATFORM_AUTO_UPGRADE_TIMEOUT:-10m}"
 AUTO_UPGRADE_HISTORY_MAX="${PLATFORM_AUTO_UPGRADE_HISTORY_MAX:-5}"
 AUTO_UPGRADE_TAKE_OWNERSHIP="${PLATFORM_AUTO_UPGRADE_TAKE_OWNERSHIP:-true}"
 AUTO_UPGRADE_SUSPEND="${PLATFORM_AUTO_UPGRADE_SUSPEND:-true}"
+IMAGE_UPDATE_SCHEDULE="${PLATFORM_IMAGE_UPDATE_SCHEDULE:-*/1 * * * *}"
+IMAGE_UPDATER_IMAGE="${PLATFORM_IMAGE_UPDATER_IMAGE:-ghcr.io/platformnetwork/platform:latest}"
+IMAGE_UPDATE_REGISTRY_ENDPOINT="${PLATFORM_IMAGE_UPDATE_REGISTRY_ENDPOINT:-}"
 DATABASE_URL_SECRET_NAME="${PLATFORM_DATABASE_URL_SECRET_NAME:-platform-validator-database-url}"
 DATABASE_URL_SECRET_KEY="${PLATFORM_DATABASE_URL_SECRET_KEY:-url}"
 REGISTRY_URL="${PLATFORM_VALIDATOR_REGISTRY_URL:-https://chain.platform.network}"
-NETUID="${PLATFORM_NETUID:-0}"
+NETUID="${PLATFORM_NETUID:-100}"
 CHAIN_ENDPOINT="${PLATFORM_CHAIN_ENDPOINT:-}"
 WALLET_NAME="${PLATFORM_WALLET_NAME:-platform-validator}"
 WALLET_HOTKEY="${PLATFORM_WALLET_HOTKEY:-validator}"
@@ -46,10 +49,12 @@ Options:
   --auto-upgrade-ref REF     Git ref for Helm chart source. Default: main
   --auto-upgrade-chart-path PATH  Chart path inside the repo. Default: deploy/helm/platform
   --auto-upgrade-suspend BOOL  Suspend the Helm upgrader CronJob. Default: true
+  --image-update-schedule S    Cron schedule for image digest refreshes. Default: */1 * * * *
+  --image-updater-image IMAGE  Image used by the image updater CronJob. Default: ghcr.io/platformnetwork/platform:latest
   --database-url-secret-name NAME  Database URL Secret name for Helm upgrades. Default: platform-validator-database-url
   --database-url-secret-key KEY    Database URL Secret key for Helm upgrades. Default: url
   --registry-url URL         Registry API URL. Default: https://chain.platform.network
-  --netuid NETUID            Bittensor subnet UID. Default: 0
+  --netuid NETUID            Bittensor subnet UID. Default: 100
   --chain-endpoint ENDPOINT  Optional Bittensor chain endpoint.
   --wallet-name NAME         Wallet name. Default: platform-validator
   --wallet-hotkey NAME       Hotkey label. Default: validator
@@ -71,6 +76,8 @@ while [ "$#" -gt 0 ]; do
     --auto-upgrade-ref) AUTO_UPGRADE_REF="${2:?missing REF}"; shift ;;
     --auto-upgrade-chart-path) AUTO_UPGRADE_CHART_PATH="${2:?missing PATH}"; shift ;;
     --auto-upgrade-suspend) AUTO_UPGRADE_SUSPEND="${2:?missing BOOL}"; shift ;;
+    --image-update-schedule) IMAGE_UPDATE_SCHEDULE="${2:?missing SCHEDULE}"; shift ;;
+    --image-updater-image) IMAGE_UPDATER_IMAGE="${2:?missing IMAGE}"; shift ;;
     --database-url-secret-name) DATABASE_URL_SECRET_NAME="${2:?missing NAME}"; shift ;;
     --database-url-secret-key) DATABASE_URL_SECRET_KEY="${2:?missing KEY}"; shift ;;
     --registry-url) REGISTRY_URL="${2:?missing URL}"; shift ;;
@@ -116,11 +123,13 @@ validate_identifier "wallet name" "$WALLET_NAME"
 validate_identifier "wallet hotkey" "$WALLET_HOTKEY"
 validate_regex "auto-upgrade schedule" "$AUTO_UPGRADE_SCHEDULE" '^[A-Za-z0-9*?, /@._-]+$' "use cron-safe characters"
 validate_regex "auto-upgrade Helm image" "$AUTO_UPGRADE_HELM_IMAGE" '^[A-Za-z0-9_./:@-]+$' "be an image reference"
+validate_regex "image updater image" "$IMAGE_UPDATER_IMAGE" '^[A-Za-z0-9_./:@-]+$' "be an image reference"
 validate_regex "auto-upgrade repository" "$AUTO_UPGRADE_REPO" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "use owner/repo"
 validate_regex "auto-upgrade ref" "$AUTO_UPGRADE_REF" '^[A-Za-z0-9_./-]+$' "use git ref-safe characters"
 validate_regex "auto-upgrade chart path" "$AUTO_UPGRADE_CHART_PATH" '^[A-Za-z0-9_./-]+$' "use relative path-safe characters"
 validate_regex "auto-upgrade values path" "$AUTO_UPGRADE_VALUES_PATH" '^[A-Za-z0-9_./-]+$' "use relative path-safe characters"
 validate_regex "auto-upgrade timeout" "$AUTO_UPGRADE_TIMEOUT" '^[0-9]+[smh]$' "use a Helm duration such as 10m"
+validate_regex "image update schedule" "$IMAGE_UPDATE_SCHEDULE" '^[A-Za-z0-9*?, /@._-]+$' "use cron-safe characters"
 validate_regex "auto-upgrade history max" "$AUTO_UPGRADE_HISTORY_MAX" '^[0-9]+$' "be a positive integer"
 validate_regex "auto-upgrade take ownership" "$AUTO_UPGRADE_TAKE_OWNERSHIP" '^(true|false)$' "be true or false"
 validate_regex "auto-upgrade suspend" "$AUTO_UPGRADE_SUSPEND" '^(true|false)$' "be true or false"
@@ -261,6 +270,7 @@ if [ "${AUTO_UPGRADE_TAKE_OWNERSHIP}" = "true" ]; then
 fi
 helm "\$@" \
   --set autoUpgrade.enabled=true \
+  --set autoUpgrade.suspend=${AUTO_UPGRADE_SUSPEND} \
   --set autoUpgrade.mode=validator \
   --set master.enabled=false \
   --set validator.enabled=true \
@@ -308,6 +318,17 @@ metadata:
     platform.component: helm-upgrader
 automountServiceAccountToken: true
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: image-updater
+automountServiceAccountToken: true
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -332,6 +353,24 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: image-updater
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["${APP}"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -382,6 +421,23 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: ${APP}-runtime
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: image-updater
+subjects:
+  - kind: ServiceAccount
+    name: ${APP}-image-updater
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${APP}-image-updater
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -544,6 +600,63 @@ spec:
                 path: ${WALLET_HOTKEY}
               - key: hotkeypub.txt
                 path: ${WALLET_HOTKEY}pub.txt
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${APP}-image-updater
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: image-updater
+spec:
+  schedule: "${IMAGE_UPDATE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: platform-network
+            app.kubernetes.io/part-of: ${APP}
+            platform.component: image-updater
+        spec:
+          serviceAccountName: ${APP}-image-updater
+          automountServiceAccountToken: true
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: image-updater
+              image: ${IMAGE_UPDATER_IMAGE}
+              imagePullPolicy: Always
+              command:
+                - platform
+                - validator
+                - refresh-image
+                - --namespace
+                - ${NAMESPACE}
+                - --resource-kind
+                - deployment
+                - --name
+                - ${APP}
+                - --container
+                - validator
+                - --image
+                - ${IMAGE}
+                - --registry-endpoint
+                - "${IMAGE_UPDATE_REGISTRY_ENDPOINT}"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
 ---
 apiVersion: batch/v1
 kind: CronJob

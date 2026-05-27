@@ -32,7 +32,7 @@ def _validator_config(
 database:
   url: {database_url}
 network:
-  netuid: 0
+  netuid: 100
   chain_endpoint: ""
   wallet_name: platform-validator
   wallet_hotkey: validator
@@ -131,8 +131,11 @@ def test_installer_prompts_only_for_hotkey_mnemonic() -> None:
     script = _read(SCRIPT)
 
     assert "Validator hotkey mnemonic" in script
+    assert 'NETUID="${PLATFORM_NETUID:-100}"' in script
     assert "--auto-upgrade-suspend BOOL" in script
+    assert "Default: 100" in script
     assert "Default: true" in script
+    assert "--image-update-schedule S" in script
     assert "read -r -s HOTKEY_MNEMONIC" in script
     assert "regenerate_hotkey" in script
     assert "regen_coldkey" not in script.lower()
@@ -573,6 +576,13 @@ def test_generated_manifest_uses_non_root_accessible_required_wallet_path() -> N
     assert "optional:" not in script
 
 
+def test_validator_docs_use_platform_subnet_default() -> None:
+    docs = "\n".join(_read(path) for path in VALIDATOR_DOCS)
+
+    assert "./scripts/install-validator.sh --netuid 100" in docs
+    assert "./scripts/install-validator.sh --netuid 0" not in docs
+
+
 def test_validator_installer_renders_auto_update_cronjob() -> None:
     script = _read(SCRIPT)
 
@@ -596,8 +606,13 @@ def test_validator_installer_renders_auto_update_cronjob() -> None:
         in script
     )
     assert 'AUTO_UPGRADE_REF="${PLATFORM_AUTO_UPGRADE_REF:-main}"' in script
+    assert (
+        'IMAGE_UPDATER_IMAGE="${PLATFORM_IMAGE_UPDATER_IMAGE:-ghcr.io/platformnetwork/platform:latest}"'
+        in script
+    )
     assert "kind: CronJob" in script
     assert "name: ${APP}-helm-upgrader" in script
+    assert "name: ${APP}-image-updater" in script
     assert "set -- upgrade --install ${APP}" in script
     assert 'helm "\\$@"' in script
     assert "HELM_DRIVER" in script
@@ -605,7 +620,7 @@ def test_validator_installer_renders_auto_update_cronjob() -> None:
     assert "--wait" in script
     assert "--cleanup-on-fail" in script
     assert "--take-ownership" in script
-    assert "refresh-image" not in script
+    assert "refresh-image" in script
     assert 'resources: ["deployments", "statefulsets"]' in script
     assert 'delete cronjob "$APP-helm-upgrader"' in script
     assert 'delete serviceaccount "$APP-helm-upgrader"' in script
@@ -641,7 +656,12 @@ def test_validator_installer_auto_updater_uses_scoped_service_account(
         tmp_path,
         "ghcr.io/platformnetwork/platform:latest",
     )
-    cronjob = next(doc for doc in manifests if doc.get("kind") == "CronJob")
+    cronjob = next(
+        doc
+        for doc in manifests
+        if doc.get("kind") == "CronJob"
+        and doc.get("metadata", {}).get("name") == "platform-validator-helm-upgrader"
+    )
     pod_spec = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     container = pod_spec["containers"][0]
 
@@ -668,6 +688,7 @@ def test_validator_installer_auto_updater_uses_scoped_service_account(
     assert "set -x" not in command
     assert "set -- upgrade --install platform-validator" in command
     assert 'helm "$@"' in command
+    assert "--set autoUpgrade.suspend=true" in command
     assert "--namespace validator-test" in command
     assert "--atomic" in command
     assert "--wait" in command
@@ -711,12 +732,73 @@ def test_validator_installer_auto_updater_uses_scoped_service_account(
     assert any(rule["resources"] == ["configmaps"] for rule in updater_role["rules"])
 
 
+def test_validator_installer_image_updater_uses_scoped_service_account(
+    tmp_path: Path,
+) -> None:
+    manifests = _run_installer_with_fakes(
+        tmp_path,
+        "ghcr.io/platformnetwork/platform:latest",
+    )
+    cronjob = next(
+        doc
+        for doc in manifests
+        if doc.get("kind") == "CronJob"
+        and doc.get("metadata", {}).get("name") == "platform-validator-image-updater"
+    )
+    pod_spec = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+
+    assert cronjob["spec"]["schedule"] == "*/1 * * * *"
+    assert pod_spec["serviceAccountName"] == "platform-validator-image-updater"
+    assert container["image"] == "ghcr.io/platformnetwork/platform:latest"
+    assert container["command"] == [
+        "platform",
+        "validator",
+        "refresh-image",
+        "--namespace",
+        "validator-test",
+        "--resource-kind",
+        "deployment",
+        "--name",
+        "platform-validator",
+        "--container",
+        "validator",
+        "--image",
+        "ghcr.io/platformnetwork/platform:latest",
+        "--registry-endpoint",
+        "",
+    ]
+    image_updater_role = next(
+        doc
+        for doc in manifests
+        if doc.get("kind") == "Role"
+        and doc.get("metadata", {}).get("name") == "platform-validator-image-updater"
+    )
+    assert not any(
+        "secrets" in rule.get("resources", []) for rule in image_updater_role["rules"]
+    )
+    assert image_updater_role["rules"] == [
+        {
+            "apiGroups": ["apps"],
+            "resources": ["deployments"],
+            "resourceNames": ["platform-validator"],
+            "verbs": ["get", "patch"],
+        },
+        {"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
+    ]
+
+
 def test_validator_installer_can_suspend_helm_upgrader(tmp_path: Path) -> None:
     manifests = _run_installer_with_fakes(
         tmp_path,
         "ghcr.io/platformnetwork/platform:latest",
         extra_args=["--auto-upgrade-suspend", "true"],
     )
-    cronjob = next(doc for doc in manifests if doc.get("kind") == "CronJob")
+    cronjob = next(
+        doc
+        for doc in manifests
+        if doc.get("kind") == "CronJob"
+        and doc.get("metadata", {}).get("name") == "platform-validator-helm-upgrader"
+    )
 
     assert cronjob["spec"]["suspend"] is True
