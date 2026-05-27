@@ -21,7 +21,7 @@ from platform_network.config.settings import ValidatorSettings
 from platform_network.gpu.capabilities import CapabilityDecision
 from platform_network.master.challenge_client import ChallengeClient
 from platform_network.master.docker_orchestrator import ChallengeSpec
-from platform_network.master.registry import FileChallengeRegistry
+from platform_network.master.registry import ChallengeRegistry, FileChallengeRegistry
 from platform_network.master.service import MasterWeightService
 from platform_network.observability.logging import JsonFormatter, configure_logging
 from platform_network.observability.otel import init_otel
@@ -1326,6 +1326,135 @@ def test_validator_run_defaults_weights_url_to_registry_url(
 
     assert result.exit_code == 0
     assert events == [("weights_url", "https://registry.example")]
+
+
+def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
+    registry = ChallengeRegistry()
+    _, agent_token = registry.create(
+        ChallengeCreate(
+            slug="agent-challenge",
+            name="Agent Challenge",
+            image="ghcr.io/platformnetwork/agent-challenge:latest",
+            version="0.1.0",
+            status=ChallengeStatus.ACTIVE,
+            emission_percent=Decimal("40"),
+        )
+    )
+    settings = SimpleNamespace(
+        docker=SimpleNamespace(broker_url="http://platform-broker:8082")
+    )
+
+    first = asyncio.run(cli_module.seed_prism_challenges(registry, settings))
+    prism_token = registry.get_token("prism")
+    second = asyncio.run(cli_module.seed_prism_challenges(registry, settings))
+
+    assert first == {"prism": "created", "agent-challenge": "updated"}
+    assert second == {"prism": "updated", "agent-challenge": "updated"}
+    assert registry.get_token("agent-challenge") == agent_token
+    assert registry.get_token("prism") == prism_token
+
+    records = registry.list()
+    assert [record.slug for record in records].count("prism") == 1
+    prism = registry.get("prism")
+    agent = registry.get("agent-challenge")
+    assert prism.name == "PRISM"
+    assert prism.image == "ghcr.io/platformnetwork/prism:latest"
+    assert prism.version == "0.1.0"
+    assert prism.status == ChallengeStatus.ACTIVE
+    assert prism.emission_percent == Decimal("30")
+    assert prism.internal_base_url == "http://challenge-prism:8000"
+    assert prism.public_proxy_base_path == "/challenges/prism"
+    assert prism.required_capabilities == ["get_weights", "proxy_routes"]
+    challenge_token_file = "/run/secrets/platform/challenge_token"
+    assert prism.env["PRISM_SHARED_TOKEN_FILE"] == challenge_token_file
+    assert prism.env["CHALLENGE_SHARED_TOKEN_FILE"] == challenge_token_file
+    assert prism.env["PRISM_DOCKER_BACKEND"] == "broker"
+    assert prism.env["PRISM_DOCKER_BROKER_URL"] == "http://platform-broker:8082"
+    assert prism.env["PRISM_DOCKER_BROKER_TOKEN_FILE"] == (
+        "/run/secrets/platform/docker_broker_token"
+    )
+    assert prism.env["PRISM_PLATFORM_EVAL_IMAGE"] == (
+        "ghcr.io/platformnetwork/prism-evaluator:latest"
+    )
+    assert prism.secrets == ["challenge_token", "docker_broker_token"]
+    assert prism.resources["gpu_count"] == "1"
+    assert prism.metadata["runtime_database"] == "platform-managed-challenge-postgres"
+    assert "token" not in prism.metadata
+    assert "database_url" not in prism.metadata
+    assert agent.emission_percent == Decimal("15")
+
+
+def test_seed_prism_challenges_pins_images_for_production_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform_network.validator.image_updater as image_updater_module
+    from platform_network.config.policy import validate_image_reference
+
+    prism_digest = "sha256:" + "a" * 64
+    evaluator_digest = "sha256:" + "b" * 64
+    resolved_images: list[str] = []
+
+    def resolve_digest(image_reference, **kwargs: object) -> str:
+        resolved_images.append(image_reference.tagged)
+        if image_reference.repository == "platformnetwork/prism":
+            return prism_digest
+        if image_reference.repository == "platformnetwork/prism-evaluator":
+            return evaluator_digest
+        raise AssertionError(f"unexpected image {image_reference.tagged}")
+
+    monkeypatch.setattr(image_updater_module, "resolve_remote_digest", resolve_digest)
+    registry = ChallengeRegistry(production_policy=True)
+    settings = SimpleNamespace(
+        environment="production",
+        runtime=SimpleNamespace(backend="kubernetes"),
+        docker=SimpleNamespace(broker_url="http://platform-broker:8082"),
+    )
+
+    first = asyncio.run(cli_module.seed_prism_challenges(registry, settings))
+    prism_token = registry.get_token("prism")
+    second = asyncio.run(cli_module.seed_prism_challenges(registry, settings))
+
+    prism = registry.get("prism")
+    expected_prism_image = f"ghcr.io/platformnetwork/prism:latest@{prism_digest}"
+    expected_evaluator_image = (
+        f"ghcr.io/platformnetwork/prism-evaluator:latest@{evaluator_digest}"
+    )
+    assert first == {"prism": "created", "agent-challenge": "missing"}
+    assert second == {"prism": "updated", "agent-challenge": "missing"}
+    assert registry.get_token("prism") == prism_token
+    assert prism.image == expected_prism_image
+    assert prism.env["PRISM_PLATFORM_EVAL_IMAGE"] == expected_evaluator_image
+    assert prism.metadata["platform_eval_image"] == expected_evaluator_image
+    validate_image_reference(prism.image, production=True)
+    assert resolved_images == [
+        "ghcr.io/platformnetwork/prism:latest",
+        "ghcr.io/platformnetwork/prism-evaluator:latest",
+        "ghcr.io/platformnetwork/prism:latest",
+        "ghcr.io/platformnetwork/prism-evaluator:latest",
+    ]
+
+
+def test_master_challenges_seed_prism_cli_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace()
+    registry = object()
+    calls: list[tuple[object, object]] = []
+
+    async def seed(registry_arg: object, settings_arg: object) -> dict[str, str]:
+        calls.append((registry_arg, settings_arg))
+        return {"prism": "created", "agent-challenge": "updated"}
+
+    monkeypatch.setattr(cli_module, "load_settings", lambda config: settings)
+    monkeypatch.setattr(cli_module, "_master_registry", lambda settings_arg: registry)
+    monkeypatch.setattr(cli_module, "seed_prism_challenges", seed)
+
+    result = CliRunner().invoke(
+        app, ["master", "challenges", "seed-prism", "--config", "unused.yaml"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(registry, settings)]
+    assert "prism: created emission=30" in result.output
+    assert "agent-challenge: updated emission=15" in result.output
 
 
 def test_master_refresh_challenge_images_patches_already_current_kubernetes_workload(

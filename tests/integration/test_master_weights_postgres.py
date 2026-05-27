@@ -112,11 +112,33 @@ async def test_master_weights_latest_response_uses_active_challenges_no_submit(
     try:
         await registry.create(
             ChallengeCreate(
+                slug="prism",
+                name="PRISM",
+                image="ghcr.io/platformnetwork/prism:latest",
+                version="0.1.0",
+                emission_percent=Decimal("30"),
+                status=ChallengeStatus.ACTIVE,
+                internal_base_url="http://challenge-prism:8000",
+            )
+        )
+        await registry.create(
+            ChallengeCreate(
+                slug="agent-challenge",
+                name="Agent Challenge",
+                image="ghcr.io/platformnetwork/agent-challenge:1.0.0",
+                version="1.0.0",
+                emission_percent=Decimal("15"),
+                status=ChallengeStatus.ACTIVE,
+                internal_base_url="http://challenge-agent-challenge:8000",
+            )
+        )
+        await registry.create(
+            ChallengeCreate(
                 slug="weights-api-active",
                 name="Weights API Active",
                 image="ghcr.io/platformnetwork/weights-smoke:1.0.0",
                 version="1.0.0",
-                emission_percent=Decimal("100"),
+                emission_percent=Decimal("5"),
                 status=ChallengeStatus.ACTIVE,
                 internal_base_url="http://challenge-weights-api:8000",
             )
@@ -127,7 +149,7 @@ async def test_master_weights_latest_response_uses_active_challenges_no_submit(
                 name="Weights API Inactive",
                 image="ghcr.io/platformnetwork/weights-smoke:1.0.0",
                 version="1.0.0",
-                emission_percent=Decimal("0"),
+                emission_percent=Decimal("50"),
                 status=ChallengeStatus.INACTIVE,
                 internal_base_url="http://challenge-weights-api-inactive:8000",
             )
@@ -147,12 +169,26 @@ async def test_master_weights_latest_response_uses_active_challenges_no_submit(
             now_fn=lambda: datetime(2030, 1, 1, 12, 0, tzinfo=UTC),
         )
 
-        assert response.uids == [9]
-        assert response.weights == [1.0]
-        assert response.hotkey_weights == {"miner-hotkey": 1.0}
-        assert [result.slug for result in response.source_challenges] == [
-            "weights-api-active"
+        assert response.uids == [5, 15, 30]
+        assert [round(weight, 8) for weight in response.weights] == [
+            round(5 / 50, 8),
+            round(15 / 50, 8),
+            round(30 / 50, 8),
         ]
+        assert response.hotkey_weights == {
+            "prism-hotkey": 30 / 50,
+            "agent-hotkey": 15 / 50,
+            "other-hotkey": 5 / 50,
+        }
+        source_emissions = {
+            result.slug: result.emission_percent
+            for result in response.source_challenges
+        }
+        assert source_emissions == {
+            "prism": 30.0,
+            "agent-challenge": 15.0,
+            "weights-api-active": 5.0,
+        }
         assert response.netuid == 42
         assert set_weight_calls == []
     finally:
@@ -162,7 +198,12 @@ async def test_master_weights_latest_response_uses_active_challenges_no_submit(
 
 class Cache:
     def get(self) -> dict[str, int]:
-        return {"miner-hotkey": 9}
+        return {
+            "miner-hotkey": 9,
+            "prism-hotkey": 30,
+            "agent-hotkey": 15,
+            "other-hotkey": 5,
+        }
 
 
 class Client:
@@ -172,9 +213,20 @@ class Client:
     async def get_weights(self, **kwargs: object) -> ChallengeWeightsResult:
         slug = str(kwargs["slug"])
         self.slugs.append(slug)
-        assert slug in {"weights-smoke-active", "weights-api-active"}
+        assert slug in {
+            "weights-smoke-active",
+            "weights-api-active",
+            "prism",
+            "agent-challenge",
+        }
+        weights_by_slug = {
+            "weights-smoke-active": {"miner-hotkey": 1.0},
+            "weights-api-active": {"other-hotkey": 1.0},
+            "prism": {"prism-hotkey": 1.0},
+            "agent-challenge": {"agent-hotkey": 1.0},
+        }
         return ChallengeWeightsResult(
             slug=slug,
             emission_percent=float(cast(float, kwargs["emission_percent"])),
-            weights={"miner-hotkey": 1.0},
+            weights=weights_by_slug[slug],
         )

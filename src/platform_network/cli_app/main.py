@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ from platform_network.master.docker_broker import (
     create_docker_broker_app,
 )
 from platform_network.master.docker_orchestrator import (
+    DEFAULT_SECRET_MOUNT_DIR,
     ChallengeResources,
     ChallengeSpec,
     DockerOrchestrator,
@@ -49,12 +51,20 @@ from platform_network.master.kubernetes_broker import (
     create_kubernetes_broker_app,
 )
 from platform_network.master.kubernetes_orchestrator import KubernetesTargetRouter
-from platform_network.master.registry import DatabaseChallengeRegistry
+from platform_network.master.registry import (
+    ChallengeNotFoundError,
+    DatabaseChallengeRegistry,
+)
 from platform_network.master.service import (
     MasterWeightService,
     active_challenge_inputs,
 )
 from platform_network.observability.logging import configure_logging
+from platform_network.schemas.challenge import (
+    ChallengeCreate,
+    ChallengeStatus,
+    ChallengeUpdate,
+)
 from platform_network.schemas.weights import FinalWeights, MasterWeightsResponse
 from platform_network.security.admin_auth import read_secret
 from platform_network.security.miner_auth import SqlAlchemyMinerNonceStore
@@ -69,6 +79,7 @@ from platform_network.validator.weights_client import WeightsClient
 
 app = typer.Typer(help="Platform Network multi-challenge subnet CLI")
 master_app = typer.Typer(help="Run master components")
+master_challenges_app = typer.Typer(help="Manage master challenge records")
 validator_app = typer.Typer(help="Run normal validator components")
 challenge_app = typer.Typer(help="Manage and scaffold challenges")
 db_app = typer.Typer(help="Database helpers")
@@ -78,6 +89,7 @@ gpu_server_app = typer.Typer(help="Manage validator GPU servers")
 kubernetes_app = typer.Typer(help="Run Kubernetes maintenance tasks")
 k8s_server_app = typer.Typer(help="Manage Kubernetes targets")
 k8s_agent_app = typer.Typer(help="Run Kubernetes target agents")
+master_app.add_typer(master_challenges_app, name="challenges")
 app.add_typer(master_app, name="master")
 app.add_typer(validator_app, name="validator")
 app.add_typer(challenge_app, name="challenge")
@@ -357,6 +369,120 @@ async def _run_master_weight_epoch_response(
         chain_endpoint=chain_endpoint,
         now_fn=now_fn,
     )
+
+
+PRISM_SLUG = "prism"
+AGENT_CHALLENGE_SLUG = "agent-challenge"
+PRISM_IMAGE = "ghcr.io/platformnetwork/prism:latest"
+PRISM_EVALUATOR_IMAGE = "ghcr.io/platformnetwork/prism-evaluator:latest"
+PRISM_VERSION = "0.1.0"
+PRISM_EMISSION_PERCENT = Decimal("30")
+AGENT_CHALLENGE_EMISSION_PERCENT = Decimal("15")
+DEFAULT_PLATFORM_BROKER_URL = "http://platform-docker-broker:8082"
+
+
+def _settings_docker_broker_url(settings: Any | None) -> str:
+    docker_settings = getattr(settings, "docker", None)
+    broker_url = getattr(docker_settings, "broker_url", None)
+    return str(broker_url or DEFAULT_PLATFORM_BROKER_URL)
+
+
+def _prism_image_for_settings(image: str, settings: Any | None) -> str:
+    if settings is None or not production_policy_enabled_for_settings(settings):
+        return image
+    from platform_network.validator.image_updater import (
+        parse_image_reference,
+        resolve_remote_digest,
+    )
+
+    reference = parse_image_reference(image)
+    if reference.immutable:
+        return image
+    return reference.pinned(resolve_remote_digest(reference))
+
+
+def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
+    challenge_token_file = f"{DEFAULT_SECRET_MOUNT_DIR}/challenge_token"
+    docker_broker_token_file = f"{DEFAULT_SECRET_MOUNT_DIR}/docker_broker_token"
+    broker_url = _settings_docker_broker_url(settings)
+    prism_image = _prism_image_for_settings(PRISM_IMAGE, settings)
+    evaluator_image = _prism_image_for_settings(PRISM_EVALUATOR_IMAGE, settings)
+    return ChallengeCreate(
+        slug=PRISM_SLUG,
+        name="PRISM",
+        image=prism_image,
+        version=PRISM_VERSION,
+        emission_percent=PRISM_EMISSION_PERCENT,
+        status=ChallengeStatus.ACTIVE,
+        description="PRISM architecture and training reward challenge.",
+        internal_base_url="http://challenge-prism:8000",
+        required_capabilities=["get_weights", "proxy_routes"],
+        resources={
+            "cpu": "2",
+            "memory": "8g",
+            "gpu_count": "1",
+            "gpu_capabilities": "gpu",
+        },
+        volumes={"data": "/data"},
+        env={
+            "PRISM_SHARED_TOKEN_FILE": challenge_token_file,
+            "CHALLENGE_SHARED_TOKEN_FILE": challenge_token_file,
+            "PRISM_DOCKER_ENABLED": "true",
+            "PRISM_DOCKER_BACKEND": "broker",
+            "CHALLENGE_DOCKER_BACKEND": "broker",
+            "PRISM_DOCKER_BROKER_URL": broker_url,
+            "CHALLENGE_DOCKER_BROKER_URL": broker_url,
+            "PRISM_DOCKER_BROKER_TOKEN_FILE": docker_broker_token_file,
+            "CHALLENGE_DOCKER_BROKER_TOKEN_FILE": docker_broker_token_file,
+            "PRISM_PLATFORM_EVAL_IMAGE": evaluator_image,
+        },
+        secrets=["challenge_token", "docker_broker_token"],
+        metadata={
+            "repository_url": "https://github.com/PlatformNetwork/prism",
+            "category": "Agentic (Multi-step)",
+            "benchmark_label": "PRISM architecture and training reward boards",
+            "evaluation_timeout_seconds": 900,
+            "submission_format": "zip",
+            "runtime_database": "platform-managed-challenge-postgres",
+            "platform_eval_image": evaluator_image,
+            "platform_eval_gpu_count": "1",
+            "platform_eval_max_gpu_count": "8",
+        },
+    )
+
+
+def _prism_challenge_update(settings: Any | None = None) -> ChallengeUpdate:
+    payload = prism_challenge_create(settings)
+    data = payload.model_dump(exclude={"slug"})
+    return ChallengeUpdate(**data)
+
+
+async def seed_prism_challenges(
+    registry: Any, settings: Any | None = None
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        await _resolve(registry.get(PRISM_SLUG))
+    except (ChallengeNotFoundError, KeyError):
+        await _resolve(registry.create(prism_challenge_create(settings)))
+        result[PRISM_SLUG] = "created"
+    else:
+        await _resolve(registry.update(PRISM_SLUG, _prism_challenge_update(settings)))
+        result[PRISM_SLUG] = "updated"
+
+    try:
+        await _resolve(registry.get(AGENT_CHALLENGE_SLUG))
+    except (ChallengeNotFoundError, KeyError):
+        result[AGENT_CHALLENGE_SLUG] = "missing"
+    else:
+        await _resolve(
+            registry.update(
+                AGENT_CHALLENGE_SLUG,
+                ChallengeUpdate(emission_percent=AGENT_CHALLENGE_EMISSION_PERCENT),
+            )
+        )
+        result[AGENT_CHALLENGE_SLUG] = "updated"
+    return result
 
 
 @master_app.command("run")
@@ -811,6 +937,25 @@ def master_refresh_challenge_images(
                     typer.echo(f"{record.slug}: restarted {result['status']}")
 
     asyncio.run(refresh())
+
+
+@master_challenges_app.command("seed-prism")
+def master_challenges_seed_prism(
+    config: Path = typer.Option(Path("config/master.example.yaml")),
+):
+    settings = load_settings(config)
+    registry = _master_registry(settings)
+
+    async def seed() -> None:
+        result = await seed_prism_challenges(registry, settings)
+        typer.echo(f"prism: {result[PRISM_SLUG]} emission={PRISM_EMISSION_PERCENT}")
+        typer.echo(
+            "agent-challenge: "
+            f"{result[AGENT_CHALLENGE_SLUG]} "
+            f"emission={AGENT_CHALLENGE_EMISSION_PERCENT}"
+        )
+
+    asyncio.run(seed())
 
 
 @master_app.command("weights")

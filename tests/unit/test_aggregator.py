@@ -28,6 +28,52 @@ def test_aggregate_normalizes_emissions_and_ignores_unknown_hotkeys() -> None:
     assert round(final.weights[1], 8) == round(6 / 7, 8)
 
 
+def test_prism_and_agent_challenge_emissions_normalize_by_successful_total() -> None:
+    results = [
+        ChallengeWeightsResult(
+            slug="prism", emission_percent=30, weights={"prism-hotkey": 1}
+        ),
+        ChallengeWeightsResult(
+            slug="agent-challenge", emission_percent=15, weights={"agent-hotkey": 1}
+        ),
+        ChallengeWeightsResult(
+            slug="other-active", emission_percent=5, weights={"other-hotkey": 1}
+        ),
+        ChallengeWeightsResult(
+            slug="failed-active",
+            emission_percent=50,
+            weights={"failed-hotkey": 1},
+            ok=False,
+        ),
+    ]
+
+    source_emissions = {result.slug: result.emission_percent for result in results}
+    assert source_emissions["prism"] == 30
+    assert source_emissions["agent-challenge"] == 15
+
+    final = aggregate_challenge_weights(
+        results,
+        {
+            "prism-hotkey": 30,
+            "agent-hotkey": 15,
+            "other-hotkey": 5,
+            "failed-hotkey": 50,
+        },
+    )
+
+    assert final.uids == [5, 15, 30]
+    assert [round(weight, 8) for weight in final.weights] == [
+        round(5 / 50, 8),
+        round(15 / 50, 8),
+        round(30 / 50, 8),
+    ]
+    assert final.hotkey_weights == {
+        "prism-hotkey": 30 / 50,
+        "agent-hotkey": 15 / 50,
+        "other-hotkey": 5 / 50,
+    }
+
+
 def test_failed_challenge_contributes_zero() -> None:
     results = [
         ChallengeWeightsResult(slug="a", emission_percent=50, weights={"hk1": 1}),
