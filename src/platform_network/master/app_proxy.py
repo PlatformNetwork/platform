@@ -63,6 +63,12 @@ HOP_BY_HOP_HEADERS = {
 }
 
 BLOCKED_EXACT_PATHS = {"/health", "/version"}
+PRISM_EXACT_PUBLIC_PATHS = {
+    "/leaderboard",
+    "/architectures",
+    "/training-variants",
+    "/epochs/current",
+}
 
 
 ClientFactory = Callable[[], AbstractAsyncContextManager[httpx.AsyncClient]]
@@ -78,6 +84,20 @@ def is_blocked_proxy_path(path: str) -> bool:
         or normalized == "/internal"
         or normalized.startswith("/internal/")
     )
+
+
+def prism_upstream_proxy_path(slug: str, path: str) -> str:
+    normalized = normpath(f"/{path.lstrip('/')}")
+    if slug != "prism" or normalized == "/.":
+        return path
+    if normalized.startswith("/v1/"):
+        return normalized
+    if normalized in PRISM_EXACT_PUBLIC_PATHS:
+        return f"/v1{normalized}"
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) == 2 and parts[0] == "submissions":
+        return f"/v1{normalized}"
+    return path
 
 
 def _is_agent_challenge_env_route(slug: str, method: str, path: str) -> bool:
@@ -375,7 +395,7 @@ def create_proxy_app(
             return await forward_proxy_response(
                 challenge,
                 method=request.method,
-                path=path,
+                path=prism_upstream_proxy_path(slug, path),
                 query=request.url.query,
                 body=body,
                 headers=headers,
