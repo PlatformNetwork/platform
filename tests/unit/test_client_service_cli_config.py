@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1149,6 +1150,64 @@ async def test_validator_weights_submit_valid_payload_once() -> None:
 
     assert await runner.submit_latest_weights() is True
     assert setter.calls == [([1, 2], [0.4, 0.6])]
+
+
+@pytest.mark.asyncio
+async def test_validator_weights_submit_returns_false_when_setter_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    payload = _master_weights_payload()
+
+    class Weights:
+        async def fetch_latest(self) -> MasterWeightsResponse:
+            return payload
+
+    class Setter:
+        def set_weights(self, uids: list[int], weights: list[float]) -> None:
+            raise RuntimeError("subtensor rejected weight submission")
+
+    runner = NormalValidatorRunner(
+        registry_client=cast(RegistryClient, SimpleNamespace()),
+        orchestrator=SimpleNamespace(),
+        weights_client=cast(WeightsClient, Weights()),
+        weight_setter=cast(WeightSetter, Setter()),
+        netuid=42,
+    )
+
+    caplog.set_level(logging.ERROR, logger="platform_network.validator.normal_runner")
+    assert await runner.submit_latest_weights() is False
+    assert "validator weights submission failed" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejected_result", [False, (False, "chain rejected"), [False, "chain rejected"]]
+)
+async def test_validator_weights_submit_returns_false_when_setter_rejects(
+    rejected_result: object,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    payload = _master_weights_payload()
+
+    class Weights:
+        async def fetch_latest(self) -> MasterWeightsResponse:
+            return payload
+
+    class Setter:
+        def set_weights(self, uids: list[int], weights: list[float]) -> object:
+            return rejected_result
+
+    runner = NormalValidatorRunner(
+        registry_client=cast(RegistryClient, SimpleNamespace()),
+        orchestrator=SimpleNamespace(),
+        weights_client=cast(WeightsClient, Weights()),
+        weight_setter=cast(WeightSetter, Setter()),
+        netuid=42,
+    )
+
+    caplog.set_level(logging.WARNING, logger="platform_network.validator.normal_runner")
+    assert await runner.submit_latest_weights() is False
+    assert "validator weights submission rejected" in caplog.text
 
 
 @pytest.mark.asyncio

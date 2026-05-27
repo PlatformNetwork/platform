@@ -5,7 +5,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from platform_network.bittensor.weight_setter import WeightSetter
+from platform_network.bittensor.weight_setter import (
+    WeightSetter,
+    is_rejected_set_weights_result,
+)
 from platform_network.master.docker_orchestrator import (
     ChallengeResources,
     ChallengeSpec,
@@ -72,7 +75,14 @@ class NormalValidatorRunner:
             logger.warning("validator weights submission skipped: %s", failure)
             return False
 
-        self.weight_setter.set_weights(payload.uids, payload.weights)
+        try:
+            result = self.weight_setter.set_weights(payload.uids, payload.weights)
+        except Exception:
+            logger.exception("validator weights submission failed")
+            return False
+        if is_rejected_set_weights_result(result):
+            logger.warning("validator weights submission rejected")
+            return False
         return True
 
     def _validate_weights_payload(self, payload: MasterWeightsResponse) -> str | None:
