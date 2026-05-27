@@ -976,9 +976,7 @@ def test_prism_public_proxy_routes_forward_to_public_surface() -> None:
         )
 
     @challenge_app.get("/v1/submissions/{submission_id}")
-    async def submission_status(
-        submission_id: str, request: Request
-    ) -> dict[str, Any]:
+    async def submission_status(submission_id: str, request: Request) -> dict[str, Any]:
         return await record_prism_route(
             "submission_status", request, {"id": submission_id, "status": "completed"}
         )
