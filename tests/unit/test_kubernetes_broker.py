@@ -120,6 +120,43 @@ def test_kubernetes_broker_run_success_and_failure_logs() -> None:
     ]
 
 
+def test_kubernetes_broker_uses_configured_gpu_resource_name() -> None:
+    default_client = FakeBrokerClient()
+    KubernetesBrokerService(client=default_client).run(
+        "agent", _run_payload(limits=BrokerLimits(gpu_count=1))
+    )
+    default_limits = _main_container_limits(default_client)
+    assert default_limits["nvidia.com/gpu"] == "1"
+
+    custom_client = FakeBrokerClient()
+    KubernetesBrokerService(
+        client=custom_client, gpu_resource_name="example.com/gpu"
+    ).run("agent", _run_payload(limits=BrokerLimits(gpu_count=1)))
+    custom_limits = _main_container_limits(custom_client)
+    assert custom_limits["example.com/gpu"] == "1"
+    assert "nvidia.com/gpu" not in custom_limits
+
+
+def test_kubernetes_broker_run_applies_runtime_fields_to_job_pod_spec() -> None:
+    client = FakeBrokerClient()
+    service = KubernetesBrokerService(
+        client=client,
+        image_pull_secrets=("pull-secret",),
+        node_selector={"accelerator": "nvidia"},
+        tolerations=({"key": "gpu", "operator": "Exists"},),
+        runtime_class_name="nvidia",
+    )
+
+    service.run("agent", _run_payload(limits=BrokerLimits(gpu_count=1)))
+
+    pod_spec = client._job()["spec"]["template"]["spec"]
+    assert pod_spec["imagePullSecrets"] == [{"name": "pull-secret"}]
+    assert pod_spec["nodeSelector"] == {"accelerator": "nvidia"}
+    assert pod_spec["tolerations"] == [{"key": "gpu", "operator": "Exists"}]
+    assert pod_spec["runtimeClassName"] == "nvidia"
+    assert pod_spec["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "1"
+
+
 def test_kubernetes_broker_run_timeout_and_wait_error_cleanup() -> None:
     timeout_client = FakeBrokerClient(exit_code=124, logs="timeout")
     timed_out = KubernetesBrokerService(client=timeout_client).run(
@@ -166,6 +203,54 @@ def test_kubernetes_broker_run_apply_and_log_error_cleanup() -> None:
         ("NetworkPolicy", log_name),
         ("Secret", f"{log_name}-mounts"),
     ]
+
+
+def test_kubernetes_broker_from_settings_threads_gpu_resource_name_runtime_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_client: dict[str, Any] = {}
+
+    class CapturingClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_client.update(kwargs)
+
+    monkeypatch.setattr(
+        "platform_network.master.kubernetes_broker.KubernetesClient", CapturingClient
+    )
+    node_selector = {"accelerator": "nvidia"}
+    toleration = {"key": "gpu", "operator": "Exists"}
+    settings = SimpleNamespace(
+        docker=SimpleNamespace(broker_allowed_images=["ghcr.io/platformnetwork/"]),
+        kubernetes=SimpleNamespace(
+            namespace="platform-gpu",
+            kubeconfig="/tmp/kubeconfig",
+            in_cluster=False,
+            service_account="broker-sa",
+            gpu_resource_name="example.com/gpu",
+            image_pull_secrets=["pull-secret"],
+            node_selector=node_selector,
+            tolerations=[toleration],
+            runtime_class_name="nvidia",
+        ),
+    )
+
+    service = KubernetesBrokerService.from_settings(settings)
+    node_selector["mutated"] = "ignored"
+    toleration["value"] = "ignored"
+
+    assert captured_client == {
+        "namespace": "platform-gpu",
+        "kubeconfig": "/tmp/kubeconfig",
+        "in_cluster": False,
+    }
+    assert service.namespace == "platform-gpu"
+    assert service.service_account_name == "broker-sa"
+    assert service.allowed_images == ("ghcr.io/platformnetwork/",)
+    assert service.gpu_resource_name == "example.com/gpu"
+    assert service.image_pull_secrets == ("pull-secret",)
+    assert service.node_selector == {"accelerator": "nvidia"}
+    assert service.tolerations == ({"key": "gpu", "operator": "Exists"},)
+    assert service.runtime_class_name == "nvidia"
 
 
 def test_kubernetes_broker_app_auth_and_mount_rejection() -> None:
@@ -226,6 +311,13 @@ def test_kubernetes_broker_app_auth_and_mount_rejection() -> None:
     assert rejected_image_syntax.status_code == 400
     assert "unsafe Docker image reference" in rejected_image_syntax.text
 
+    rejected_pull_policy = http.post(
+        "/v1/docker/run",
+        headers={"authorization": "Bearer tok", "x-platform-challenge-slug": "agent"},
+        json=_run_json() | {"image_pull_policy": "Missing"},
+    )
+    assert rejected_pull_policy.status_code == 422
+
     rejected_source = http.post(
         "/v1/docker/run",
         headers={"authorization": "Bearer tok", "x-platform-challenge-slug": "agent"},
@@ -280,6 +372,32 @@ def test_kubernetes_broker_app_cleanup_and_list_require_auth() -> None:
         json={"job_id": "job-1"},
     )
     assert list_unauthorized.status_code == 401
+
+
+def test_broker_limits_gpu_count_schema_contract() -> None:
+    assert BrokerLimits().gpu_count is None
+    assert BrokerLimits(gpu_count=1).model_dump(mode="json")["gpu_count"] == 1
+
+    for invalid_gpu_count in [0, -1, True, "1", 1.5]:
+        with pytest.raises(Exception, match="gpu_count"):
+            BrokerLimits(gpu_count=invalid_gpu_count)
+
+
+def test_broker_run_request_without_gpu_fields_remains_valid() -> None:
+    request = BrokerRunRequest.model_validate(_run_json())
+
+    assert request.limits.gpu_count is None
+    assert request.image_pull_policy is None
+
+
+def test_broker_run_request_accepts_only_kubernetes_image_pull_policies() -> None:
+    request = BrokerRunRequest.model_validate(
+        _run_json() | {"image_pull_policy": "IfNotPresent"}
+    )
+    assert request.image_pull_policy == "IfNotPresent"
+
+    with pytest.raises(Exception, match="image_pull_policy"):
+        BrokerRunRequest.model_validate(_run_json() | {"image_pull_policy": "Missing"})
 
 
 def test_kubernetes_broker_rejects_unsupported_docker_only_limits() -> None:
@@ -383,6 +501,60 @@ def test_kubernetes_broker_router_uses_explicit_and_gpu_targets() -> None:
     assert router.run("explicit", _run_payload()).container_name == "gpu-a"
     assert router.run("automatic", _run_payload()).container_name == "gpu-a"
     assert router.run("local", _run_payload()).container_name == "default"
+
+
+def test_platform_sdk_broker_router_preserves_generic_payload_for_targets() -> None:
+    default = CapturingBrokerService("default")
+    gpu = CapturingBrokerService("gpu-a")
+    registry = SimpleNamespace(
+        get=lambda slug: SimpleNamespace(
+            resources={
+                "explicit": {"gpu_server": "gpu-a", "gpu_count": "1"},
+                "local": {},
+            }[slug]
+        )
+    )
+    router = KubernetesBrokerRouterService(
+        default_service=default,
+        target_services={"gpu-a": gpu},
+        target_capacities={"gpu-a": 2},
+        challenge_registry=registry,
+    )
+    request = BrokerRunRequest(
+        job_id="job-1",
+        task_id="terminal-bench-1",
+        image="ghcr.io/platformnetwork/controlled-runner:1",
+        image_pull_policy="IfNotPresent",
+        command=["python", "-m", "runner"],
+        workdir="/workspace",
+        env={"PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token"},
+        labels={"platform.job": "job-1", "custom.label": "survives"},
+        limits=BrokerLimits(cpus=1.5, memory="768Mi", gpu_count=1),
+        timeout_seconds=321,
+    )
+
+    explicit_response = router.run("explicit", request)
+    local_response = router.run("local", request)
+
+    assert explicit_response.container_name == "gpu-a"
+    assert local_response.container_name == "default"
+    assert gpu.calls == [("run", "explicit", request)]
+    assert default.calls == [("run", "local", request)]
+    forwarded = gpu.calls[0][2].model_dump(mode="json")
+    assert forwarded["image"] == "ghcr.io/platformnetwork/controlled-runner:1"
+    assert forwarded["image_pull_policy"] == "IfNotPresent"
+    assert forwarded["command"] == ["python", "-m", "runner"]
+    assert forwarded["env"] == {
+        "PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token"
+    }
+    assert forwarded["labels"] == {
+        "platform.job": "job-1",
+        "custom.label": "survives",
+    }
+    assert forwarded["limits"]["gpu_count"] == 1
+    assert "agent_challenge" not in forwarded
+    assert "provider_ref" not in forwarded
+    assert "miner_env" not in forwarded
 
 
 def test_kubernetes_broker_router_uses_persisted_assignment() -> None:
@@ -505,6 +677,78 @@ def test_kubernetes_broker_router_builds_direct_kubeconfig_service(
     assert captured_service["namespace"] == "platform-gpu"
     assert captured_service["service_account_name"] == "target-sa"
     assert captured_service["allowed_images"] == ("ghcr.io/platformnetwork/",)
+    assert captured_service["gpu_resource_name"] == "defaults.example.com/gpu"
+    assert captured_service["image_pull_secrets"] == ("default-pull-secret",)
+    assert captured_service["node_selector"] == {
+        "global": "true",
+        "default": "true",
+    }
+    assert captured_service["tolerations"] == (
+        {"key": "default-gpu", "operator": "Exists"},
+    )
+    assert captured_service["runtime_class_name"] == "default-runtime"
+
+
+def test_kubernetes_broker_router_direct_kubeconfig_service_runtime_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_service: dict[str, Any] = {}
+
+    class CapturingClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+    class CapturingBrokerService(StubBrokerService):
+        def __init__(self, **kwargs: Any) -> None:
+            captured_service.update(kwargs)
+            super().__init__("direct-a")
+
+    registry = SimpleNamespace(
+        get=lambda slug: SimpleNamespace(
+            resources={"gpu_server": "direct-a", "gpu_count": "1"}
+        )
+    )
+    target_registry = DynamicTargetRegistry()
+    target_registry.targets["direct-a"] = SimpleNamespace(
+        id="direct-a",
+        mode="direct",
+        enabled=True,
+        draining=False,
+        gpu_count=1,
+        namespace="platform-gpu",
+        service_account=None,
+        kubeconfig_file="/tmp/direct-a.kubeconfig",
+        node_selector={"target": "true", "default": "target"},
+        tolerations=[{"key": "target-gpu", "operator": "Exists"}],
+        runtime_class_name="target-runtime",
+    )
+    monkeypatch.setattr(
+        "platform_network.master.kubernetes_broker.KubernetesClient", CapturingClient
+    )
+    monkeypatch.setattr(
+        "platform_network.master.kubernetes_broker.KubernetesBrokerService",
+        CapturingBrokerService,
+    )
+    router = KubernetesBrokerRouterService(
+        default_service=StubBrokerService("default"),
+        challenge_registry=registry,
+        settings=_settings(),
+        target_registry=target_registry,
+    )
+
+    assert router.run("demo", _run_payload()).container_name == "direct-a"
+    assert captured_service["service_account_name"] == "default-sa"
+    assert captured_service["gpu_resource_name"] == "defaults.example.com/gpu"
+    assert captured_service["image_pull_secrets"] == ("default-pull-secret",)
+    assert captured_service["node_selector"] == {
+        "global": "true",
+        "default": "target",
+        "target": "true",
+    }
+    assert captured_service["tolerations"] == (
+        {"key": "target-gpu", "operator": "Exists"},
+    )
+    assert captured_service["runtime_class_name"] == "target-runtime"
 
 
 def test_kubernetes_broker_router_builds_agent_broker_service(
@@ -645,8 +889,27 @@ class StubBrokerService:
         return type("Response", (), {"containers": []})()
 
 
-def _run_payload() -> BrokerRunRequest:
-    return BrokerRunRequest.model_validate(_run_json())
+class CapturingBrokerService(StubBrokerService):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.calls: list[tuple[str, str, BrokerRunRequest]] = []
+
+    def run(self, challenge_slug: str, request: BrokerRunRequest):
+        self.calls.append(("run", challenge_slug, request))
+        return super().run(challenge_slug, request)
+
+
+def _main_container_limits(client: FakeBrokerClient) -> dict[str, Any]:
+    return client._job()["spec"]["template"]["spec"]["containers"][0]["resources"][
+        "limits"
+    ]
+
+
+def _run_payload(*, limits: BrokerLimits | None = None) -> BrokerRunRequest:
+    payload = BrokerRunRequest.model_validate(_run_json())
+    if limits is not None:
+        payload = payload.model_copy(update={"limits": limits})
+    return payload
 
 
 def _run_json() -> dict[str, object]:
@@ -673,5 +936,19 @@ def _settings() -> SimpleNamespace:
             broker_url="http://broker:8082",
             broker_allowed_images=["ghcr.io/platformnetwork/"],
         ),
-        kubernetes=SimpleNamespace(service_account="default-sa"),
+        kubernetes=SimpleNamespace(
+            service_account="default-sa",
+            gpu_resource_name="global.example.com/gpu",
+            image_pull_secrets=["global-pull-secret"],
+            node_selector={"global": "true"},
+            tolerations=[{"key": "global-gpu", "operator": "Exists"}],
+            runtime_class_name="global-runtime",
+            target_defaults=SimpleNamespace(
+                gpu_resource_name="defaults.example.com/gpu",
+                image_pull_secrets=["default-pull-secret"],
+                node_selector={"default": "true"},
+                tolerations=[{"key": "default-gpu", "operator": "Exists"}],
+                runtime_class_name="default-runtime",
+            ),
+        ),
     )

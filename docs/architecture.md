@@ -63,6 +63,12 @@ Pinned production deployments should disable mutable auto-update and use rollout
 
 Kubernetes CPU and memory requests and limits map to PodSpec fields. Docker-only `pids_limit`, `memory_swap`, and custom Docker network modes do not have parity in this path, so non-default requests are rejected or handled by cluster and admission policy outside Platform.
 
+### Kubernetes Broker GPU Contract
+
+Broker clients request GPUs with `limits.gpu_count`. `gpu_count=None` or an omitted field means CPU-only and emits no GPU resource key. A positive integer requests that many GPUs. Platform owns `gpu_resource_name`, defaulting to `nvidia.com/gpu`; clients such as PRISM do not pass the resource name.
+
+In Kubernetes broker mode, Platform maps a positive count to the main container's `resources.limits['nvidia.com/gpu']` by default, or to the configured Platform resource name. The broker does not translate device IDs into Kubernetes placement rules. Device IDs are metadata for observability, not scheduling semantics, and this contract does not claim a TPU, AMD, or custom accelerator abstraction.
+
 Multi-server and Kubernetes target routing trusts only enabled, healthy, non-draining targets with remaining GPU capacity. Production agent targets require HTTPS and `verify_tls=true`; stale or insecure persisted assignments are not trusted under production policy.
 
 ## Legacy Docker behavior

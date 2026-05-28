@@ -28,6 +28,8 @@ The production and Kubernetes boundary is stricter than local development:
 
 First-party deployments use Kubernetes rollout controls and scoped RBAC. Broker-created challenge jobs must not receive the host Docker socket.
 
+Kubernetes broker GPU placement is expressed only through resource limits. A positive broker `gpu_count` becomes `resources.limits['nvidia.com/gpu']` by default, using Platform-owned `gpu_resource_name`; omitted or `None` stays CPU-only. Challenge metadata, labels, environment values, and device IDs are not Kubernetes placement semantics. Network isolation depends on CNI support and the NetworkPolicy objects enforced by the cluster.
+
 Validator managed Postgres credentials and generated database URLs are written only to Kubernetes Secret `stringData` during create/replace and must not be printed in stdout, stderr, ConfigMaps, Deployments, CronJobs, docs evidence, or support logs. Cleanup deletes the managed validator Postgres StatefulSet and Service but retains the managed DB credential Secret and data claim/PVC by default. Challenge workloads receive only per-challenge runtime Secrets. The managed Postgres Secret and data claim are retained by default when a challenge is removed. Manual deletion is destructive and must be treated as an explicit purge.
 
 ## Kubernetes PID and Swap Boundary

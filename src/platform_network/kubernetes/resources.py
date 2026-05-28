@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -24,6 +25,12 @@ from platform_network.master.docker_orchestrator import (
     ChallengeSpec,
 )
 from platform_network.schemas.docker_broker import BrokerLimits, BrokerRunRequest
+
+_GPU_RESOURCE_NAME_RE = re.compile(
+    r"^(?:[a-z0-9](?:[-a-z0-9]*[a-z0-9])?\.)+"
+    r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?/"
+    r"[A-Za-z0-9](?:[-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+)
 
 
 def common_labels(
@@ -219,7 +226,9 @@ def build_challenge_postgres_statefulset(
     }
 
 
-def validate_broker_kubernetes_limits(limits: BrokerLimits) -> None:
+def validate_broker_kubernetes_limits(
+    limits: BrokerLimits, *, gpu_resource_name: str = "nvidia.com/gpu"
+) -> None:
     defaults = BrokerLimits()
     if limits.pids_limit != defaults.pids_limit:
         raise ValueError(
@@ -236,6 +245,14 @@ def validate_broker_kubernetes_limits(limits: BrokerLimits) -> None:
             "Kubernetes broker supports network=none or network=default; "
             "Docker-specific network modes are unsupported"
         )
+    _validate_gpu_resource_name(gpu_resource_name)
+    if limits.gpu_count is not None:
+        if (
+            isinstance(limits.gpu_count, bool)
+            or not isinstance(limits.gpu_count, int)
+            or limits.gpu_count <= 0
+        ):
+            raise ValueError("Kubernetes broker gpu_count must be a positive integer")
 
 
 def validate_challenge_kubernetes_resources(resources: ChallengeResources) -> None:
@@ -403,6 +420,11 @@ def build_broker_job(
     service_account_name: str,
     run_id: str | None = None,
     archive_extractor_image: str = "python:3.12-alpine",
+    gpu_resource_name: str = "nvidia.com/gpu",
+    image_pull_secrets: tuple[str, ...] | list[str] | None = None,
+    node_selector: dict[str, str] | None = None,
+    tolerations: tuple[dict[str, object], ...] | list[dict[str, object]] | None = None,
+    runtime_class_name: str | None = None,
 ) -> dict[str, Any]:
     name = broker_job_name(challenge_slug, request.job_id, request.task_id, run_id)
     labels = common_labels("broker-job", challenge_slug=challenge_slug) | {
@@ -412,17 +434,55 @@ def build_broker_job(
         labels["platform.task"] = safe_label_value(request.task_id)
     if run_id:
         labels["platform.run"] = safe_label_value(run_id)
-    validate_broker_kubernetes_limits(request.limits)
+    validate_broker_kubernetes_limits(
+        request.limits, gpu_resource_name=gpu_resource_name
+    )
     memory = _memory_quantity(request.limits.memory)
     resources = {
         "requests": {"cpu": str(request.limits.cpus), "memory": memory},
         "limits": {"cpu": str(request.limits.cpus), "memory": memory},
     }
+    if request.limits.gpu_count is not None:
+        resources["limits"][gpu_resource_name] = str(request.limits.gpu_count)
     volumes = _broker_volumes(name, request)
     volume_mounts = _broker_volume_mounts(request)
     init_containers = _broker_init_containers(
         request, archive_extractor_image=archive_extractor_image
     )
+    container: dict[str, Any] = {
+        "name": "job",
+        "image": request.image,
+        "command": request.command,
+        "workingDir": request.workdir,
+        "env": [{"name": key, "value": value} for key, value in request.env.items()],
+        "resources": resources,
+        "volumeMounts": volume_mounts,
+        "securityContext": _container_security_context(
+            read_only=request.limits.read_only
+        )
+        | {"runAsUser": 1000, "runAsGroup": 1000},
+    }
+    if request.image_pull_policy:
+        container["imagePullPolicy"] = request.image_pull_policy
+    pod_spec: dict[str, Any] = {
+        "serviceAccountName": service_account_name,
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "securityContext": _pod_security_context(),
+        "initContainers": init_containers,
+        "containers": [container],
+        "volumes": volumes,
+    }
+    if node_selector:
+        pod_spec["nodeSelector"] = node_selector
+    if tolerations:
+        pod_spec["tolerations"] = list(tolerations)
+    if runtime_class_name:
+        pod_spec["runtimeClassName"] = runtime_class_name
+    if image_pull_secrets:
+        pod_spec["imagePullSecrets"] = [
+            {"name": secret_name} for secret_name in image_pull_secrets
+        ]
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -441,31 +501,7 @@ def build_broker_job(
                     "labels": labels,
                     "annotations": _unsupported_docker_semantics_annotations(),
                 },
-                "spec": {
-                    "serviceAccountName": service_account_name,
-                    "restartPolicy": "Never",
-                    "automountServiceAccountToken": False,
-                    "securityContext": _pod_security_context(),
-                    "initContainers": init_containers,
-                    "containers": [
-                        {
-                            "name": "job",
-                            "image": request.image,
-                            "command": request.command,
-                            "workingDir": request.workdir,
-                            "env": [
-                                {"name": key, "value": value}
-                                for key, value in request.env.items()
-                            ],
-                            "resources": resources,
-                            "volumeMounts": volume_mounts,
-                            "securityContext": _container_security_context(
-                                read_only=request.limits.read_only
-                            ),
-                        }
-                    ],
-                    "volumes": volumes,
-                },
+                "spec": pod_spec,
             },
         },
     }
@@ -607,7 +643,8 @@ def _broker_init_containers(
                 {"name": "archives", "mountPath": "/archives", "readOnly": True},
                 {"name": f"mount-{index}", "mountPath": "/work"},
             ],
-            "securityContext": _container_security_context(read_only=True),
+            "securityContext": _container_security_context(read_only=True)
+            | {"runAsUser": 1000, "runAsGroup": 1000},
         }
         for index, _mount in enumerate(request.mounts)
     ]
@@ -675,26 +712,41 @@ def _pod_template(
                 "readOnly": True,
             }
         )
+    env = _challenge_env(
+        spec,
+        docker_broker_url=docker_broker_url,
+        managed_postgres=managed_postgres,
+    )
+    resources = _challenge_resources(spec, gpu_resource_name)
+    containers: list[dict[str, Any]] = [
+        {
+            "name": "challenge",
+            "image": spec.image,
+            "ports": [{"name": "http", "containerPort": spec.port}],
+            "env": env,
+            "volumeMounts": volume_mounts,
+            "resources": resources,
+            "readinessProbe": _http_probe("/health", spec.port),
+            "livenessProbe": _http_probe("/health", spec.port),
+            "securityContext": _container_security_context(),
+        }
+    ]
+    if spec.worker_command:
+        containers.append(
+            {
+                "name": "worker",
+                "image": spec.image,
+                "command": list(spec.worker_command),
+                "env": env,
+                "volumeMounts": volume_mounts,
+                "resources": resources,
+                "securityContext": _container_security_context(),
+            }
+        )
     pod_spec: dict[str, Any] = {
         "automountServiceAccountToken": False,
         "securityContext": _pod_security_context(),
-        "containers": [
-            {
-                "name": "challenge",
-                "image": spec.image,
-                "ports": [{"name": "http", "containerPort": spec.port}],
-                "env": _challenge_env(
-                    spec,
-                    docker_broker_url=docker_broker_url,
-                    managed_postgres=managed_postgres,
-                ),
-                "volumeMounts": volume_mounts,
-                "resources": _challenge_resources(spec, gpu_resource_name),
-                "readinessProbe": _http_probe("/health", spec.port),
-                "livenessProbe": _http_probe("/health", spec.port),
-                "securityContext": _container_security_context(),
-            }
-        ],
+        "containers": containers,
         "volumes": volumes,
     }
     if node_selector:
@@ -812,6 +864,17 @@ def _memory_quantity(value: str) -> str:
     if suffix in suffixes and stripped[:-1]:
         return f"{stripped[:-1]}{suffixes[suffix]}"
     return stripped
+
+
+def _validate_gpu_resource_name(gpu_resource_name: str) -> None:
+    if not gpu_resource_name or gpu_resource_name.strip() != gpu_resource_name:
+        raise ValueError("Kubernetes GPU resource name must be non-empty")
+    if gpu_resource_name.startswith("kubernetes.io/"):
+        raise ValueError("Kubernetes GPU resource name must not use kubernetes.io/*")
+    if "/" not in gpu_resource_name:
+        raise ValueError("Kubernetes GPU resource name must be qualified")
+    if not _GPU_RESOURCE_NAME_RE.fullmatch(gpu_resource_name):
+        raise ValueError(f"invalid Kubernetes GPU resource name: {gpu_resource_name!r}")
 
 
 def _challenge_resources(spec: ChallengeSpec, gpu_resource_name: str) -> dict[str, Any]:

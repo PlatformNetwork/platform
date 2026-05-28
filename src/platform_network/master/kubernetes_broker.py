@@ -58,12 +58,22 @@ class KubernetesBrokerService:
         service_account_name: str = "platform-broker",
         log_limit_bytes: int = 64_000,
         allowed_images: tuple[str, ...] = ("ghcr.io/platformnetwork/",),
+        gpu_resource_name: str = "nvidia.com/gpu",
+        image_pull_secrets: tuple[str, ...] = (),
+        node_selector: dict[str, str] | None = None,
+        tolerations: tuple[dict[str, object], ...] = (),
+        runtime_class_name: str | None = None,
     ) -> None:
         self.client = client
         self.namespace = namespace
         self.service_account_name = service_account_name
         self.log_limit_bytes = log_limit_bytes
         self.allowed_images = allowed_images
+        self.gpu_resource_name = gpu_resource_name
+        self.image_pull_secrets = tuple(image_pull_secrets)
+        self.node_selector = dict(node_selector or {})
+        self.tolerations = tuple(dict(toleration) for toleration in tolerations)
+        self.runtime_class_name = runtime_class_name
 
     @classmethod
     def from_settings(cls, settings: Any) -> KubernetesBrokerService:
@@ -76,6 +86,11 @@ class KubernetesBrokerService:
             namespace=settings.kubernetes.namespace,
             service_account_name=settings.kubernetes.service_account,
             allowed_images=tuple(settings.docker.broker_allowed_images),
+            gpu_resource_name=settings.kubernetes.gpu_resource_name,
+            image_pull_secrets=tuple(settings.kubernetes.image_pull_secrets),
+            node_selector=settings.kubernetes.node_selector,
+            tolerations=tuple(settings.kubernetes.tolerations),
+            runtime_class_name=settings.kubernetes.runtime_class_name,
         )
 
     def run(self, challenge_slug: str, request: BrokerRunRequest) -> BrokerRunResponse:
@@ -88,6 +103,11 @@ class KubernetesBrokerService:
                 namespace=self.namespace,
                 service_account_name=self.service_account_name,
                 run_id=run_id,
+                gpu_resource_name=self.gpu_resource_name,
+                image_pull_secrets=self.image_pull_secrets,
+                node_selector=self.node_selector,
+                tolerations=self.tolerations,
+                runtime_class_name=self.runtime_class_name,
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -412,6 +432,33 @@ class KubernetesBrokerRouterService:
                 docker_broker_url=self.settings.docker.broker_url,
             )
             return KubernetesAgentBrokerService(client)
+        kubernetes_settings = self.settings.kubernetes
+        defaults = getattr(kubernetes_settings, "target_defaults", None)
+        node_selector = {
+            **getattr(kubernetes_settings, "node_selector", {}),
+            **getattr(defaults, "node_selector", {}),
+            **getattr(target, "node_selector", {}),
+        }
+        tolerations = (
+            getattr(target, "tolerations", ())
+            or getattr(defaults, "tolerations", ())
+            or getattr(kubernetes_settings, "tolerations", ())
+        )
+        runtime_class_name = (
+            getattr(target, "runtime_class_name", None)
+            or getattr(defaults, "runtime_class_name", None)
+            or getattr(kubernetes_settings, "runtime_class_name", None)
+        )
+        image_pull_secrets = getattr(defaults, "image_pull_secrets", ()) or getattr(
+            kubernetes_settings, "image_pull_secrets", ()
+        )
+        gpu_resource_name = (
+            getattr(defaults, "gpu_resource_name", None)
+            or getattr(kubernetes_settings, "gpu_resource_name", None)
+            or "nvidia.com/gpu"
+        )
+        if not isinstance(gpu_resource_name, str):
+            gpu_resource_name = "nvidia.com/gpu"
         return KubernetesBrokerService(
             client=KubernetesClient(
                 namespace=target.namespace,
@@ -420,9 +467,14 @@ class KubernetesBrokerRouterService:
             ),
             namespace=target.namespace,
             service_account_name=(
-                target.service_account or self.settings.kubernetes.service_account
+                target.service_account or kubernetes_settings.service_account
             ),
             allowed_images=tuple(self.settings.docker.broker_allowed_images),
+            gpu_resource_name=gpu_resource_name,
+            image_pull_secrets=tuple(image_pull_secrets),
+            node_selector=node_selector,
+            tolerations=tuple(tolerations),
+            runtime_class_name=runtime_class_name,
         )
 
     @classmethod

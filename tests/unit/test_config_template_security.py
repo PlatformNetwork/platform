@@ -276,3 +276,27 @@ def test_production_settings_reject_sqlite_broad_prefixes_and_insecure_tls(
     )
     with pytest.raises(ValueError, match="verify_tls=true"):
         load_settings(config)
+
+
+def test_platform_docs_define_kubernetes_broker_gpu_contract() -> None:
+    root = Path(__file__).resolve().parents[2]
+    architecture_doc = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
+    security_doc = (root / "docs" / "security.md").read_text(encoding="utf-8")
+    master_example = (root / "config" / "master.example.yaml").read_text(
+        encoding="utf-8"
+    )
+    combined = f"{architecture_doc}\n{security_doc}\n{master_example}"
+
+    for expected in (
+        "Broker clients request GPUs with `limits.gpu_count`",
+        "`gpu_count=None` or an omitted field means CPU-only",
+        "Platform owns `gpu_resource_name`",
+        "resources.limits['nvidia.com/gpu']",
+        "Device IDs are metadata for observability",
+        "not Kubernetes placement semantics",
+        "Network isolation depends on CNI support",
+        "clients such as PRISM do not set this name",
+    ):
+        assert expected in combined
+
+    assert "gpu_resource_name: nvidia.com/gpu" in master_example

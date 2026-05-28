@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated, Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -18,6 +20,7 @@ class BrokerLimits(BaseModel):
     memory: str = Field(default="4g", min_length=1)
     memory_swap: str | None = Field(default="4g", min_length=1)
     pids_limit: int = Field(default=512, ge=1)
+    gpu_count: Annotated[int, Field(strict=True, ge=1)] | None = None
     network: str = "none"
     read_only: bool = True
     user: str | None = None
@@ -32,6 +35,7 @@ class BrokerRunRequest(BaseModel):
     job_id: str = Field(..., min_length=1, max_length=128)
     task_id: str | None = Field(default=None, max_length=256)
     image: str = Field(..., min_length=1, max_length=255)
+    image_pull_policy: Literal["Always", "IfNotPresent", "Never"] | None = None
     command: list[str] = Field(..., min_length=1)
     workdir: str | None = None
     env: dict[str, str] = Field(default_factory=dict)

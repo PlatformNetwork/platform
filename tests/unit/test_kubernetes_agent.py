@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from platform_network.kubernetes.agent import create_kubernetes_agent_app
+from platform_network.kubernetes.agent import (
+    KubernetesAgentClient,
+    create_kubernetes_agent_app,
+)
 from platform_network.master.docker_orchestrator import ChallengeRuntime
 from platform_network.master.kubernetes_orchestrator import KubernetesOrchestrator
 from platform_network.schemas.docker_broker import (
     BrokerCleanupResponse,
+    BrokerLimits,
     BrokerListResponse,
+    BrokerRunRequest,
     BrokerRunResponse,
 )
 
@@ -176,6 +181,145 @@ def test_kubernetes_agent_auth_runtime_and_broker_routes() -> None:
     assert listed.status_code == 200
     assert listed.json() == {"containers": []}
     assert broker.calls[-1] == ("list", "demo", "job-1")
+
+
+def test_platform_sdk_kubernetes_agent_client_run_broker_preserves_generic_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client_kwargs"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def post(self, path: str, *, json, headers):
+            captured["path"] = path
+            captured["json"] = json
+            captured["headers"] = headers
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", f"http://agent{path}"),
+                json={
+                    "container_name": "job-demo",
+                    "stdout": "",
+                    "stderr": "",
+                    "returncode": 0,
+                    "timed_out": False,
+                },
+            )
+
+    import platform_network.kubernetes.agent as agent_module
+
+    monkeypatch.setattr(agent_module.httpx, "Client", FakeClient)
+    response = KubernetesAgentClient(
+        target_id="target-1",
+        base_url="http://agent",
+        token="agent-token",
+    ).run_broker(
+        "demo",
+        BrokerRunRequest(
+            job_id="job-1",
+            task_id="terminal-bench-1",
+            image="ghcr.io/platformnetwork/worker:1",
+            image_pull_policy="Always",
+            command=["python", "-m", "runner"],
+            workdir="/workspace",
+            env={"PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token"},
+            labels={"platform.job": "job-1", "custom.label": "survives"},
+            limits=BrokerLimits(cpus=1.5, memory="768Mi", gpu_count=1),
+            timeout_seconds=44,
+        ),
+    )
+
+    assert response.container_name == "job-demo"
+    assert captured["path"] == "/v1/broker/demo/run"
+    assert captured["headers"] == {"Authorization": "Bearer agent-token"}
+    payload = cast(dict[str, Any], captured["json"])
+    assert payload["image"] == "ghcr.io/platformnetwork/worker:1"
+    assert payload["image_pull_policy"] == "Always"
+    assert payload["command"] == ["python", "-m", "runner"]
+    assert payload["workdir"] == "/workspace"
+    assert payload["env"] == {"PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token"}
+    assert payload["labels"] == {"platform.job": "job-1", "custom.label": "survives"}
+    assert payload["limits"]["cpus"] == 1.5
+    assert payload["limits"]["memory"] == "768Mi"
+    assert payload["limits"]["gpu_count"] == 1
+    assert payload["timeout_seconds"] == 44
+    assert "agent_challenge" not in payload
+    assert "provider_ref" not in payload
+    assert "miner_env" not in payload
+
+
+def test_kubernetes_agent_client_run_broker_uses_job_aware_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_timeouts: list[float] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured_timeouts.append(cast(float, kwargs["timeout"]))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def post(self, path: str, *, json, headers):
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", f"http://agent{path}"),
+                json={
+                    "container_name": "job-demo",
+                    "stdout": "",
+                    "stderr": "",
+                    "returncode": 0,
+                    "timed_out": False,
+                },
+            )
+
+    import platform_network.kubernetes.agent as agent_module
+
+    monkeypatch.setattr(agent_module.httpx, "Client", FakeClient)
+    client = KubernetesAgentClient(
+        target_id="target-1",
+        base_url="http://agent",
+        token="agent-token",
+        timeout_seconds=30,
+    )
+    client.run_broker(
+        "demo",
+        BrokerRunRequest(
+            job_id="job-1",
+            image="ghcr.io/platformnetwork/worker:1",
+            command=["true"],
+            timeout_seconds=900,
+        ),
+    )
+
+    KubernetesAgentClient(
+        target_id="target-1",
+        base_url="http://agent",
+        token="agent-token",
+        timeout_seconds=1000,
+    ).run_broker(
+        "demo",
+        BrokerRunRequest(
+            job_id="job-2",
+            image="ghcr.io/platformnetwork/worker:1",
+            command=["true"],
+            timeout_seconds=10,
+        ),
+    )
+
+    assert captured_timeouts[0] >= 915
+    assert captured_timeouts[1] >= 1000
 
 
 class FakeOrchestrator:

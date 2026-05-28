@@ -100,7 +100,9 @@ class KubernetesAgentClient:
         self, challenge_slug: str, request: BrokerRunRequest
     ) -> BrokerRunResponse:
         payload = self._post(
-            f"/v1/broker/{challenge_slug}/run", request.model_dump(mode="json")
+            f"/v1/broker/{challenge_slug}/run",
+            request.model_dump(mode="json"),
+            timeout_seconds=max(self.timeout_seconds, request.timeout_seconds + 15),
         )
         return BrokerRunResponse.model_validate(payload)
 
@@ -165,10 +167,18 @@ class KubernetesAgentClient:
             )
         return response
 
-    def _post(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, object]:
         with httpx.Client(
             base_url=self.base_url,
-            timeout=self.timeout_seconds,
+            timeout=(
+                timeout_seconds if timeout_seconds is not None else self.timeout_seconds
+            ),
             verify=self.verify_tls,
         ) as client:
             response = client.post(path, json=payload, headers=self._headers())

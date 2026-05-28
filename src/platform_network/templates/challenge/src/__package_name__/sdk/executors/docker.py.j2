@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 _IMAGE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9./_:@+-]{0,254}$")
+_IMAGE_PULL_POLICIES = {"Always", "IfNotPresent", "Never"}
 
 
 class DockerExecutorError(RuntimeError):
@@ -52,6 +53,7 @@ class DockerLimits:
     cap_drop: tuple[str, ...] = ("ALL",)
     security_opt: tuple[str, ...] = ("no-new-privileges",)
     init: bool = True
+    gpu_count: int | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.cpus) or self.cpus <= 0:
@@ -62,6 +64,14 @@ class DockerLimits:
             raise DockerExecutorError("Docker memory swap limit cannot be empty")
         if self.pids_limit < 1:
             raise DockerExecutorError("Docker PID limit must be at least 1")
+        if self.gpu_count is not None and (
+            isinstance(self.gpu_count, bool)
+            or not isinstance(self.gpu_count, int)
+            or self.gpu_count < 1
+        ):
+            raise DockerExecutorError(
+                "Docker GPU count must be a positive integer when set"
+            )
         if not self.cap_drop:
             raise DockerExecutorError(
                 "Docker cap_drop must drop at least one capability"
@@ -84,6 +94,7 @@ class DockerRunSpec:
     labels: Mapping[str, str] = field(default_factory=dict)
     name: str | None = None
     limits: DockerLimits = field(default_factory=DockerLimits)
+    image_pull_policy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +319,12 @@ class DockerExecutor:
             raise DockerExecutorError(f"Docker image is not allowed: {spec.image}")
         if not spec.command:
             raise DockerExecutorError("Docker command cannot be empty")
+        if spec.image_pull_policy is not None and (
+            spec.image_pull_policy not in _IMAGE_PULL_POLICIES
+        ):
+            raise DockerExecutorError(
+                "Docker image pull policy must be Always, IfNotPresent, or Never"
+            )
         if spec.limits.network not in {"none", "default"} and (
             not spec.limits.network.startswith("platform_")
         ):
@@ -331,6 +348,7 @@ class DockerExecutor:
             "job_id": spec.labels.get("platform.job", "job"),
             "task_id": spec.labels.get("platform.task"),
             "image": spec.image,
+            "image_pull_policy": spec.image_pull_policy,
             "command": list(spec.command),
             "workdir": spec.workdir,
             "env": dict(spec.env),

@@ -16,6 +16,8 @@ from platform_network.challenge_sdk.executors.docker import (
     DockerMount,
     DockerRunSpec,
 )
+from platform_network.kubernetes.resources import build_broker_job
+from platform_network.schemas.docker_broker import BrokerRunRequest
 
 
 def test_build_run_command_has_security_flags(tmp_path: Path) -> None:
@@ -61,6 +63,17 @@ def test_docker_limits_default_to_hardened_runtime_controls() -> None:
     assert limits.read_only is True
     assert limits.cap_drop == ("ALL",)
     assert limits.security_opt == ("no-new-privileges",)
+
+
+def test_docker_limits_gpu_count_default_and_positive_request() -> None:
+    assert DockerLimits().gpu_count is None
+    assert DockerLimits(gpu_count=1).gpu_count == 1
+
+
+@pytest.mark.parametrize("gpu_count", [0, -1, True, "1", 1.5])
+def test_docker_limits_reject_invalid_gpu_count(gpu_count: Any) -> None:
+    with pytest.raises(DockerExecutorError, match="GPU count"):
+        DockerLimits(gpu_count=gpu_count)
 
 
 @pytest.mark.parametrize(
@@ -118,6 +131,36 @@ def test_rejects_images_outside_allowlist(tmp_path: Path) -> None:
         DockerExecutor(challenge="agent", allowed_images=("platformnetwork/",)).run(
             spec, timeout_seconds=1
         )
+
+
+def test_rejects_invalid_image_pull_policy_before_broker_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform_network.challenge_sdk.executors.docker as module
+
+    called = False
+
+    def fake_urlopen(request: object, timeout: int) -> object:
+        nonlocal called
+        called = True
+        raise AssertionError("broker POST should not be attempted")
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    spec = DockerRunSpec(
+        image="python:3.12-slim",
+        command=("python", "-V"),
+        image_pull_policy="Sometimes",
+    )
+
+    with pytest.raises(DockerExecutorError, match="image pull policy"):
+        DockerExecutor(
+            challenge="agent",
+            backend="broker",
+            broker_url="http://broker",
+            broker_token="tok",
+            allowed_images=("python:",),
+        ).run(spec, timeout_seconds=20)
+    assert called is False
 
 
 def test_allows_default_network_for_broker_compatible_jobs(tmp_path: Path) -> None:
@@ -209,7 +252,7 @@ def test_list_containers_uses_challenge_and_job_filters(
     ]
 
 
-def test_broker_backend_posts_run_request(
+def test_platform_sdk_broker_backend_posts_run_request(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import platform_network.challenge_sdk.executors.docker as module
@@ -253,8 +296,24 @@ def test_broker_backend_posts_run_request(
         DockerRunSpec(
             image="python:3.12-slim",
             command=("python", "-V"),
+            workdir="/workspace/task",
+            env={
+                "PLATFORM_RUNNER_MODE": "controlled",
+                "PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token",
+            },
             mounts=(DockerMount(tmp_path, "/mnt"),),
-            labels={"platform.job": "job-1"},
+            labels={
+                "platform.job": "job-1",
+                "platform.task": "terminal-bench-1",
+                "custom.label": "survives",
+            },
+            limits=DockerLimits(
+                cpus=1.5,
+                memory="768m",
+                pids_limit=96,
+                gpu_count=1,
+            ),
+            image_pull_policy="IfNotPresent",
         ),
         timeout_seconds=20,
     )
@@ -265,8 +324,156 @@ def test_broker_backend_posts_run_request(
     assert headers["Authorization"] == "Bearer tok"
     payload = cast(dict[str, Any], captured["payload"])
     assert payload["image"] == "python:3.12-slim"
-    assert payload["mounts"][0]["target"] == "/mnt"
+    assert payload["command"] == ["python", "-V"]
+    assert payload["workdir"] == "/workspace/task"
+    assert payload["image_pull_policy"] == "IfNotPresent"
+    assert payload["env"] == {
+        "PLATFORM_RUNNER_MODE": "controlled",
+        "PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token",
+    }
+    assert payload["mounts"] == [
+        {
+            "target": "/mnt",
+            "read_only": True,
+            "source_type": "directory",
+            "source_name": ".",
+            "archive_b64": payload["mounts"][0]["archive_b64"],
+        }
+    ]
+    assert payload["labels"] == {
+        "platform.job": "job-1",
+        "platform.task": "terminal-bench-1",
+        "custom.label": "survives",
+    }
+    assert payload["limits"]["cpus"] == 1.5
+    assert payload["limits"]["memory"] == "768m"
+    assert payload["limits"]["pids_limit"] == 96
+    assert payload["limits"]["gpu_count"] == 1
+    assert payload["job_id"] == "job-1"
+    assert payload["task_id"] == "terminal-bench-1"
     assert payload["timeout_seconds"] == 20
+    assert "Bearer tok" not in json.dumps(payload)
+
+
+def test_broker_backend_gpu_payload_round_trips_to_kubernetes_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform_network.challenge_sdk.executors.docker as module
+
+    captured: dict[str, Any] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "container_name": "agent-gpu-job",
+                    "stdout": "",
+                    "stderr": "",
+                    "returncode": 0,
+                    "timed_out": False,
+                }
+            ).encode()
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        captured["payload_json"] = request.data.decode()  # type: ignore[attr-defined]
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    result = DockerExecutor(
+        challenge="agent",
+        backend="broker",
+        broker_url="http://broker",
+        broker_token="tok",
+        allowed_images=("python:",),
+    ).run(
+        DockerRunSpec(
+            image="python:3.12-slim",
+            command=("python", "-V"),
+            labels={"platform.job": "gpu-job", "platform.task": "architecture"},
+            limits=DockerLimits(gpu_count=1),
+        ),
+        timeout_seconds=20,
+    )
+
+    assert result.returncode == 0
+    broker_request = BrokerRunRequest.model_validate_json(captured["payload_json"])
+    job = build_broker_job(
+        "agent",
+        broker_request,
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+    resources = job["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert broker_request.limits.gpu_count == 1
+    assert resources["limits"]["nvidia.com/gpu"] == "1"
+    assert "nvidia.com/gpu" not in resources["requests"]
+
+
+def test_broker_backend_cpu_payload_round_trips_without_gpu_resource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import platform_network.challenge_sdk.executors.docker as module
+
+    captured: dict[str, Any] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "container_name": "agent-cpu-job",
+                    "stdout": "",
+                    "stderr": "",
+                    "returncode": 0,
+                    "timed_out": False,
+                }
+            ).encode()
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        captured["payload_json"] = request.data.decode()  # type: ignore[attr-defined]
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    result = DockerExecutor(
+        challenge="agent",
+        backend="broker",
+        broker_url="http://broker",
+        broker_token="tok",
+        allowed_images=("python:",),
+    ).run(
+        DockerRunSpec(
+            image="python:3.12-slim",
+            command=("python", "-V"),
+            labels={"platform.job": "cpu-job"},
+        ),
+        timeout_seconds=20,
+    )
+
+    assert result.returncode == 0
+    broker_request = BrokerRunRequest.model_validate_json(captured["payload_json"])
+    job = build_broker_job(
+        "agent",
+        broker_request,
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+    resources = job["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert broker_request.limits.gpu_count is None
+    assert "nvidia.com/gpu" not in resources["limits"]
+    assert "nvidia.com/gpu" not in resources["requests"]
 
 
 def test_broker_backend_lists_containers(monkeypatch: pytest.MonkeyPatch) -> None:

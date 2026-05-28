@@ -271,6 +271,34 @@ def test_managed_postgres_challenge_runtime_env_uses_database_url_secret_ref() -
     }
 
 
+def test_challenge_worker_sidecar_uses_same_image_env_and_storage() -> None:
+    workload = build_challenge_workload(
+        ChallengeSpec(
+            slug="agent-challenge",
+            image="ghcr.io/platformnetwork/agent-challenge:1",
+            worker_command=("agent-challenge-worker",),
+            required_capabilities=("get_weights", "proxy_routes", "docker_executor"),
+        ),
+        namespace="platform",
+        mode="statefulset",
+        managed_postgres=True,
+        docker_broker_url="http://platform-master-broker:8082",
+    )
+
+    containers = workload["spec"]["template"]["spec"]["containers"]
+    challenge, worker = containers
+
+    assert challenge["name"] == "challenge"
+    assert worker["name"] == "worker"
+    assert worker["image"] == challenge["image"]
+    assert worker["command"] == ["agent-challenge-worker"]
+    assert worker["env"] == challenge["env"]
+    assert worker["volumeMounts"] == challenge["volumeMounts"]
+    assert "ports" not in worker
+    assert "readinessProbe" not in worker
+    assert _env_by_name(worker["env"])["CHALLENGE_DOCKER_BACKEND"]["value"] == "broker"
+
+
 def test_managed_postgres_database_url_conflict_is_rejected() -> None:
     spec = ChallengeSpec(
         slug="agent-challenge",
@@ -734,6 +762,8 @@ def test_broker_job_is_non_privileged_and_supports_tmpfs_and_archive_mounts() ->
     )
     assert container["securityContext"]["allowPrivilegeEscalation"] is False
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    assert container["securityContext"]["runAsUser"] == 1000
+    assert container["securityContext"]["runAsGroup"] == 1000
     assert job["spec"]["activeDeadlineSeconds"] == request.timeout_seconds
     assert {"name": "tmpfs-0", "mountPath": "/tmp"} in container["volumeMounts"]
     assert "/var/run/docker.sock" not in repr(job)
@@ -771,6 +801,11 @@ def test_broker_job_is_non_privileged_and_supports_tmpfs_and_archive_mounts() ->
     assert mounted_job["spec"]["template"]["spec"]["initContainers"][0]["name"] == (
         "unpack-mount-0"
     )
+    init_security = mounted_job["spec"]["template"]["spec"]["initContainers"][0][
+        "securityContext"
+    ]
+    assert init_security["runAsUser"] == 1000
+    assert init_security["runAsGroup"] == 1000
     assert {
         "name": "mount-0",
         "mountPath": "/work",
@@ -778,6 +813,255 @@ def test_broker_job_is_non_privileged_and_supports_tmpfs_and_archive_mounts() ->
     } in mounted_job["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
     assert mount_secret is not None
     assert mount_secret["stringData"]["mount-0.tar.gz.b64"] == archive
+
+
+def test_platform_sdk_broker_job_contract_keeps_secrets_out_of_job_spec() -> None:
+    archive = _archive_b64()
+    request = BrokerRunRequest(
+        job_id="job-1",
+        task_id="terminal-bench/hello-world",
+        image="ghcr.io/platformnetwork/controlled-runner:1",
+        image_pull_policy="Never",
+        command=["python", "-m", "runner"],
+        workdir="/workspace",
+        env={"PLATFORM_TOKEN_FILE": "/var/run/secrets/platform/token"},
+        labels={"custom.label": "survives"},
+        limits=BrokerLimits(cpus=1.25, memory="640Mi", read_only=True),
+        mounts=[BrokerMount(target="/workspace/input", archive_b64=archive)],
+        timeout_seconds=123,
+    )
+
+    job = build_broker_job(
+        "agent-challenge",
+        request,
+        namespace="platform",
+        service_account_name="platform-master",
+        run_id="runabcd1",
+    )
+    mount_secret = build_broker_mount_secret(
+        "agent-challenge", request, namespace="platform", run_id="runabcd1"
+    )
+    network_policy = build_broker_network_policy(
+        "agent-challenge", request, namespace="platform", run_id="runabcd1"
+    )
+
+    pod_template = job["spec"]["template"]
+    pod_spec = pod_template["spec"]
+    container = pod_spec["containers"][0]
+    init_container = pod_spec["initContainers"][0]
+    labels = {
+        "app.kubernetes.io/name": "platform-network",
+        "app.kubernetes.io/managed-by": "platform-network",
+        "platform.component": "broker-job",
+        "platform.challenge.slug": "agent-challenge",
+        "platform.job": "job-1",
+        "platform.task": "terminal-bench-hello-world",
+        "platform.run": "runabcd1",
+    }
+
+    assert job["metadata"]["labels"] == labels
+    assert pod_template["metadata"]["labels"] == labels
+    assert job["spec"]["ttlSecondsAfterFinished"] == 300
+    assert job["spec"]["backoffLimit"] == 0
+    assert job["spec"]["activeDeadlineSeconds"] == 123
+    assert pod_spec["serviceAccountName"] == "platform-master"
+    assert pod_spec["automountServiceAccountToken"] is False
+    assert pod_spec["securityContext"] == {
+        "runAsNonRoot": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+        "fsGroup": 1000,
+    }
+    assert container["securityContext"]["allowPrivilegeEscalation"] is False
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    assert container["securityContext"]["runAsUser"] == 1000
+    assert container["securityContext"]["runAsGroup"] == 1000
+    assert init_container["securityContext"]["runAsUser"] == 1000
+    assert container["resources"] == {
+        "requests": {"cpu": "1.25", "memory": "640Mi"},
+        "limits": {"cpu": "1.25", "memory": "640Mi"},
+    }
+    assert container["imagePullPolicy"] == "Never"
+    archive_volume = {
+        "name": "archives",
+        "secret": {"secretName": mount_secret["metadata"]["name"]},
+    }
+    assert archive_volume in pod_spec["volumes"]
+    assert archive not in repr(job)
+    assert "TOKEN_SHOULD_NOT_APPEAR" not in repr(job)
+    assert mount_secret["stringData"] == {"mount-0.tar.gz.b64": archive}
+    assert network_policy["metadata"]["labels"]["platform.run"] == "runabcd1"
+    assert network_policy["spec"]["policyTypes"] == ["Ingress", "Egress"]
+
+
+def test_broker_job_maps_gpu_count_to_default_resource_limit() -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        command=["python", "-V"],
+        limits=BrokerLimits(cpus=1, memory="512Mi", gpu_count=1),
+    )
+
+    job = build_broker_job(
+        "demo",
+        request,
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+
+    resources = job["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert resources["requests"] == {"cpu": "1.0", "memory": "512Mi"}
+    assert resources["limits"]["cpu"] == "1.0"
+    assert resources["limits"]["memory"] == "512Mi"
+    assert resources["limits"]["nvidia.com/gpu"] == "1"
+    assert "nvidia.com/gpu" not in resources["requests"]
+    assert "gpu_device_ids" not in repr(job)
+
+
+def test_broker_job_runtime_fields_include_gpu_target_pod_spec_fields() -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        command=["python", "-V"],
+        limits=BrokerLimits(cpus=1, memory="512Mi", gpu_count=1),
+    )
+
+    job = build_broker_job(
+        "demo",
+        request,
+        namespace="platform",
+        service_account_name="platform-master",
+        image_pull_secrets=("pull-secret",),
+        node_selector={"accelerator": "nvidia"},
+        tolerations=({"key": "gpu", "operator": "Exists"},),
+        runtime_class_name="nvidia",
+    )
+
+    pod_spec = job["spec"]["template"]["spec"]
+    resources = pod_spec["containers"][0]["resources"]
+    assert pod_spec["imagePullSecrets"] == [{"name": "pull-secret"}]
+    assert pod_spec["nodeSelector"] == {"accelerator": "nvidia"}
+    assert pod_spec["tolerations"] == [{"key": "gpu", "operator": "Exists"}]
+    assert pod_spec["runtimeClassName"] == "nvidia"
+    assert resources["limits"]["nvidia.com/gpu"] == "1"
+    assert "nvidia.com/gpu" not in resources["requests"]
+
+
+def test_broker_job_maps_image_pull_policy_to_main_container_only() -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        image_pull_policy="IfNotPresent",
+        command=["python", "-V"],
+        mounts=[BrokerMount(target="/work", archive_b64=_archive_b64())],
+    )
+
+    job = build_broker_job(
+        "demo",
+        request,
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+
+    pod_spec = job["spec"]["template"]["spec"]
+    assert pod_spec["containers"][0]["imagePullPolicy"] == "IfNotPresent"
+    assert "imagePullPolicy" not in pod_spec["initContainers"][0]
+
+
+def test_broker_job_omits_gpu_resource_when_gpu_count_is_none() -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        command=["python", "-V"],
+        limits=BrokerLimits(cpus=1, memory="512Mi"),
+    )
+
+    job = build_broker_job(
+        "demo",
+        request,
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+
+    pod_spec = job["spec"]["template"]["spec"]
+    resources = pod_spec["containers"][0]["resources"]
+    assert resources == {
+        "requests": {"cpu": "1.0", "memory": "512Mi"},
+        "limits": {"cpu": "1.0", "memory": "512Mi"},
+    }
+    assert "imagePullSecrets" not in pod_spec
+    assert "nodeSelector" not in pod_spec
+    assert "tolerations" not in pod_spec
+    assert "runtimeClassName" not in pod_spec
+    assert "imagePullPolicy" not in pod_spec["containers"][0]
+
+
+def test_broker_job_maps_gpu_count_to_custom_resource_limit() -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        command=["python", "-V"],
+        limits=BrokerLimits(gpu_count=1),
+    )
+
+    job = build_broker_job(
+        "demo",
+        request,
+        namespace="platform",
+        service_account_name="platform-master",
+        gpu_resource_name="example.com/gpu",
+    )
+
+    resources = job["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert resources["limits"]["example.com/gpu"] == "1"
+    assert "example.com/gpu" not in resources["requests"]
+    assert "nvidia.com/gpu" not in resources["limits"]
+
+
+@pytest.mark.parametrize(
+    "gpu_resource_name, message",
+    [
+        ("", "non-empty"),
+        (" kubernetes.io/gpu", "non-empty"),
+        ("kubernetes.io/gpu", "kubernetes.io"),
+        ("gpu", "qualified"),
+        ("example.com/", "invalid Kubernetes GPU resource name"),
+    ],
+)
+def test_broker_job_rejects_invalid_gpu_resource_names(
+    gpu_resource_name: str, message: str
+) -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        command=["python", "-V"],
+        limits=BrokerLimits(gpu_count=1),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        build_broker_job(
+            "demo",
+            request,
+            namespace="platform",
+            service_account_name="platform-master",
+            gpu_resource_name=gpu_resource_name,
+        )
+
+
+def test_broker_job_defensively_rejects_invalid_gpu_count() -> None:
+    request = BrokerRunRequest(
+        job_id="job-1",
+        image="ghcr.io/platformnetwork/worker:1",
+        command=["python", "-V"],
+        limits=BrokerLimits().model_copy(update={"gpu_count": True}),
+    )
+
+    with pytest.raises(ValueError, match="gpu_count"):
+        build_broker_job(
+            "demo",
+            request,
+            namespace="platform",
+            service_account_name="platform-master",
+        )
 
 
 def test_broker_mount_init_extractor_validates_archive_members(tmp_path: Path) -> None:
