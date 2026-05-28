@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
 import inspect
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import FastAPI, Header, HTTPException, status
+from starlette.concurrency import run_in_threadpool
 
 from platform_network.kubernetes.client import KubernetesClient
 from platform_network.kubernetes.names import broker_job_name
@@ -241,10 +241,28 @@ class KubernetesBrokerRouterService:
     def run(self, challenge_slug: str, request: BrokerRunRequest) -> BrokerRunResponse:
         return self._service_for(challenge_slug).run(challenge_slug, request)
 
+    async def run_async(
+        self, challenge_slug: str, request: BrokerRunRequest
+    ) -> BrokerRunResponse:
+        service = await self._service_for_async(challenge_slug)
+        run_async = getattr(service, "run_async", None)
+        if callable(run_async):
+            return await _resolve_value(run_async(challenge_slug, request))
+        return await run_in_threadpool(service.run, challenge_slug, request)
+
     def cleanup(
         self, challenge_slug: str, request: BrokerCleanupRequest
     ) -> BrokerCleanupResponse:
         return self._service_for(challenge_slug).cleanup(challenge_slug, request)
+
+    async def cleanup_async(
+        self, challenge_slug: str, request: BrokerCleanupRequest
+    ) -> BrokerCleanupResponse:
+        service = await self._service_for_async(challenge_slug)
+        cleanup_async = getattr(service, "cleanup_async", None)
+        if callable(cleanup_async):
+            return await _resolve_value(cleanup_async(challenge_slug, request))
+        return await run_in_threadpool(service.cleanup, challenge_slug, request)
 
     def list_containers(
         self, challenge_slug: str, request: BrokerListRequest
@@ -253,8 +271,24 @@ class KubernetesBrokerRouterService:
             challenge_slug, request
         )
 
+    async def list_containers_async(
+        self, challenge_slug: str, request: BrokerListRequest
+    ) -> BrokerListResponse:
+        service = await self._service_for_async(challenge_slug)
+        list_containers_async = getattr(service, "list_containers_async", None)
+        if callable(list_containers_async):
+            return await _resolve_value(list_containers_async(challenge_slug, request))
+        return await run_in_threadpool(service.list_containers, challenge_slug, request)
+
     def _service_for(self, challenge_slug: str) -> Any:
         record = _resolve_sync(self.challenge_registry.get(challenge_slug))
+        return self._service_for_record(challenge_slug, record)
+
+    async def _service_for_async(self, challenge_slug: str) -> Any:
+        record = await _resolve_value(self.challenge_registry.get(challenge_slug))
+        return self._service_for_record(challenge_slug, record)
+
+    def _service_for_record(self, challenge_slug: str, record: Any) -> Any:
         resources = ChallengeResources.from_mapping(record.resources)
         assigned = self._assignment_for(challenge_slug)
         if assigned and self._target_eligible(
@@ -489,9 +523,19 @@ class KubernetesBrokerRouterService:
         )
 
 
+async def _resolve_value(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 def _resolve_sync(value: Any) -> Any:
     if inspect.isawaitable(value):
-        return asyncio.run(value)  # type: ignore[arg-type]
+        if inspect.iscoroutine(value):
+            value.close()
+        raise RuntimeError(
+            "Cannot resolve async broker registry from synchronous router method"
+        )
     return value
 
 
@@ -548,37 +592,52 @@ def create_kubernetes_broker_app(
         return {"status": "ok"}
 
     @app.post("/v1/docker/run", response_model=BrokerRunResponse)
-    def run_container(
+    async def run_container(
         request: BrokerRunRequest,
         authorization: str | None = Header(default=None),
         x_platform_challenge_slug: str | None = Header(
             default=None, alias="X-Platform-Challenge-Slug"
         ),
     ) -> BrokerRunResponse:
-        slug = _authenticate(registry, x_platform_challenge_slug, authorization)
-        return service.run(slug, request)
+        slug = await _authenticate_async(
+            registry, x_platform_challenge_slug, authorization
+        )
+        run_async = getattr(service, "run_async", None)
+        if callable(run_async):
+            return await _resolve_value(run_async(slug, request))
+        return await run_in_threadpool(service.run, slug, request)
 
     @app.post("/v1/docker/cleanup", response_model=BrokerCleanupResponse)
-    def cleanup(
+    async def cleanup(
         request: BrokerCleanupRequest,
         authorization: str | None = Header(default=None),
         x_platform_challenge_slug: str | None = Header(
             default=None, alias="X-Platform-Challenge-Slug"
         ),
     ) -> BrokerCleanupResponse:
-        slug = _authenticate(registry, x_platform_challenge_slug, authorization)
-        return service.cleanup(slug, request)
+        slug = await _authenticate_async(
+            registry, x_platform_challenge_slug, authorization
+        )
+        cleanup_async = getattr(service, "cleanup_async", None)
+        if callable(cleanup_async):
+            return await _resolve_value(cleanup_async(slug, request))
+        return await run_in_threadpool(service.cleanup, slug, request)
 
     @app.post("/v1/docker/list", response_model=BrokerListResponse)
-    def list_containers(
+    async def list_containers(
         request: BrokerListRequest,
         authorization: str | None = Header(default=None),
         x_platform_challenge_slug: str | None = Header(
             default=None, alias="X-Platform-Challenge-Slug"
         ),
     ) -> BrokerListResponse:
-        slug = _authenticate(registry, x_platform_challenge_slug, authorization)
-        return service.list_containers(slug, request)
+        slug = await _authenticate_async(
+            registry, x_platform_challenge_slug, authorization
+        )
+        list_containers_async = getattr(service, "list_containers_async", None)
+        if callable(list_containers_async):
+            return await _resolve_value(list_containers_async(slug, request))
+        return await run_in_threadpool(service.list_containers, slug, request)
 
     return app
 
@@ -588,7 +647,22 @@ def _authenticate(
 ) -> str:
     if not slug:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing challenge slug")
-    expected = registry.get_broker_token(slug)
+    expected = _resolve_sync(registry.get_broker_token(slug))
+    return _validate_broker_token(slug, authorization, expected)
+
+
+async def _authenticate_async(
+    registry: BrokerTokenRegistry, slug: str | None, authorization: str | None
+) -> str:
+    if not slug:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing challenge slug")
+    expected = await _resolve_value(registry.get_broker_token(slug))
+    return _validate_broker_token(slug, authorization, expected)
+
+
+def _validate_broker_token(
+    slug: str, authorization: str | None, expected: str | None
+) -> str:
     if not expected:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unknown challenge")
     expected_header = f"Bearer {expected}"

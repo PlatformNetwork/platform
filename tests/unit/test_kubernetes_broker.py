@@ -374,6 +374,36 @@ def test_kubernetes_broker_app_cleanup_and_list_require_auth() -> None:
     assert list_unauthorized.status_code == 401
 
 
+def test_kubernetes_broker_app_router_awaits_async_challenge_registry() -> None:
+    class AsyncRegistry(Registry):
+        async def get(self, slug: str) -> SimpleNamespace:
+            assert slug == "agent"
+            return SimpleNamespace(resources={})
+
+    broker_client = FakeBrokerClient(exit_code=1, logs="stderr")
+    router = KubernetesBrokerRouterService(
+        default_service=KubernetesBrokerService(client=broker_client),
+        challenge_registry=AsyncRegistry(),
+    )
+    http = TestClient(
+        create_kubernetes_broker_app(registry=AsyncRegistry(), service=router)
+    )
+    headers = {"authorization": "Bearer tok", "x-platform-challenge-slug": "agent"}
+
+    run = http.post("/v1/docker/run", headers=headers, json=_run_json())
+
+    assert run.status_code == 200
+    assert run.json()["returncode"] == 1
+    assert run.json()["stderr"] == "stderr"
+    cleanup = http.post(
+        "/v1/docker/cleanup", headers=headers, json={"job_id": "job-1"}
+    )
+    assert cleanup.status_code == 200
+    listed = http.post("/v1/docker/list", headers=headers, json={"job_id": "job-1"})
+    assert listed.status_code == 200
+    assert listed.json() == {"containers": []}
+
+
 def test_broker_limits_gpu_count_schema_contract() -> None:
     assert BrokerLimits().gpu_count is None
     assert BrokerLimits(gpu_count=1).model_dump(mode="json")["gpu_count"] == 1
