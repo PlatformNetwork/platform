@@ -397,11 +397,12 @@ def create_proxy_app(
         challenge = await _active_challenge(challenge_registry, slug)
 
         body = await request.body()
+        is_agent_challenge_env_route = _is_agent_challenge_env_route(
+            slug, request.method, path
+        )
         headers = _forward_headers(
             request,
-            preserve_miner_signature_headers=_is_agent_challenge_env_route(
-                slug, request.method, path
-            ),
+            preserve_miner_signature_headers=is_agent_challenge_env_route,
         )
         headers["X-Platform-Challenge-Slug"] = slug
         try:
@@ -414,8 +415,13 @@ def create_proxy_app(
                 headers=headers,
             )
         except (httpx.HTTPError, DockerOrchestrationError) as exc:
+            unavailable_status = (
+                status.HTTP_503_SERVICE_UNAVAILABLE
+                if is_agent_challenge_env_route
+                else status.HTTP_502_BAD_GATEWAY
+            )
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY, detail="Challenge unavailable"
+                status_code=unavailable_status, detail="Challenge unavailable"
             ) from exc
 
     async def bridge_upload(challenge_name: str, request: Request) -> Response:

@@ -1788,6 +1788,62 @@ def test_proxy_preserves_signed_agent_challenge_env_headers_for_env_routes() -> 
     assert "miner-nonce" not in registry_text
 
 
+def test_proxy_passes_through_agent_challenge_env_upstream_503() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("agent-challenge"),
+                "internal_base_url": "http://challenge-agent-challenge:8000",
+            }
+        )
+    )
+    registry.set_status("agent-challenge", ChallengeStatus.ACTIVE)
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        captured["path"] = request.url.path
+        return httpx.Response(
+            503,
+            json={"detail": "safe upstream env response"},
+            headers={"content-type": "application/json"},
+        )
+
+    @asynccontextmanager
+    async def client_factory():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://challenge-agent-challenge:8000"
+        ) as client:
+            yield client
+
+    proxy_client = TestClient(_proxy_app(registry, client_factory=client_factory))
+    response = proxy_client.put(
+        "/challenges/agent-challenge/submissions/sub-1/env",
+        json={"env": {"API_TOKEN": "redacted-by-upstream"}},
+        headers={
+            "X-Hotkey": "miner-hotkey",
+            "X-Signature": "miner-signature",
+            "X-Nonce": "miner-nonce",
+            "X-Timestamp": "1700000000",
+            "X-Admin-Token": "admin-secret",
+            "Authorization": "Bearer should-not-forward",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "safe upstream env response"}
+    assert captured["path"] == "/submissions/sub-1/env"
+    upstream_headers = captured["headers"]
+    assert upstream_headers["x-hotkey"] == "miner-hotkey"
+    assert upstream_headers["x-signature"] == "miner-signature"
+    assert upstream_headers["x-nonce"] == "miner-nonce"
+    assert upstream_headers["x-timestamp"] == "1700000000"
+    assert "authorization" not in upstream_headers
+    assert "x-admin-token" not in upstream_headers
+
+
 def test_agent_challenge_public_proxy_does_not_expose_launch_execution_routes() -> None:
     registry = ChallengeRegistry()
     registry.create(
@@ -1888,7 +1944,7 @@ def test_agent_challenge_env_proxy_transport_failure_redacts_body_and_headers() 
         },
     )
 
-    assert response.status_code == 502
+    assert response.status_code == 503
     assert response.json() == {"detail": "Challenge unavailable"}
     body = response.text
     assert sentinel_body.decode() not in body
