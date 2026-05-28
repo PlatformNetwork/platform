@@ -20,6 +20,16 @@ IMAGE_UPDATER_IMAGE="${PLATFORM_IMAGE_UPDATER_IMAGE:-ghcr.io/platformnetwork/pla
 IMAGE_UPDATE_REGISTRY_ENDPOINT="${PLATFORM_IMAGE_UPDATE_REGISTRY_ENDPOINT:-}"
 DATABASE_URL_SECRET_NAME="${PLATFORM_DATABASE_URL_SECRET_NAME:-platform-validator-database-url}"
 DATABASE_URL_SECRET_KEY="${PLATFORM_DATABASE_URL_SECRET_KEY:-url}"
+MANAGED_POSTGRES_NAME="${PLATFORM_VALIDATOR_POSTGRES_NAME:-platform-validator-postgres}"
+MANAGED_POSTGRES_SECRET_NAME="${PLATFORM_VALIDATOR_POSTGRES_SECRET_NAME:-${MANAGED_POSTGRES_NAME}}"
+MANAGED_POSTGRES_SERVICE_NAME="${PLATFORM_VALIDATOR_POSTGRES_SERVICE_NAME:-${MANAGED_POSTGRES_NAME}}"
+MANAGED_POSTGRES_STATEFULSET_NAME="${PLATFORM_VALIDATOR_POSTGRES_STATEFULSET_NAME:-${MANAGED_POSTGRES_NAME}}"
+MANAGED_POSTGRES_DATA_CLAIM_NAME="${PLATFORM_VALIDATOR_POSTGRES_DATA_CLAIM_NAME:-${MANAGED_POSTGRES_NAME}-data}"
+MANAGED_POSTGRES_IMAGE="${PLATFORM_VALIDATOR_POSTGRES_IMAGE:-postgres:16-alpine}"
+MANAGED_POSTGRES_STORAGE_SIZE="${PLATFORM_VALIDATOR_POSTGRES_STORAGE_SIZE:-10Gi}"
+MANAGED_POSTGRES_STORAGE_CLASS="${PLATFORM_VALIDATOR_POSTGRES_STORAGE_CLASS:-}"
+MANAGED_POSTGRES_PASSWORD=""
+MANAGED_DATABASE=0
 REGISTRY_URL="${PLATFORM_VALIDATOR_REGISTRY_URL:-https://chain.platform.network}"
 NETUID="${PLATFORM_NETUID:-100}"
 CHAIN_ENDPOINT="${PLATFORM_CHAIN_ENDPOINT:-}"
@@ -53,6 +63,7 @@ Options:
   --image-updater-image IMAGE  Image used by the image updater CronJob. Default: ghcr.io/platformnetwork/platform:latest
   --database-url-secret-name NAME  Database URL Secret name for Helm upgrades. Default: platform-validator-database-url
   --database-url-secret-key KEY    Database URL Secret key for Helm upgrades. Default: url
+  --postgres-storage-class NAME    Optional managed Postgres StorageClass.
   --registry-url URL         Registry API URL. Default: https://chain.platform.network
   --netuid NETUID            Bittensor subnet UID. Default: 100
   --chain-endpoint ENDPOINT  Optional Bittensor chain endpoint.
@@ -80,6 +91,7 @@ while [ "$#" -gt 0 ]; do
     --image-updater-image) IMAGE_UPDATER_IMAGE="${2:?missing IMAGE}"; shift ;;
     --database-url-secret-name) DATABASE_URL_SECRET_NAME="${2:?missing NAME}"; shift ;;
     --database-url-secret-key) DATABASE_URL_SECRET_KEY="${2:?missing KEY}"; shift ;;
+    --postgres-storage-class) MANAGED_POSTGRES_STORAGE_CLASS="${2:?missing NAME}"; shift ;;
     --registry-url) REGISTRY_URL="${2:?missing URL}"; shift ;;
     --netuid) NETUID="${2:?missing NETUID}"; shift ;;
     --chain-endpoint) CHAIN_ENDPOINT="${2:?missing ENDPOINT}"; shift ;;
@@ -119,11 +131,20 @@ validate_regex() {
 validate_identifier "namespace" "$NAMESPACE"
 validate_identifier "database URL Secret name" "$DATABASE_URL_SECRET_NAME"
 validate_identifier "database URL Secret key" "$DATABASE_URL_SECRET_KEY"
+validate_identifier "managed Postgres name" "$MANAGED_POSTGRES_NAME"
+validate_identifier "managed Postgres Secret name" "$MANAGED_POSTGRES_SECRET_NAME"
+validate_identifier "managed Postgres Service name" "$MANAGED_POSTGRES_SERVICE_NAME"
+validate_identifier "managed Postgres StatefulSet name" "$MANAGED_POSTGRES_STATEFULSET_NAME"
+validate_identifier "managed Postgres data claim name" "$MANAGED_POSTGRES_DATA_CLAIM_NAME"
+if [ -n "$MANAGED_POSTGRES_STORAGE_CLASS" ]; then
+  validate_identifier "managed Postgres StorageClass" "$MANAGED_POSTGRES_STORAGE_CLASS"
+fi
 validate_identifier "wallet name" "$WALLET_NAME"
 validate_identifier "wallet hotkey" "$WALLET_HOTKEY"
 validate_regex "auto-upgrade schedule" "$AUTO_UPGRADE_SCHEDULE" '^[A-Za-z0-9*?, /@._-]+$' "use cron-safe characters"
 validate_regex "auto-upgrade Helm image" "$AUTO_UPGRADE_HELM_IMAGE" '^[A-Za-z0-9_./:@-]+$' "be an image reference"
 validate_regex "image updater image" "$IMAGE_UPDATER_IMAGE" '^[A-Za-z0-9_./:@-]+$' "be an image reference"
+validate_regex "managed Postgres image" "$MANAGED_POSTGRES_IMAGE" '^[A-Za-z0-9_./:@-]+$' "be an image reference"
 validate_regex "auto-upgrade repository" "$AUTO_UPGRADE_REPO" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "use owner/repo"
 validate_regex "auto-upgrade ref" "$AUTO_UPGRADE_REF" '^[A-Za-z0-9_./-]+$' "use git ref-safe characters"
 validate_regex "auto-upgrade chart path" "$AUTO_UPGRADE_CHART_PATH" '^[A-Za-z0-9_./-]+$' "use relative path-safe characters"
@@ -165,6 +186,15 @@ kubectl_apply() {
   kubectl apply -f -
 }
 
+kubectl_replace_or_create() {
+  local manifest="$1"
+  if kubectl get -f "$manifest" >/dev/null 2>&1; then
+    kubectl replace -f "$manifest"
+  else
+    kubectl create -f "$manifest"
+  fi
+}
+
 kubectl_delete() {
   kubectl "$@" || true
 }
@@ -185,6 +215,222 @@ render_broker_allowed_images() {
   IFS="$old_ifs"
 }
 
+
+render_managed_postgres_storage_class() {
+  if [ -n "$MANAGED_POSTGRES_STORAGE_CLASS" ]; then
+    printf '        storageClassName: %s\n' "$MANAGED_POSTGRES_STORAGE_CLASS"
+  fi
+}
+
+validate_external_database_url() {
+  if [ -z "$DATABASE_URL" ]; then
+    return
+  fi
+
+  case "$DATABASE_URL" in
+    postgres://*|postgresql://*|postgresql+asyncpg://*) ;;
+    *)
+      echo "database URL must start with postgres://, postgresql://, or postgresql+asyncpg://" >&2
+      exit 2
+      ;;
+  esac
+
+  case "$DATABASE_URL" in
+    *$'\n'*|*$'\r'*)
+      echo "database URL must not contain control characters or newlines" >&2
+      exit 2
+      ;;
+  esac
+
+  if printf '%s' "$DATABASE_URL" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    echo "database URL must not contain control characters or newlines" >&2
+    exit 2
+  fi
+}
+
+set_managed_database_url() {
+  DATABASE_URL="postgresql+asyncpg://platform:${MANAGED_POSTGRES_PASSWORD}@${MANAGED_POSTGRES_SERVICE_NAME}:5432/platform"
+  MANAGED_DATABASE=1
+}
+
+generate_managed_database_url() {
+  MANAGED_POSTGRES_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+  if [ -z "$MANAGED_POSTGRES_PASSWORD" ]; then
+    echo "failed to generate managed Postgres password" >&2
+    exit 1
+  fi
+  set_managed_database_url
+}
+
+load_existing_managed_postgres_password() {
+  local encoded_password
+  if ! encoded_password="$(kubectl -n "$NAMESPACE" get secret "$MANAGED_POSTGRES_SECRET_NAME" -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null)"; then
+    return 1
+  fi
+  if [ -z "$encoded_password" ]; then
+    return 1
+  fi
+  if ! MANAGED_POSTGRES_PASSWORD="$(printf '%s' "$encoded_password" | base64 -d 2>/dev/null)"; then
+    echo "managed Postgres credential Secret has an invalid password value" >&2
+    exit 1
+  fi
+  if [ -z "$MANAGED_POSTGRES_PASSWORD" ]; then
+    echo "managed Postgres credential Secret has an empty password value" >&2
+    exit 1
+  fi
+  set_managed_database_url
+  return 0
+}
+
+managed_postgres_data_pvc_exists() {
+  local statefulset_pvc="${MANAGED_POSTGRES_DATA_CLAIM_NAME}-${MANAGED_POSTGRES_STATEFULSET_NAME}-0"
+  kubectl -n "$NAMESPACE" get pvc "$statefulset_pvc" >/dev/null 2>&1 || \
+    kubectl -n "$NAMESPACE" get pvc "$MANAGED_POSTGRES_DATA_CLAIM_NAME" >/dev/null 2>&1
+}
+
+prepare_managed_database_url() {
+  if load_existing_managed_postgres_password; then
+    return
+  fi
+  if managed_postgres_data_pvc_exists; then
+    echo "managed Postgres data PVC exists but the credential Secret/key is missing; restore the retained Secret before reinstalling" >&2
+    exit 1
+  fi
+  generate_managed_database_url
+}
+
+upsert_secret_manifest() {
+  local manifest="$1"
+  kubectl_replace_or_create "$manifest"
+}
+
+upsert_database_url_secret() {
+  local manifest
+  manifest="$(mktemp)"
+  kubectl -n "$NAMESPACE" create secret generic "$DATABASE_URL_SECRET_NAME" \
+    --from-literal="${DATABASE_URL_SECRET_KEY}=${DATABASE_URL}" \
+    --dry-run=client \
+    -o yaml > "$manifest"
+  upsert_secret_manifest "$manifest"
+  rm -f "$manifest"
+}
+
+upsert_managed_postgres_secret() {
+  local manifest
+  if [ "$MANAGED_DATABASE" -ne 1 ]; then
+    return
+  fi
+  manifest="$(mktemp)"
+  kubectl -n "$NAMESPACE" create secret generic "$MANAGED_POSTGRES_SECRET_NAME" \
+    --from-literal=POSTGRES_DB=platform \
+    --from-literal=POSTGRES_USER=platform \
+    --from-literal="POSTGRES_PASSWORD=${MANAGED_POSTGRES_PASSWORD}" \
+    --dry-run=client \
+    -o yaml > "$manifest"
+  upsert_secret_manifest "$manifest"
+  rm -f "$manifest"
+}
+
+render_managed_postgres_manifests() {
+  if [ "$MANAGED_DATABASE" -ne 1 ]; then
+    return
+  fi
+  cat <<YAML
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${MANAGED_POSTGRES_SERVICE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: validator-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: ${MANAGED_POSTGRES_STATEFULSET_NAME}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${MANAGED_POSTGRES_STATEFULSET_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: platform-network
+    app.kubernetes.io/part-of: ${APP}
+    platform.component: validator-postgres
+spec:
+  replicas: 1
+  serviceName: ${MANAGED_POSTGRES_SERVICE_NAME}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: ${MANAGED_POSTGRES_STATEFULSET_NAME}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-network
+        app.kubernetes.io/part-of: ${APP}
+        app.kubernetes.io/instance: ${MANAGED_POSTGRES_STATEFULSET_NAME}
+        platform.component: validator-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: ${MANAGED_POSTGRES_IMAGE}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: ${MANAGED_POSTGRES_SECRET_NAME}
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ${MANAGED_POSTGRES_SECRET_NAME}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${MANAGED_POSTGRES_SECRET_NAME}
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: ${MANAGED_POSTGRES_DATA_CLAIM_NAME}
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: ${MANAGED_POSTGRES_DATA_CLAIM_NAME}
+        labels:
+          app.kubernetes.io/name: platform-network
+          app.kubernetes.io/part-of: ${APP}
+          platform.component: validator-postgres-data
+        annotations:
+          helm.sh/resource-policy: keep
+      spec:
+        accessModes: ["ReadWriteOnce"]
+$(render_managed_postgres_storage_class)
+        resources:
+          requests:
+            storage: ${MANAGED_POSTGRES_STORAGE_SIZE}
+YAML
+}
+
 cleanup_validator() {
   kubectl_delete -n "$NAMESPACE" delete cronjob "$APP-helm-upgrader"
   kubectl_delete -n "$NAMESPACE" delete role "$APP-helm-upgrader"
@@ -194,6 +440,8 @@ cleanup_validator() {
   kubectl_delete -n "$NAMESPACE" delete role "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete rolebinding "$APP-image-updater"
   kubectl_delete -n "$NAMESPACE" delete serviceaccount "$APP-image-updater"
+  kubectl_delete -n "$NAMESPACE" delete statefulset "$MANAGED_POSTGRES_STATEFULSET_NAME"
+  kubectl_delete -n "$NAMESPACE" delete service "$MANAGED_POSTGRES_SERVICE_NAME"
   kubectl_delete -n "$NAMESPACE" delete deployment "$APP"
   kubectl_delete -n "$NAMESPACE" delete configmap "$APP-config"
   kubectl_delete -n "$NAMESPACE" delete secret "$DATABASE_URL_SECRET_NAME"
@@ -241,11 +489,14 @@ wallet.regenerate_hotkey(
   unset HOTKEY_MNEMONIC
 
   HOTKEY_DIR="$TMP_DIR/wallets/$WALLET_NAME/hotkeys"
+  manifest="$(mktemp)"
   kubectl -n "$NAMESPACE" create secret generic "$APP-wallet" \
     --from-file=hotkey="$HOTKEY_DIR/$WALLET_HOTKEY" \
     --from-file=hotkeypub.txt="$HOTKEY_DIR/${WALLET_HOTKEY}pub.txt" \
     --dry-run=client \
-    -o yaml | kubectl_apply
+    -o yaml > "$manifest"
+  upsert_secret_manifest "$manifest"
+  rm -f "$manifest"
 }
 
 render_helm_upgrade_command() {
@@ -288,7 +539,7 @@ SCRIPT
 }
 
 
-render_manifests() {
+render_namespace_manifest() {
   cat <<YAML
 apiVersion: v1
 kind: Namespace
@@ -297,7 +548,11 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-network
     app.kubernetes.io/part-of: ${APP}
----
+YAML
+}
+
+render_manifests() {
+  cat <<YAML
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -468,18 +723,7 @@ spec:
   resources:
     requests:
       storage: ${STORAGE_SIZE}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ${DATABASE_URL_SECRET_NAME}
-  namespace: ${NAMESPACE}
-  labels:
-    app.kubernetes.io/name: platform-network
-    app.kubernetes.io/part-of: ${APP}
-type: Opaque
-stringData:
-  ${DATABASE_URL_SECRET_KEY}: "${DATABASE_URL}"
+$(render_managed_postgres_manifests)
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -734,18 +978,23 @@ YAML
 }
 
 main() {
-  require_kubectl
   if [ "$CLEANUP_ONLY" -eq 1 ]; then
+    require_kubectl
     cleanup_validator
     exit 0
   fi
 
+  validate_external_database_url
+  require_kubectl
+  select_hotkey_python
+  render_namespace_manifest | kubectl_apply
+
   if [ -z "$DATABASE_URL" ]; then
-    echo "database-url is required; provide --database-url or PLATFORM_DATABASE_URL" >&2
-    exit 2
+    prepare_managed_database_url
   fi
 
-  select_hotkey_python
+  upsert_database_url_secret
+  upsert_managed_postgres_secret
   render_manifests | kubectl_apply
   import_hotkey_secret
   echo "Validator Kubernetes install complete."
