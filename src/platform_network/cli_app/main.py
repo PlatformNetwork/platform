@@ -383,6 +383,10 @@ AGENT_CHALLENGE_TERMINAL_BENCH_RUNNER_IMAGE = (
 AGENT_CHALLENGE_PLATFORM_ENVIRONMENT_IMPORT_PATH = (
     "agent_challenge_runner.platform_environment:PlatformEnvironment"
 )
+AGENT_CHALLENGE_SUBMISSION_ENV_SECRET = "submission_env_encryption_key"
+AGENT_CHALLENGE_SUBMISSION_ENV_KEY_FILE = (
+    f"{DEFAULT_SECRET_MOUNT_DIR}/{AGENT_CHALLENGE_SUBMISSION_ENV_SECRET}"
+)
 PRISM_IMAGE = "ghcr.io/platformnetwork/prism:latest"
 PRISM_EVALUATOR_IMAGE = "ghcr.io/platformnetwork/prism-evaluator:latest"
 PRISM_VERSION = "0.1.0"
@@ -429,8 +433,23 @@ def _agent_challenge_platform_sdk_env(settings: Any | None) -> dict[str, str]:
         "CHALLENGE_PLATFORM_SDK_RUNNER_IMAGE": (
             AGENT_CHALLENGE_TERMINAL_BENCH_RUNNER_IMAGE
         ),
+        "CHALLENGE_SUBMISSION_ENV_ENCRYPTION_KEY_FILE": (
+            AGENT_CHALLENGE_SUBMISSION_ENV_KEY_FILE
+        ),
         "CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND": "platform_sdk",
     }
+
+
+def _agent_challenge_secret_names(existing: list[str] | None = None) -> list[str]:
+    names = [
+        "challenge_token",
+        "docker_broker_token",
+        AGENT_CHALLENGE_SUBMISSION_ENV_SECRET,
+    ]
+    for name in existing or []:
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
@@ -522,7 +541,9 @@ async def seed_prism_challenges(
                     env=env,
                     metadata=metadata,
                     required_capabilities=sorted(required_capabilities),
-                    secrets=["challenge_token", "docker_broker_token"],
+                    secrets=_agent_challenge_secret_names(
+                        list(getattr(record, "secrets", []) or [])
+                    ),
                 ),
             )
         )

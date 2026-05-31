@@ -1451,7 +1451,11 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
         "get_weights",
         "proxy_routes",
     ]
-    assert agent.secrets == ["challenge_token", "docker_broker_token"]
+    assert agent.secrets == [
+        "challenge_token",
+        "docker_broker_token",
+        "submission_env_encryption_key",
+    ]
     assert agent.env["CHALLENGE_BENCHMARK_BACKEND"] == "terminal_bench"
     assert agent.env["CHALLENGE_DOCKER_ENABLED"] == "true"
     assert agent.env["CHALLENGE_DOCKER_BACKEND"] == "broker"
@@ -1467,6 +1471,9 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
     )
     assert agent.env["CHALLENGE_PLATFORM_SDK_RUNNER_IMAGE"] == (
         "ghcr.io/platformnetwork/agent-challenge-terminal-bench-runner:latest"
+    )
+    assert agent.env["CHALLENGE_SUBMISSION_ENV_ENCRYPTION_KEY_FILE"] == (
+        "/run/secrets/platform/submission_env_encryption_key"
     )
     assert agent.env["CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND"] == "platform_sdk"
 
