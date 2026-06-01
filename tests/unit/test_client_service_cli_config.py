@@ -1440,7 +1440,9 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
         "ghcr.io/platformnetwork/prism-evaluator:latest"
     )
     assert prism.secrets == ["challenge_token", "docker_broker_token"]
-    assert prism.resources["gpu_count"] == "1"
+    assert "gpu_count" not in prism.resources
+    assert "gpu_capabilities" not in prism.resources
+    assert prism.metadata["platform_eval_gpu_count"] == "1"
     assert prism.metadata["runtime_database"] == "platform-managed-challenge-postgres"
     assert "token" not in prism.metadata
     assert "database_url" not in prism.metadata

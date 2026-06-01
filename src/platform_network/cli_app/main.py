@@ -471,8 +471,6 @@ def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
         resources={
             "cpu": "2",
             "memory": "8g",
-            "gpu_count": "1",
-            "gpu_capabilities": "gpu",
         },
         volumes={"data": "/data"},
         env={
