@@ -466,7 +466,7 @@ def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
         emission_percent=PRISM_EMISSION_PERCENT,
         status=ChallengeStatus.ACTIVE,
         description="PRISM architecture and training reward challenge.",
-        internal_base_url="http://challenge-prism:8000",
+        internal_base_url="http://challenge-prism:8080",
         required_capabilities=["get_weights", "proxy_routes"],
         resources={
             "cpu": "2",
