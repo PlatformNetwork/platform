@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 
@@ -265,3 +266,100 @@ def test_patch_deployment_image_does_not_delete_pods() -> None:
     )
 
     assert len(calls) == 1
+
+
+def _logs_client(core: object) -> KubernetesClient:
+    client = KubernetesClient.__new__(KubernetesClient)
+    client.namespace = "platform"
+    client._core = core
+    return client
+
+
+class _LogResp:
+    def __init__(self, text: str) -> None:
+        self.data = text.encode("utf-8")
+
+
+def test_pod_logs_for_job_selects_succeeded_pod_and_retries_empty_read() -> None:
+    running = SimpleNamespace(
+        metadata=SimpleNamespace(name="job-xyz-running"),
+        status=SimpleNamespace(
+            phase="Running", start_time=datetime(2020, 1, 3, tzinfo=UTC)
+        ),
+    )
+    succeeded = SimpleNamespace(
+        metadata=SimpleNamespace(name="job-xyz-done"),
+        status=SimpleNamespace(
+            phase="Succeeded", start_time=datetime(2020, 1, 2, tzinfo=UTC)
+        ),
+    )
+
+    class FakeCore:
+        def __init__(self) -> None:
+            self.read_names: list[str] = []
+            self._reads = iter(
+                [_LogResp(""), _LogResp('PRISM_METRICS_JSON={"q_arch":1.0}')]
+            )
+
+        def list_namespaced_pod(self, *, namespace: str, label_selector: str) -> object:
+            return SimpleNamespace(items=[running, succeeded])
+
+        def read_namespaced_pod_log(
+            self,
+            *,
+            name: str,
+            namespace: str,
+            tail_lines: int,
+            _preload_content: bool = True,
+        ) -> object:
+            self.read_names.append(name)
+            return next(self._reads)
+
+    core = FakeCore()
+    client = _logs_client(core)
+
+    out = client.pod_logs_for_job("job-xyz", tries=5, sleep_s=0)
+
+    assert out == 'PRISM_METRICS_JSON={"q_arch":1.0}'
+    assert core.read_names == ["job-xyz-done", "job-xyz-done"]
+
+
+def test_pod_logs_for_job_decodes_bytes_response() -> None:
+    succeeded = SimpleNamespace(
+        metadata=SimpleNamespace(name="agent-pod"),
+        status=SimpleNamespace(phase="Succeeded", start_time=None),
+    )
+
+    class FakeCore:
+        def __init__(self) -> None:
+            self.list_count = 0
+            self.read_count = 0
+            self.preload_flags: list[bool] = []
+
+        def list_namespaced_pod(self, *, namespace: str, label_selector: str) -> object:
+            self.list_count += 1
+            return SimpleNamespace(items=[succeeded])
+
+        def read_namespaced_pod_log(
+            self,
+            *,
+            name: str,
+            namespace: str,
+            tail_lines: int,
+            _preload_content: bool = True,
+        ) -> object:
+            self.read_count += 1
+            self.preload_flags.append(_preload_content)
+            return _LogResp("agent-challenge eval line\nmore output\n")
+
+    core = FakeCore()
+    client = _logs_client(core)
+
+    out = client.pod_logs_for_job("agent-job")
+
+    assert out.startswith("agent-challenge eval line")
+    assert "b'" not in out
+    assert core.list_count == 1
+    assert core.read_count == 1
+    assert core.preload_flags == [False]
+

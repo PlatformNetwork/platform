@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 import json
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_EPOCH0 = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 class KubernetesDependencyError(RuntimeError):
@@ -156,19 +159,59 @@ class KubernetesClient:
             time.sleep(2)
         return 124
 
-    def pod_logs_for_job(self, job_name: str, *, tail_lines: int = 1000) -> str:
-        pods = self._core.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"job-name={job_name}",
-        )
-        if not pods.items:
+    def pod_logs_for_job(
+        self,
+        job_name: str,
+        *,
+        tail_lines: int = 1000,
+        tries: int = 5,
+        sleep_s: float = 1.0,
+    ) -> str:
+        # Select the Succeeded pod and retry: a container whose only stdout is a
+        # single end-of-run line can race the kubelet flush (first read empty).
+        last = ""
+        pods: list[Any] = []
+        for _ in range(tries):
+            pods = self._core.list_namespaced_pod(
+                namespace=self.namespace,
+                label_selector=f"job-name={job_name}",
+            ).items
+            if pods:
+                succeeded = [
+                    p for p in pods if p.status and p.status.phase == "Succeeded"
+                ]
+                pool = succeeded or pods
+                target = max(
+                    pool, key=lambda p: (p.status.start_time or _EPOCH0)
+                )
+                logs = self._read_pod_log(target.metadata.name, tail_lines)
+                if logs and logs.strip():
+                    return logs
+                last = logs
+            time.sleep(sleep_s)
+        for pod in pods:
+            logs = self._read_pod_log(pod.metadata.name, tail_lines)
+            if logs and logs.strip():
+                return logs
+        return last
+
+    def _read_pod_log(self, pod_name: str, tail_lines: int) -> str:
+        # _preload_content=False + decode: with the default the client returns
+        # str(bytes) (value prefixed "b'" with escaped newlines), which breaks
+        # downstream line parsing of plain-text pod logs.
+        try:
+            resp = self._core.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=self.namespace,
+                tail_lines=tail_lines,
+                _preload_content=False,
+            )
+        except Exception:
             return ""
-        pod = pods.items[0]
-        return self._core.read_namespaced_pod_log(
-            name=pod.metadata.name,
-            namespace=self.namespace,
-            tail_lines=tail_lines,
-        )
+        data = getattr(resp, "data", resp)
+        if isinstance(data, (bytes, bytearray)):
+            return data.decode("utf-8", "replace")
+        return str(data)
 
     def service_json(
         self, service_name: str, path: str, *, port: int | str | None = None
