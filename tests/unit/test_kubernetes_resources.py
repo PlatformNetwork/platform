@@ -29,6 +29,7 @@ from platform_network.kubernetes.resources import (
     build_challenge_secret,
     build_challenge_service,
     build_challenge_workload,
+    validate_broker_kubernetes_limits,
 )
 from platform_network.master.docker_orchestrator import (
     DEFAULT_SECRET_MOUNT_DIR,
@@ -691,15 +692,6 @@ def test_kubernetes_challenge_workload_rejects_unsupported_docker_only_limits() 
             ),
             namespace="platform",
         )
-    with pytest.raises(ValueError, match="memory_swap"):
-        build_challenge_workload(
-            ChallengeSpec(
-                slug="demo",
-                image="ghcr.io/org/demo:1",
-                resources=ChallengeResources(memory_swap=None),
-            ),
-            namespace="platform",
-        )
 
 
 def test_production_challenge_workload_requires_cpu_and_memory_bounds() -> None:
@@ -1162,7 +1154,6 @@ def test_broker_job_rejects_unsupported_docker_only_limits() -> None:
     }
     cases = [
         (BrokerLimits(pids_limit=64), "pids_limit"),
-        (BrokerLimits(memory_swap=None), "memory_swap"),
         (BrokerLimits(network="host"), "Docker-specific network modes"),
     ]
     for limits, message in cases:
@@ -1173,6 +1164,31 @@ def test_broker_job_rejects_unsupported_docker_only_limits() -> None:
                 namespace="platform",
                 service_account_name="platform-master",
             )
+
+
+def test_validate_broker_kubernetes_limits_tolerates_memory_swap() -> None:
+    validate_broker_kubernetes_limits(BrokerLimits(memory_swap="8g"))
+
+    job = build_broker_job(
+        "demo",
+        BrokerRunRequest(
+            job_id="job-1",
+            image="ghcr.io/platformnetwork/worker:1",
+            command=["python", "-V"],
+            limits=BrokerLimits(cpus=1, memory="512Mi", memory_swap="8g"),
+        ),
+        namespace="platform",
+        service_account_name="platform-master",
+    )
+
+    pod_spec = job["spec"]["template"]["spec"]
+    assert "8g" not in repr(pod_spec)
+    assert "memory_swap" not in repr(pod_spec)
+    assert pod_spec["containers"][0]["resources"]["limits"]["memory"] == "512Mi"
+    swap_annotation = job["spec"]["template"]["metadata"]["annotations"][
+        "platform.network/kubernetes-swap-semantics"
+    ]
+    assert "memory_swap is not a Kubernetes PodSpec field" in swap_annotation
 
 
 def _required_managed_postgres_builder(name: str) -> Any:

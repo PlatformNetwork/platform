@@ -433,7 +433,6 @@ def test_kubernetes_broker_rejects_unsupported_docker_only_limits() -> None:
     service = KubernetesBrokerService(client=FakeBrokerClient())
     cases = [
         (BrokerLimits(pids_limit=96), "pids_limit"),
-        (BrokerLimits(memory_swap=None), "memory_swap"),
         (BrokerLimits(network="platform_challenges"), "Docker-specific network modes"),
     ]
     for limits, message in cases:

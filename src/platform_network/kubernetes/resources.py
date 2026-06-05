@@ -235,11 +235,8 @@ def validate_broker_kubernetes_limits(
             "Kubernetes PodSpec does not support Docker pids_limit; "
             "enforce PID ceilings with cluster or admission policy"
         )
-    if limits.memory_swap != defaults.memory_swap:
-        raise ValueError(
-            "Kubernetes PodSpec does not support Docker memory_swap; "
-            "enforce swap behavior with node or admission policy"
-        )
+    # Docker memory_swap has no Kubernetes PodSpec equivalent; tolerate any value
+    # as a no-op (it is documented via pod annotations and never propagated).
     if limits.network not in {"none", "default"}:
         raise ValueError(
             "Kubernetes broker supports network=none or network=default; "
@@ -262,11 +259,8 @@ def validate_challenge_kubernetes_resources(resources: ChallengeResources) -> No
             "Kubernetes PodSpec does not support Docker pids_limit; "
             "enforce PID ceilings with cluster or admission policy"
         )
-    if resources.memory_swap != defaults.memory_swap:
-        raise ValueError(
-            "Kubernetes PodSpec does not support Docker memory_swap; "
-            "enforce swap behavior with node or admission policy"
-        )
+    # Docker memory_swap has no Kubernetes PodSpec equivalent; tolerate any value
+    # as a no-op (it is documented via pod annotations and never propagated).
 
 
 def build_challenge_workload(
