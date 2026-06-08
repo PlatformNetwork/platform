@@ -220,7 +220,11 @@ def test_kubernetes_broker_from_settings_threads_gpu_resource_name_runtime_field
     node_selector = {"accelerator": "nvidia"}
     toleration = {"key": "gpu", "operator": "Exists"}
     settings = SimpleNamespace(
-        docker=SimpleNamespace(broker_allowed_images=["ghcr.io/platformnetwork/"]),
+        docker=SimpleNamespace(
+            broker_allowed_images=["ghcr.io/platformnetwork/"],
+            allow_privileged=True,
+            broker_privileged_slugs=["agent"],
+        ),
         kubernetes=SimpleNamespace(
             namespace="platform-gpu",
             kubeconfig="/tmp/kubeconfig",
@@ -251,6 +255,8 @@ def test_kubernetes_broker_from_settings_threads_gpu_resource_name_runtime_field
     assert service.node_selector == {"accelerator": "nvidia"}
     assert service.tolerations == ({"key": "gpu", "operator": "Exists"},)
     assert service.runtime_class_name == "nvidia"
+    assert service.allow_privileged is True
+    assert service.privileged_slugs == ("agent",)
 
 
 def test_kubernetes_broker_app_auth_and_mount_rejection() -> None:
@@ -448,6 +454,88 @@ def test_kubernetes_broker_rejects_unsupported_docker_only_limits() -> None:
                 ),
             )
         assert message in str(error.value)
+
+
+def test_kubernetes_broker_privileged_requires_enabled_allowlist_and_runtime() -> None:
+    disabled = KubernetesBrokerService(client=FakeBrokerClient())
+    with pytest.raises(Exception) as disabled_error:
+        disabled.run("agent", _run_payload(limits=BrokerLimits(privileged=True)))
+    assert "privileged broker jobs are disabled" in str(disabled_error.value)
+
+    not_allowlisted = KubernetesBrokerService(
+        client=FakeBrokerClient(),
+        allow_privileged=True,
+        privileged_slugs=("other",),
+        runtime_class_name="kata-clh",
+    )
+    with pytest.raises(Exception) as slug_error:
+        not_allowlisted.run("agent", _run_payload(limits=BrokerLimits(privileged=True)))
+    assert "not allowed to run privileged" in str(slug_error.value)
+
+    no_runtime = KubernetesBrokerService(
+        client=FakeBrokerClient(),
+        allow_privileged=True,
+        privileged_slugs=("agent",),
+    )
+    with pytest.raises(Exception) as runtime_error:
+        no_runtime.run("agent", _run_payload(limits=BrokerLimits(privileged=True)))
+    assert "require an isolated runtime class" in str(runtime_error.value)
+
+
+def test_kubernetes_broker_privileged_job_security_context_and_graph_volume() -> None:
+    client = FakeBrokerClient()
+    service = KubernetesBrokerService(
+        client=client,
+        allow_privileged=True,
+        privileged_slugs=("agent",),
+        runtime_class_name="kata-clh",
+    )
+
+    service.run("agent", _run_payload(limits=BrokerLimits(privileged=True)))
+
+    pod_spec = client._job()["spec"]["template"]["spec"]
+    assert pod_spec["runtimeClassName"] == "kata-clh"
+    assert pod_spec["securityContext"] == {
+        "runAsNonRoot": False,
+        "runAsUser": 0,
+        "runAsGroup": 0,
+        "fsGroup": 0,
+        "seccompProfile": {"type": "Unconfined"},
+    }
+    container = pod_spec["containers"][0]
+    assert container["securityContext"] == {
+        "privileged": True,
+        "allowPrivilegeEscalation": True,
+        "readOnlyRootFilesystem": False,
+        "runAsUser": 0,
+        "runAsGroup": 0,
+    }
+    assert {"name": "docker-graph", "emptyDir": {}} in pod_spec["volumes"]
+    assert {
+        "name": "docker-graph",
+        "mountPath": "/var/lib/docker",
+    } in container["volumeMounts"]
+
+
+def test_kubernetes_broker_non_privileged_security_context_unchanged() -> None:
+    client = FakeBrokerClient()
+    KubernetesBrokerService(client=client).run("agent", _run_payload())
+
+    pod_spec = client._job()["spec"]["template"]["spec"]
+    assert pod_spec["securityContext"] == {
+        "runAsNonRoot": True,
+        "fsGroup": 1000,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    container = pod_spec["containers"][0]
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "capabilities": {"drop": ["ALL"]},
+        "runAsUser": 1000,
+        "runAsGroup": 1000,
+    }
+    assert all(volume["name"] != "docker-graph" for volume in pod_spec["volumes"])
 
 
 def test_kubernetes_broker_cleanup_deletes_job() -> None:
@@ -963,6 +1051,8 @@ def _settings() -> SimpleNamespace:
         docker=SimpleNamespace(
             broker_url="http://broker:8082",
             broker_allowed_images=["ghcr.io/platformnetwork/"],
+            allow_privileged=False,
+            broker_privileged_slugs=[],
         ),
         kubernetes=SimpleNamespace(
             service_account="default-sa",

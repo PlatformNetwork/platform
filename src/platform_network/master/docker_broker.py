@@ -181,7 +181,12 @@ class DockerBrokerService:
         )
 
     def _hardened_limits(self, request: BrokerRunRequest) -> DockerLimits:
-        limits = DockerLimits(**request.limits.model_dump())
+        if request.limits.privileged:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="privileged broker jobs require an isolated Kubernetes runtime",
+            )
+        limits = DockerLimits(**request.limits.model_dump(exclude={"privileged"}))
         if not limits.read_only:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

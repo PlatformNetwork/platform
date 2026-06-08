@@ -66,6 +66,8 @@ class DockerSettings(BaseModel):
     broker_allowed_images: list[str] = Field(
         default_factory=lambda: ["ghcr.io/platformnetwork/"]
     )
+    allow_privileged: bool = False
+    broker_privileged_slugs: list[str] = Field(default_factory=list)
 
 
 class RuntimeSettings(BaseModel):

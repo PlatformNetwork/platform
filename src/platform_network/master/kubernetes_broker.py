@@ -63,6 +63,8 @@ class KubernetesBrokerService:
         node_selector: dict[str, str] | None = None,
         tolerations: tuple[dict[str, object], ...] = (),
         runtime_class_name: str | None = None,
+        allow_privileged: bool = False,
+        privileged_slugs: tuple[str, ...] = (),
     ) -> None:
         self.client = client
         self.namespace = namespace
@@ -74,6 +76,8 @@ class KubernetesBrokerService:
         self.node_selector = dict(node_selector or {})
         self.tolerations = tuple(dict(toleration) for toleration in tolerations)
         self.runtime_class_name = runtime_class_name
+        self.allow_privileged = allow_privileged
+        self.privileged_slugs = tuple(privileged_slugs)
 
     @classmethod
     def from_settings(cls, settings: Any) -> KubernetesBrokerService:
@@ -91,10 +95,13 @@ class KubernetesBrokerService:
             node_selector=settings.kubernetes.node_selector,
             tolerations=tuple(settings.kubernetes.tolerations),
             runtime_class_name=settings.kubernetes.runtime_class_name,
+            allow_privileged=settings.docker.allow_privileged,
+            privileged_slugs=tuple(settings.docker.broker_privileged_slugs),
         )
 
     def run(self, challenge_slug: str, request: BrokerRunRequest) -> BrokerRunResponse:
         self._validate_request(request)
+        self._validate_privileged(challenge_slug, request)
         run_id = secrets.token_hex(4)
         try:
             job = build_broker_job(
@@ -218,6 +225,27 @@ class KubernetesBrokerService:
                     status.HTTP_400_BAD_REQUEST,
                     f"unsupported mount source type: {mount.target}",
                 )
+
+    def _validate_privileged(
+        self, challenge_slug: str, request: BrokerRunRequest
+    ) -> None:
+        if not request.limits.privileged:
+            return
+        if not self.allow_privileged:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "privileged broker jobs are disabled",
+            )
+        if challenge_slug not in self.privileged_slugs:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "challenge is not allowed to run privileged broker jobs",
+            )
+        if not self.runtime_class_name:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "privileged broker jobs require an isolated runtime class",
+            )
 
 
 class KubernetesBrokerRouterService:
@@ -509,6 +537,8 @@ class KubernetesBrokerRouterService:
             node_selector=node_selector,
             tolerations=tuple(tolerations),
             runtime_class_name=runtime_class_name,
+            allow_privileged=self.settings.docker.allow_privileged,
+            privileged_slugs=tuple(self.settings.docker.broker_privileged_slugs),
         )
 
     @classmethod

@@ -440,6 +440,16 @@ def build_broker_job(
         resources["limits"][gpu_resource_name] = str(request.limits.gpu_count)
     volumes = _broker_volumes(name, request)
     volume_mounts = _broker_volume_mounts(request)
+    if request.limits.privileged:
+        volumes.append({"name": "docker-graph", "emptyDir": {}})
+        volume_mounts.append({"name": "docker-graph", "mountPath": "/var/lib/docker"})
+        container_security_context = _privileged_container_security_context()
+        pod_security_context = _privileged_pod_security_context()
+    else:
+        container_security_context = _container_security_context(
+            read_only=request.limits.read_only
+        ) | {"runAsUser": 1000, "runAsGroup": 1000}
+        pod_security_context = _pod_security_context()
     init_containers = _broker_init_containers(
         request, archive_extractor_image=archive_extractor_image
     )
@@ -451,10 +461,7 @@ def build_broker_job(
         "env": [{"name": key, "value": value} for key, value in request.env.items()],
         "resources": resources,
         "volumeMounts": volume_mounts,
-        "securityContext": _container_security_context(
-            read_only=request.limits.read_only
-        )
-        | {"runAsUser": 1000, "runAsGroup": 1000},
+        "securityContext": container_security_context,
     }
     if request.image_pull_policy:
         container["imagePullPolicy"] = request.image_pull_policy
@@ -462,7 +469,7 @@ def build_broker_job(
         "serviceAccountName": service_account_name,
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
-        "securityContext": _pod_security_context(),
+        "securityContext": pod_security_context,
         "initContainers": init_containers,
         "containers": [container],
         "volumes": volumes,
@@ -907,6 +914,26 @@ def _container_security_context(*, read_only: bool = False) -> dict[str, Any]:
         "allowPrivilegeEscalation": False,
         "readOnlyRootFilesystem": read_only,
         "capabilities": {"drop": ["ALL"]},
+    }
+
+
+def _privileged_pod_security_context() -> dict[str, Any]:
+    return {
+        "runAsNonRoot": False,
+        "runAsUser": 0,
+        "runAsGroup": 0,
+        "fsGroup": 0,
+        "seccompProfile": {"type": "Unconfined"},
+    }
+
+
+def _privileged_container_security_context() -> dict[str, Any]:
+    return {
+        "privileged": True,
+        "allowPrivilegeEscalation": True,
+        "readOnlyRootFilesystem": False,
+        "runAsUser": 0,
+        "runAsGroup": 0,
     }
 
 

@@ -54,6 +54,7 @@ class DockerLimits:
     security_opt: tuple[str, ...] = ("no-new-privileges",)
     init: bool = True
     gpu_count: int | None = None
+    privileged: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.cpus) or self.cpus <= 0:
@@ -199,6 +200,8 @@ class DockerExecutor:
             cmd.extend(["--memory-swap", limits.memory_swap])
         if limits.read_only:
             cmd.append("--read-only")
+        if limits.privileged:
+            cmd.append("--privileged")
         if limits.user:
             cmd.extend(["--user", limits.user])
         for tmpfs in limits.tmpfs:

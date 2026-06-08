@@ -272,6 +272,36 @@ def test_broker_rejects_weakened_hardening(tmp_path: Path) -> None:
     assert "read-only root filesystem" in response.text
 
 
+def test_broker_rejects_privileged_jobs(tmp_path: Path) -> None:
+    app = create_docker_broker_app(
+        registry=Registry(),
+        service=DockerBrokerService(
+            DockerBrokerConfig(
+                docker_bin="true",
+                workspace_dir=tmp_path / "work",
+                allowed_images=("python:",),
+            )
+        ),
+    )
+    response = TestClient(app).post(
+        "/v1/docker/run",
+        headers={
+            "authorization": "Bearer tok",
+            "x-platform-challenge-slug": "agent",
+        },
+        json={
+            "job_id": "job-1",
+            "image": "python:3.12-slim",
+            "command": ["true"],
+            "limits": {"privileged": True},
+            "timeout_seconds": 10,
+        },
+    )
+
+    assert response.status_code == 403
+    assert "isolated Kubernetes runtime" in response.text
+
+
 def test_broker_rejects_unsafe_file_mount_source(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
