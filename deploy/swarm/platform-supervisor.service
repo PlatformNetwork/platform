@@ -1,0 +1,62 @@
+# Platform Network control-plane supervisor (Docker-Swarm backend).
+#
+# TEMPLATE ONLY — installed during the GO-gated cutover (plan Task 28).
+# Replaces the Kubernetes control-plane CronJobs (reaper, image updaters,
+# config sync, weights, self-update) with one watchdog-supervised process.
+#
+# Adjust before install:
+#   - ExecStart/WorkingDirectory: the supervisor self-update (plan Task 22)
+#     launches through the `current` symlink under the release root
+#     (/var/lib/platform/supervisor by default): `current` ->
+#     `releases/<version>/` (a uv-managed checkout). `uv run --project`
+#     resolves the per-release venv, so each staged release is isolated.
+#   - User/Group: dedicated service account with docker socket access
+#     (member of the `docker` group) once Task 17+ jobs land.
+#   - WatchdogSec: must be comfortably above the supervisor heartbeat; the
+#     process heartbeats at WATCHDOG_USEC/2 automatically.
+
+[Unit]
+Description=Platform Network control-plane supervisor (Docker backend)
+Documentation=https://github.com/PlatformNetwork/platform
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+WorkingDirectory=/var/lib/platform/supervisor/current
+Environment=UV_CACHE_DIR=/var/lib/platform/supervisor/uv-cache
+ExecStart=/usr/local/bin/uv run --project /var/lib/platform/supervisor/current platform master supervisor --config /etc/platform/master.yaml
+# Restart=always (NOT on-failure): the self-update swap exits cleanly
+# (exit 0 via the SIGTERM path) expecting systemd to re-exec whatever
+# `current` points at; the rollback agent exits non-zero for the same
+# reason. `systemctl stop` still stops the unit permanently — systemd
+# never auto-restarts after an explicit stop.
+Restart=always
+RestartSec=5s
+WatchdogSec=30s
+TimeoutStopSec=30s
+
+# --- Hardening -----------------------------------------------------------
+# Deliberately NOT ProtectSystem=strict / PrivateNetwork: the supervisor
+# talks to the local docker daemon and the broker over the network, and
+# Task 17+ jobs need the docker CLI/socket.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

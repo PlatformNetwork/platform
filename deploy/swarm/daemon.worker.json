@@ -1,0 +1,17 @@
+{
+  "node-generic-resources": [
+    "NVIDIA-GPU=GPU-00000000-0000-0000-0000-000000000000"
+  ],
+  "runtimes": {
+    "nvidia": {
+      "path": "nvidia-container-runtime",
+      "runtimeArgs": []
+    }
+  },
+  "live-restore": true,
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "50m",
+    "max-file": "5"
+  }
+}

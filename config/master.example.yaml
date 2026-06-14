@@ -41,7 +41,7 @@ docker:
     - ghcr.io/platformnetwork/
 
 runtime:
-  backend: kubernetes
+  backend: docker
 
 kubernetes:
   namespace: platform
@@ -53,7 +53,7 @@ kubernetes:
   storage_class: null
   storage_size: 10Gi
   challenge_mode: statefulset
-  broker_backend: kubernetes
+  broker_backend: docker
   # Positive broker limits.gpu_count values map to resources.limits for this resource.
   # Omitted or null gpu_count remains CPU-only; clients such as PRISM do not set this name.
   gpu_resource_name: nvidia.com/gpu

@@ -154,6 +154,37 @@ def test_orchestrator_client_network_volume_pull_and_env(tmp_path: Path) -> None
     assert paths["api-key"].read_text(encoding="utf-8") == "secret"
 
 
+def test_create_container_honors_worker_command(tmp_path: Path) -> None:
+    client = FakeClient()
+    orchestrator = DockerOrchestrator(client=client, secret_dir=tmp_path)
+    spec = ChallengeSpec(
+        slug="demo",
+        image="ghcr.io/org/demo:1",
+        worker_command=("agent-challenge-worker", "--mode", "x"),
+    )
+
+    container = orchestrator._create_container(spec)  # noqa: SLF001
+
+    assert container is client.containers.container
+    run_call = client.containers.runs[0]
+    assert run_call["image"] == "ghcr.io/org/demo:1"
+    assert run_call["command"] == ["agent-challenge-worker", "--mode", "x"]
+
+
+def test_create_container_without_worker_command_uses_image_default(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    orchestrator = DockerOrchestrator(client=client, secret_dir=tmp_path)
+    spec = ChallengeSpec(slug="demo", image="ghcr.io/org/demo:1")
+    assert spec.worker_command == ()
+
+    orchestrator._create_container(spec)  # noqa: SLF001
+
+    run_call = client.containers.runs[0]
+    assert "command" not in run_call
+
+
 def test_docker_orchestrator_database_url_defaults_to_sqlite_data_volume(
     tmp_path: Path,
 ) -> None:

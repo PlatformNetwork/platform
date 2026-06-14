@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 PRODUCTION_ENVIRONMENTS = {"prod", "production", "staging"}
+ORCHESTRATED_BACKENDS = {"kubernetes", "docker"}
 POSTGRES_SCHEMES = ("postgres://", "postgresql://", "postgresql+asyncpg://")
 _SEMVER_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
@@ -43,7 +44,7 @@ def production_policy_enabled(
     env = environ if environ is not None else os.environ
     return (
         is_production_environment(environment)
-        or runtime_backend == "kubernetes"
+        or runtime_backend in ORCHESTRATED_BACKENDS
         or bool(env.get("KUBERNETES_SERVICE_HOST"))
     )
 

@@ -1,0 +1,657 @@
+{
+  "BrokerCleanupRequest": {
+    "properties": {
+      "job_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Job Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "job_id"
+    ],
+    "title": "BrokerCleanupRequest",
+    "type": "object"
+  },
+  "BrokerCleanupResponse": {
+    "properties": {
+      "status": {
+        "default": "ok",
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "title": "BrokerCleanupResponse",
+    "type": "object"
+  },
+  "BrokerContainerInfo": {
+    "properties": {
+      "container_id": {
+        "title": "Container Id",
+        "type": "string"
+      },
+      "container_name": {
+        "title": "Container Name",
+        "type": "string"
+      },
+      "created": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Created"
+      },
+      "image": {
+        "default": "",
+        "title": "Image",
+        "type": "string"
+      },
+      "job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Job Id"
+      },
+      "labels": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Labels",
+        "type": "object"
+      },
+      "status": {
+        "default": "",
+        "title": "Status",
+        "type": "string"
+      },
+      "task_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Task Id"
+      }
+    },
+    "required": [
+      "container_id",
+      "container_name"
+    ],
+    "title": "BrokerContainerInfo",
+    "type": "object"
+  },
+  "BrokerLimits": {
+    "properties": {
+      "cap_drop": {
+        "default": [
+          "ALL"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "title": "Cap Drop",
+        "type": "array"
+      },
+      "cpus": {
+        "default": 2.0,
+        "exclusiveMinimum": 0,
+        "title": "Cpus",
+        "type": "number"
+      },
+      "gpu_count": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Gpu Count"
+      },
+      "init": {
+        "default": true,
+        "title": "Init",
+        "type": "boolean"
+      },
+      "memory": {
+        "default": "4g",
+        "minLength": 1,
+        "title": "Memory",
+        "type": "string"
+      },
+      "memory_swap": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": "4g",
+        "title": "Memory Swap"
+      },
+      "network": {
+        "default": "none",
+        "title": "Network",
+        "type": "string"
+      },
+      "pids_limit": {
+        "default": 512,
+        "minimum": 1,
+        "title": "Pids Limit",
+        "type": "integer"
+      },
+      "privileged": {
+        "default": false,
+        "title": "Privileged",
+        "type": "boolean"
+      },
+      "read_only": {
+        "default": true,
+        "title": "Read Only",
+        "type": "boolean"
+      },
+      "security_opt": {
+        "default": [
+          "no-new-privileges"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "title": "Security Opt",
+        "type": "array"
+      },
+      "tmpfs": {
+        "default": [
+          "/tmp:rw,noexec,nosuid,size=512m"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "title": "Tmpfs",
+        "type": "array"
+      },
+      "ulimits": {
+        "default": [
+          "nofile=1024:1024"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "title": "Ulimits",
+        "type": "array"
+      },
+      "user": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "User"
+      }
+    },
+    "title": "BrokerLimits",
+    "type": "object"
+  },
+  "BrokerListRequest": {
+    "properties": {
+      "job_id": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Job Id"
+      }
+    },
+    "title": "BrokerListRequest",
+    "type": "object"
+  },
+  "BrokerListResponse": {
+    "$defs": {
+      "BrokerContainerInfo": {
+        "properties": {
+          "container_id": {
+            "title": "Container Id",
+            "type": "string"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "created": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created"
+          },
+          "image": {
+            "default": "",
+            "title": "Image",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "container_id",
+          "container_name"
+        ],
+        "title": "BrokerContainerInfo",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "containers": {
+        "items": {
+          "$ref": "#/$defs/BrokerContainerInfo"
+        },
+        "title": "Containers",
+        "type": "array"
+      }
+    },
+    "title": "BrokerListResponse",
+    "type": "object"
+  },
+  "BrokerMount": {
+    "properties": {
+      "archive_b64": {
+        "minLength": 1,
+        "title": "Archive B64",
+        "type": "string"
+      },
+      "read_only": {
+        "default": true,
+        "title": "Read Only",
+        "type": "boolean"
+      },
+      "source_name": {
+        "default": ".",
+        "title": "Source Name",
+        "type": "string"
+      },
+      "source_type": {
+        "default": "directory",
+        "title": "Source Type",
+        "type": "string"
+      },
+      "target": {
+        "minLength": 1,
+        "title": "Target",
+        "type": "string"
+      }
+    },
+    "required": [
+      "target",
+      "archive_b64"
+    ],
+    "title": "BrokerMount",
+    "type": "object"
+  },
+  "BrokerRunRequest": {
+    "$defs": {
+      "BrokerLimits": {
+        "properties": {
+          "cap_drop": {
+            "default": [
+              "ALL"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Cap Drop",
+            "type": "array"
+          },
+          "cpus": {
+            "default": 2.0,
+            "exclusiveMinimum": 0,
+            "title": "Cpus",
+            "type": "number"
+          },
+          "gpu_count": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gpu Count"
+          },
+          "init": {
+            "default": true,
+            "title": "Init",
+            "type": "boolean"
+          },
+          "memory": {
+            "default": "4g",
+            "minLength": 1,
+            "title": "Memory",
+            "type": "string"
+          },
+          "memory_swap": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "4g",
+            "title": "Memory Swap"
+          },
+          "network": {
+            "default": "none",
+            "title": "Network",
+            "type": "string"
+          },
+          "pids_limit": {
+            "default": 512,
+            "minimum": 1,
+            "title": "Pids Limit",
+            "type": "integer"
+          },
+          "privileged": {
+            "default": false,
+            "title": "Privileged",
+            "type": "boolean"
+          },
+          "read_only": {
+            "default": true,
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "security_opt": {
+            "default": [
+              "no-new-privileges"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Security Opt",
+            "type": "array"
+          },
+          "tmpfs": {
+            "default": [
+              "/tmp:rw,noexec,nosuid,size=512m"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Tmpfs",
+            "type": "array"
+          },
+          "ulimits": {
+            "default": [
+              "nofile=1024:1024"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Ulimits",
+            "type": "array"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User"
+          }
+        },
+        "title": "BrokerLimits",
+        "type": "object"
+      },
+      "BrokerMount": {
+        "properties": {
+          "archive_b64": {
+            "minLength": 1,
+            "title": "Archive B64",
+            "type": "string"
+          },
+          "read_only": {
+            "default": true,
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "source_name": {
+            "default": ".",
+            "title": "Source Name",
+            "type": "string"
+          },
+          "source_type": {
+            "default": "directory",
+            "title": "Source Type",
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "archive_b64"
+        ],
+        "title": "BrokerMount",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "command": {
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1,
+        "title": "Command",
+        "type": "array"
+      },
+      "env": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Env",
+        "type": "object"
+      },
+      "image": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Image",
+        "type": "string"
+      },
+      "image_pull_policy": {
+        "anyOf": [
+          {
+            "enum": [
+              "Always",
+              "IfNotPresent",
+              "Never"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Image Pull Policy"
+      },
+      "job_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Job Id",
+        "type": "string"
+      },
+      "labels": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Labels",
+        "type": "object"
+      },
+      "limits": {
+        "$ref": "#/$defs/BrokerLimits"
+      },
+      "mounts": {
+        "items": {
+          "$ref": "#/$defs/BrokerMount"
+        },
+        "title": "Mounts",
+        "type": "array"
+      },
+      "task_id": {
+        "anyOf": [
+          {
+            "maxLength": 256,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Task Id"
+      },
+      "timeout_seconds": {
+        "default": 900,
+        "maximum": 86400,
+        "minimum": 1,
+        "title": "Timeout Seconds",
+        "type": "integer"
+      },
+      "workdir": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Workdir"
+      }
+    },
+    "required": [
+      "job_id",
+      "image",
+      "command"
+    ],
+    "title": "BrokerRunRequest",
+    "type": "object"
+  },
+  "BrokerRunResponse": {
+    "properties": {
+      "container_name": {
+        "title": "Container Name",
+        "type": "string"
+      },
+      "returncode": {
+        "title": "Returncode",
+        "type": "integer"
+      },
+      "stderr": {
+        "default": "",
+        "title": "Stderr",
+        "type": "string"
+      },
+      "stdout": {
+        "default": "",
+        "title": "Stdout",
+        "type": "string"
+      },
+      "timed_out": {
+        "default": false,
+        "title": "Timed Out",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "container_name",
+      "returncode"
+    ],
+    "title": "BrokerRunResponse",
+    "type": "object"
+  }
+}

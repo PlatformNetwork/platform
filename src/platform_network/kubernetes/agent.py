@@ -441,6 +441,7 @@ def _to_challenge_spec(request: GpuChallengeSpecRequest) -> ChallengeSpec:
         required_capabilities=tuple(request.required_capabilities),
         expected_api_version=request.expected_api_version,
         port=request.port,
+        workload_class="service",
     )
 
 

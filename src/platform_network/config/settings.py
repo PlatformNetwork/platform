@@ -71,7 +71,7 @@ class DockerSettings(BaseModel):
 
 
 class RuntimeSettings(BaseModel):
-    backend: str = Field(default="kubernetes", pattern=r"^kubernetes$")
+    backend: Literal["kubernetes", "docker"] = "docker"
 
 
 class KubernetesAutoscalingSettings(BaseModel):
@@ -127,7 +127,7 @@ class KubernetesSettings(BaseModel):
     challenge_mode: str = Field(
         default="statefulset", pattern=r"^(statefulset|deployment)$"
     )
-    broker_backend: str = Field(default="kubernetes", pattern=r"^kubernetes$")
+    broker_backend: Literal["kubernetes", "docker"] = "docker"
     gpu_resource_name: str = "nvidia.com/gpu"
     node_selector: dict[str, str] = Field(default_factory=dict)
     tolerations: list[dict[str, object]] = Field(default_factory=list)

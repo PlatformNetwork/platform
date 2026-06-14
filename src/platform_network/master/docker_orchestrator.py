@@ -17,10 +17,12 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+
+from platform_network.master.workload_ledger import WorkloadClass
 
 DEFAULT_API_VERSION = "1.0"
 DEFAULT_CHALLENGE_PORT = 8000
@@ -63,6 +65,13 @@ class ChallengeResources:
     Attributes:
         cpu: CPU count, translated to Docker nano CPUs.
         memory: Docker memory limit such as ``"4g"`` or ``"512m"``.
+        docker_max_concurrent: Author-declared cap on concurrent Docker
+            workloads for the challenge. ``None`` means "no quota
+            configured" (unlimited) — Task 14 passes this verbatim as
+            ``WorkloadLedger.register(..., max_concurrent=...)``.
+        docker_timeout_seconds: Author-declared per-workload timeout.
+            ``None`` means "no timeout configured" (never reaped) — feeds
+            ``WorkloadEntry.timeout_seconds``.
     """
 
     cpu: float | None = 2.0
@@ -78,13 +87,34 @@ class ChallengeResources:
     gpu_count: int | None = None
     gpu_device_ids: tuple[str, ...] = ()
     gpu_capabilities: tuple[str, ...] = ("gpu",)
+    docker_max_concurrent: int | None = None
+    docker_timeout_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if self.gpu_server is not None and _SAFE_NAME_RE.search(self.gpu_server):
             raise DockerOrchestrationError("GPU server id contains unsafe characters")
+        if self.docker_max_concurrent is not None:
+            _parse_positive_int(self.docker_max_concurrent, "docker_max_concurrent")
+        if self.docker_timeout_seconds is not None:
+            _parse_positive_int(self.docker_timeout_seconds, "docker_timeout_seconds")
 
     @classmethod
-    def from_mapping(cls, resources: dict[str, str]) -> ChallengeResources:
+    def from_mapping(
+        cls,
+        resources: dict[str, str],
+        *,
+        max_concurrent_cap: int | None = None,
+        timeout_seconds_cap: int | None = None,
+    ) -> ChallengeResources:
+        """Parse author-declared resources, clamping quota keys to operator caps.
+
+        ``max_concurrent_cap`` and ``timeout_seconds_cap`` are
+        operator-configured maxima: author-declared
+        ``docker_max_concurrent`` / ``docker_timeout_seconds`` values above
+        a cap are clamped down to it (e.g. author asks 9999 concurrent with
+        an operator cap of 10 → effective 10). ``None`` cap means no clamp.
+        """
+
         cpu = resources.get("cpu") or resources.get("cpus")
         memory = resources.get("memory")
         memory_swap = resources.get("memory_swap") or resources.get("memswap_limit")
@@ -93,6 +123,12 @@ class ChallengeResources:
         gpu_count = resources.get("gpu_count") or resources.get("gpus")
         gpu_device_ids = _split_csv(resources.get("gpu_device_ids"))
         gpu_capabilities = _split_csv(resources.get("gpu_capabilities")) or ("gpu",)
+        docker_max_concurrent = _parse_quota_key(
+            resources, "docker_max_concurrent", cap=max_concurrent_cap
+        )
+        docker_timeout_seconds = _parse_quota_key(
+            resources, "docker_timeout_seconds", cap=timeout_seconds_cap
+        )
         return cls(
             cpu=_parse_cpu(cpu) if cpu else 2.0,
             memory=memory or "4g",
@@ -102,6 +138,8 @@ class ChallengeResources:
             gpu_count=int(gpu_count) if gpu_count else None,
             gpu_device_ids=gpu_device_ids,
             gpu_capabilities=gpu_capabilities,
+            docker_max_concurrent=docker_max_concurrent,
+            docker_timeout_seconds=docker_timeout_seconds,
         )
 
     def as_container_kwargs(self) -> dict[str, Any]:
@@ -149,7 +187,16 @@ class ChallengeResources:
 
 @dataclass(frozen=True)
 class ChallengeSpec:
-    """Runtime specification for a challenge container."""
+    """Runtime specification for a challenge container.
+
+    ``workload_class`` declares how the Swarm backend schedules the workload:
+    ``"job"`` is an ephemeral evaluation run (Swarm replicated-job, eligible
+    for timeout reaping) and ``"service"`` is a long-lived challenge API
+    container such as PRISM (Swarm replicated service, NEVER reaped). The
+    default is ``"job"`` to match :class:`WorkloadEntry`; the long-lived
+    challenge API construction sites pass ``workload_class="service"``
+    explicitly.
+    """
 
     slug: str
     image: str
@@ -158,11 +205,25 @@ class ChallengeSpec:
     docker_broker_token: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
+    external_secrets: tuple[str, ...] = ()
     resources: ChallengeResources = field(default_factory=ChallengeResources)
     required_capabilities: tuple[str, ...] = ("get_weights", "proxy_routes")
     expected_api_version: str = DEFAULT_API_VERSION
     port: int = DEFAULT_CHALLENGE_PORT
     worker_command: tuple[str, ...] = ()
+    workload_class: WorkloadClass = "job"
+
+    def __post_init__(self) -> None:
+        if self.workload_class not in get_args(WorkloadClass):
+            raise DockerOrchestrationError(
+                f"workload_class must be one of {get_args(WorkloadClass)}, "
+                f"got {self.workload_class!r}"
+            )
+        for name in self.external_secrets:
+            if not isinstance(name, str) or not name.strip():
+                raise DockerOrchestrationError(
+                    "external_secrets entries must be non-empty strings"
+                )
 
     @property
     def safe_slug(self) -> str:
@@ -200,6 +261,21 @@ class ChallengeSpec:
         if self.docker_broker_token is not None:
             secrets["docker_broker_token"] = self.docker_broker_token
         return secrets
+
+    def secret_names(self) -> tuple[str, ...]:
+        """Return every secret name visible inside the container.
+
+        Value-bearing secrets (:meth:`all_secrets`) come first, followed by
+        ``external_secrets``: record-declared names whose values are
+        provisioned out-of-band (for the Swarm backend these are pre-created
+        ``docker secret`` objects the platform only references, never reads).
+        """
+
+        names = list(self.all_secrets())
+        for name in self.external_secrets:
+            if name not in names:
+                names.append(name)
+        return tuple(names)
 
 
 def worker_command_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
@@ -417,6 +493,8 @@ class DockerOrchestrator:
         mounts = self._build_mounts(spec)
         environment = self._build_environment(spec)
         kwargs = spec.resources.as_container_kwargs()
+        if spec.worker_command:
+            kwargs["command"] = list(spec.worker_command)
         return self.client.containers.run(
             spec.image,
             detach=True,
@@ -584,6 +662,46 @@ def _parse_cpu(value: str) -> float:
     if value.endswith("m"):
         return float(value[:-1]) / 1000
     return float(value)
+
+
+def _parse_positive_int(value: object, key: str) -> int:
+    """Validate ``value`` as a strictly positive integer for ``key``."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise DockerOrchestrationError(
+            f"{key} must be a positive integer, got {value!r}"
+        )
+    try:
+        parsed = int(str(value).strip())
+    except ValueError as exc:
+        raise DockerOrchestrationError(
+            f"{key} must be a positive integer, got {value!r}"
+        ) from exc
+    if parsed <= 0:
+        raise DockerOrchestrationError(
+            f"{key} must be a positive integer, got {value!r}"
+        )
+    return parsed
+
+
+def _parse_quota_key(
+    resources: Mapping[str, object], key: str, *, cap: int | None
+) -> int | None:
+    """Parse an optional quota key, clamping it to the operator ``cap``.
+
+    Missing or empty values mean "not configured" and yield ``None``. A
+    declared value must be a strictly positive integer; values above the
+    operator cap are clamped down to the cap.
+    """
+
+    value = resources.get(key)
+    if value is None or value == "":
+        return None
+    parsed = _parse_positive_int(value, key)
+    if cap is not None:
+        cap = _parse_positive_int(cap, f"{key} operator cap")
+        return min(parsed, cap)
+    return parsed
 
 
 def _tmpfs_mapping(values: tuple[str, ...]) -> dict[str, str]:

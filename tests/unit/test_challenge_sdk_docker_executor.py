@@ -56,6 +56,34 @@ def test_build_run_command_has_security_flags(tmp_path: Path) -> None:
     ]
 
 
+def test_build_run_command_emits_gpus_when_gpu_requested(tmp_path: Path) -> None:
+    spec = DockerRunSpec(
+        image="platformnetwork/swe-forge:task",
+        command=("true",),
+        mounts=(DockerMount(tmp_path, "/workspace/forge"),),
+        limits=DockerLimits(gpu_count=2),
+    )
+    cmd = DockerExecutor(
+        challenge="agent", allowed_images=("platformnetwork/",)
+    ).build_run_command(spec, "name")
+
+    assert "--gpus" in cmd
+    assert cmd[cmd.index("--gpus") + 1] == "2"
+
+
+def test_build_run_command_omits_gpus_without_gpu_request(tmp_path: Path) -> None:
+    spec = DockerRunSpec(
+        image="platformnetwork/swe-forge:task",
+        command=("true",),
+        mounts=(DockerMount(tmp_path, "/workspace/forge"),),
+    )
+    cmd = DockerExecutor(
+        challenge="agent", allowed_images=("platformnetwork/",)
+    ).build_run_command(spec, "name")
+
+    assert "--gpus" not in cmd
+
+
 def test_docker_limits_default_to_hardened_runtime_controls() -> None:
     limits = DockerLimits(cpus=1, memory="512m", pids_limit=1)
 

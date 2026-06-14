@@ -57,6 +57,7 @@ class NormalValidatorRunner:
                 worker_command=worker_command_from_metadata(
                     getattr(challenge, "metadata", {}) or {}
                 ),
+                workload_class="service",
             )
             self.orchestrator.start_challenge(spec)
 

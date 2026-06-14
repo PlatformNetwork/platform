@@ -156,7 +156,7 @@ def test_load_settings_parses_complex_env(monkeypatch) -> None:
     assert load_settings().docker.broker_allowed_images == ["ghcr.io/platformnetwork/"]
 
 
-def test_load_settings_rejects_docker_runtime_backends(tmp_path: Path) -> None:
+def test_load_settings_accepts_docker_runtime_backends(tmp_path: Path) -> None:
     config = tmp_path / "config.yaml"
     config.write_text(
         "\n".join(
@@ -165,6 +165,23 @@ def test_load_settings_rejects_docker_runtime_backends(tmp_path: Path) -> None:
                 "  backend: docker",
                 "kubernetes:",
                 "  broker_backend: docker",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+    assert settings.runtime.backend == "docker"
+    assert settings.kubernetes.broker_backend == "docker"
+
+
+def test_load_settings_rejects_unknown_runtime_backends(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "runtime:",
+                "  backend: podman",
             ]
         ),
         encoding="utf-8",

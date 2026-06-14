@@ -647,7 +647,9 @@ def test_cli_master_weights_once_defaults_to_compute_only(
     client_kwargs = cast(dict[str, object], created_runtime["client_kwargs"])
     assert client_kwargs["timeout_seconds"] == 1.5
     assert client_kwargs["retries"] == 2
-    assert client_kwargs["kubernetes_target_registry"] is not None
+    # Default backend is docker (no runtime.backend set in this config), so the
+    # challenge client is wired without a Kubernetes target registry.
+    assert client_kwargs["kubernetes_target_registry"] is None
     assert setter_calls == []
 
 
@@ -1443,7 +1445,13 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
     assert "gpu_count" not in prism.resources
     assert "gpu_capabilities" not in prism.resources
     assert prism.metadata["platform_eval_gpu_count"] == "1"
-    assert prism.metadata["runtime_database"] == "platform-managed-challenge-postgres"
+    assert prism.metadata["runtime_database"] == "challenge-local-sqlite"
+    assert prism.metadata["runtime_database_url"] == (
+        "sqlite+aiosqlite:////data/challenge.sqlite3"
+    )
+    assert prism.metadata["runtime_database_journal_mode"] == "wal"
+    assert prism.metadata["workload_class"] == "service"
+    assert "postgres" not in str(prism.metadata)
     assert "token" not in prism.metadata
     assert "database_url" not in prism.metadata
     assert agent.emission_percent == Decimal("15")

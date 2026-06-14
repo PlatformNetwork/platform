@@ -1,0 +1,10 @@
+{
+  "endpoint": "/v1/docker/cleanup",
+  "request": {
+    "job_id": "job-1"
+  },
+  "response": {
+    "status": "ok"
+  },
+  "status_code": 200
+}

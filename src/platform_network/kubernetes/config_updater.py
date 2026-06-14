@@ -134,17 +134,7 @@ class ConfigSyncUpdater:
         return fetch_github_config(self.source)
 
     def _validate_config(self, config_text: str) -> None:
-        documents = list(yaml.safe_load_all(config_text))
-        for document in documents:
-            if not isinstance(document, dict):
-                continue
-            kind = document.get("kind")
-            if not kind:
-                continue
-            if str(kind).lower() == "secret":
-                raise SecretSyncRejected("refusing to sync plaintext Secret manifest")
-            if kind not in self.source.allowed_kinds:
-                raise ValueError(f"unsupported config kind: {kind}")
+        validate_config_text(config_text, allowed_kinds=self.source.allowed_kinds)
 
     def _validate_rollout_targets(
         self, rollout_targets: Sequence[RolloutTarget]
@@ -225,6 +215,26 @@ class ConfigSyncUpdater:
 
 class SecretSyncRejected(ValueError):
     pass
+
+
+def validate_config_text(config_text: str, *, allowed_kinds: Sequence[str]) -> None:
+    """Validate fetched config text (pure; shared with the Swarm supervisor port).
+
+    Raises :class:`SecretSyncRejected` for any Secret manifest and
+    :class:`ValueError` for kinds outside ``allowed_kinds`` or unparseable
+    YAML — byte-identical behavior to the original inline validation.
+    """
+    documents = list(yaml.safe_load_all(config_text))
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        kind = document.get("kind")
+        if not kind:
+            continue
+        if str(kind).lower() == "secret":
+            raise SecretSyncRejected("refusing to sync plaintext Secret manifest")
+        if kind not in allowed_kinds:
+            raise ValueError(f"unsupported config kind: {kind}")
 
 
 def fetch_github_config(source: ConfigSyncSource) -> str:

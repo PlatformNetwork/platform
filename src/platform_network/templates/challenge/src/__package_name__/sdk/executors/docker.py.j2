@@ -200,6 +200,8 @@ class DockerExecutor:
             cmd.extend(["--memory-swap", limits.memory_swap])
         if limits.read_only:
             cmd.append("--read-only")
+        if limits.gpu_count:
+            cmd.extend(["--gpus", str(limits.gpu_count)])
         if limits.privileged:
             cmd.append("--privileged")
         if limits.user:

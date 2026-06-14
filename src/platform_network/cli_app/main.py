@@ -23,7 +23,6 @@ from platform_network.gpu.agent import GpuAgentService, create_gpu_agent_app
 from platform_network.gpu.capabilities import ResourceCapabilityChecker
 from platform_network.gpu.client import GpuAgentClient
 from platform_network.gpu.registry import FileGpuServerRegistry
-from platform_network.gpu.router import ChallengeOrchestratorRouter
 from platform_network.kubernetes.agent import create_kubernetes_agent_app
 from platform_network.kubernetes.config_updater import (
     ConfigSyncSource,
@@ -35,6 +34,7 @@ from platform_network.master.app_admin import create_admin_app
 from platform_network.master.app_proxy import create_proxy_app
 from platform_network.master.challenge_client import ChallengeClient
 from platform_network.master.docker_broker import (
+    BrokerService,
     DockerBrokerConfig,
     DockerBrokerService,
     create_docker_broker_app,
@@ -62,6 +62,10 @@ from platform_network.master.service import (
     active_challenge_inputs,
 )
 from platform_network.observability.logging import configure_logging
+from platform_network.orchestration.factory import (
+    OrchestrationBackend,
+    create_backend,
+)
 from platform_network.schemas.challenge import (
     ChallengeCreate,
     ChallengeStatus,
@@ -177,6 +181,16 @@ class DockerRuntimeController:
         record = await _resolve(self.registry.get(slug))
         get_broker_token = getattr(self.registry, "get_broker_token", None)
         broker_token = get_broker_token(slug) if callable(get_broker_token) else None
+        # Record-declared secret names beyond the per-slug registry tokens
+        # (e.g. agent-challenge's submission_env_encryption_key) have no value
+        # source on the master; they are provisioned out-of-band and carried
+        # as external references so the Swarm backend mounts the pre-created
+        # docker secrets without ever handling the values.
+        external_secrets = tuple(
+            name
+            for name in (getattr(record, "secrets", []) or [])
+            if name not in ("challenge_token", "docker_broker_token")
+        )
         return ChallengeSpec(
             slug=record.slug,
             image=record.image,
@@ -184,6 +198,7 @@ class DockerRuntimeController:
             challenge_token=self.registry.get_token(slug),
             docker_broker_token=broker_token,
             env=record.env,
+            external_secrets=external_secrets,
             resources=ChallengeResources.from_mapping(record.resources),
             required_capabilities=tuple(record.required_capabilities),
             port=port_from_internal_base_url(
@@ -192,6 +207,7 @@ class DockerRuntimeController:
             worker_command=worker_command_from_metadata(
                 getattr(record, "metadata", {}) or {}
             ),
+            workload_class="service",
         )
 
     async def pull(self, slug: str):
@@ -331,23 +347,14 @@ def _ensure_kubernetes_broker_backend(settings) -> None:
         )
 
 
-def _challenge_orchestrator(settings) -> ChallengeOrchestratorRouter:
-    if settings.runtime.backend == "kubernetes":
-        _ensure_kubernetes_broker_backend(settings)
-        return ChallengeOrchestratorRouter(
-            local_orchestrator=KubernetesTargetRouter.from_settings(
-                settings, _kubernetes_target_registry(settings)
-            ),
-            gpu_clients={},
-        )
-    return ChallengeOrchestratorRouter(
-        local_orchestrator=DockerOrchestrator(
-            network_name=settings.docker.network_name,
-            secret_dir=settings.docker.secret_dir,
-            internal_network=settings.docker.internal_network,
-            docker_broker_url=settings.docker.broker_url,
+def _challenge_orchestrator(settings) -> OrchestrationBackend:
+    _ensure_kubernetes_broker_backend(settings)
+    return create_backend(
+        settings,
+        kubernetes_target_registry_factory=lambda: _kubernetes_target_registry(
+            settings
         ),
-        gpu_clients=_gpu_clients(settings),
+        gpu_clients_factory=lambda: _gpu_clients(settings),
     )
 
 
@@ -496,7 +503,16 @@ def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
             "benchmark_label": "PRISM architecture and training reward boards",
             "evaluation_timeout_seconds": 900,
             "submission_format": "zip",
-            "runtime_database": "platform-managed-challenge-postgres",
+            # Task 24: PRISM metadata DB is SQLite on the challenge's named
+            # LOCAL docker volume (platform_prism_sqlite -> /data), WAL mode,
+            # single writer (replicas=1). The retired managed Postgres is
+            # archived to disk by scripts/archive_prism_postgres.sh (never
+            # imported). workload_class is declarative here; the scheduling
+            # authority remains ChallengeSpec.workload_class / Swarm Spec.Mode.
+            "runtime_database": "challenge-local-sqlite",
+            "runtime_database_url": "sqlite+aiosqlite:////data/challenge.sqlite3",
+            "runtime_database_journal_mode": "wal",
+            "workload_class": "service",
             "platform_eval_image": evaluator_image,
             "platform_eval_gpu_count": "1",
             "platform_eval_max_gpu_count": "8",
@@ -637,20 +653,52 @@ def master_broker(config: Path = typer.Option(Path("config/master.example.yaml")
             ),
         )
     else:
-        broker = create_docker_broker_app(
-            registry=registry,
-            service=DockerBrokerService(
+        docker_service: BrokerService
+        if settings.runtime.backend == "docker":
+            from platform_network.master.swarm_backend import (
+                SwarmBrokerConfig,
+                SwarmBrokerService,
+            )
+
+            docker_service = SwarmBrokerService(
+                SwarmBrokerConfig(
+                    workspace_dir=Path(settings.docker.broker_workspace_dir),
+                    allowed_images=tuple(settings.docker.broker_allowed_images),
+                )
+            )
+        else:
+            docker_service = DockerBrokerService(
                 DockerBrokerConfig(
                     workspace_dir=Path(settings.docker.broker_workspace_dir),
                     allowed_images=tuple(settings.docker.broker_allowed_images),
                 )
-            ),
-        )
+            )
+        broker = create_docker_broker_app(registry=registry, service=docker_service)
     endpoint = f"{settings.docker.broker_host}:{settings.docker.broker_port}"
     typer.echo(f"Starting Docker broker API on {endpoint}")
     uvicorn.run(
         broker, host=settings.docker.broker_host, port=settings.docker.broker_port
     )
+
+
+@master_app.command("supervisor")
+def master_supervisor(config: Path = typer.Option(Path("config/master.example.yaml"))):
+    """Run the Docker-backend control-plane supervisor (systemd Type=notify)."""
+    settings = load_settings(config)
+    configure_logging(settings.observability.log_json)
+    if settings.runtime.backend != "docker":
+        raise typer.BadParameter(
+            "the supervisor replaces Kubernetes control-plane CronJobs and only "
+            "runs with runtime.backend=docker; "
+            f"got runtime.backend={settings.runtime.backend!r}"
+        )
+    from platform_network.supervisor import build_supervisor
+
+    supervisor = build_supervisor(settings)
+    typer.echo(
+        f"Starting platform supervisor with {len(supervisor.tasks)} scheduled task(s)"
+    )
+    raise typer.Exit(code=supervisor.run())
 
 
 @k8s_agent_app.command("run")

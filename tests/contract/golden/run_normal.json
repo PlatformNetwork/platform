@@ -1,0 +1,62 @@
+{
+  "endpoint": "/v1/docker/run",
+  "request": {
+    "command": [
+      "python",
+      "-V"
+    ],
+    "env": {
+      "PLATFORM_ENV": "contract"
+    },
+    "image": "ghcr.io/platformnetwork/challenge:1.2.3",
+    "image_pull_policy": "IfNotPresent",
+    "job_id": "job-1",
+    "labels": {
+      "platform.challenge": "agent"
+    },
+    "limits": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "cpus": 2.0,
+      "gpu_count": null,
+      "init": true,
+      "memory": "4g",
+      "memory_swap": "4g",
+      "network": "none",
+      "pids_limit": 512,
+      "privileged": false,
+      "read_only": true,
+      "security_opt": [
+        "no-new-privileges"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=512m"
+      ],
+      "ulimits": [
+        "nofile=1024:1024"
+      ],
+      "user": null
+    },
+    "mounts": [
+      {
+        "archive_b64": "<B64>",
+        "read_only": true,
+        "source_name": ".",
+        "source_type": "directory",
+        "target": "/workspace/forge"
+      }
+    ],
+    "task_id": "task-1",
+    "timeout_seconds": 900,
+    "workdir": "/workspace"
+  },
+  "response": {
+    "container_name": "<ID>",
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "Python 3.12.4\n",
+    "timed_out": false
+  },
+  "status_code": 200
+}
