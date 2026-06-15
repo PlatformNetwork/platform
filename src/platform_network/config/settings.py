@@ -71,6 +71,7 @@ class DockerSettings(BaseModel):
     broker_node_role: Literal["manager", "worker"] = "manager"
     broker_allow_privileged_escape: bool = False
     broker_placement_constraint: str | None = "node.role==worker"
+    challenge_placement_constraint: str | None = None
 
 
 class RuntimeSettings(BaseModel):

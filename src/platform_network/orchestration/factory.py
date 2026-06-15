@@ -107,13 +107,18 @@ def create_backend(
             )
         )
     if backend == "docker":
+        swarm_kwargs: dict[str, Any] = {
+            "network_name": settings.docker.network_name,
+            "internal_network": settings.docker.internal_network,
+            "docker_broker_url": settings.docker.broker_url,
+        }
+        if settings.docker.challenge_placement_constraint:
+            swarm_kwargs["placement_constraint"] = (
+                settings.docker.challenge_placement_constraint
+            )
         return DockerOrchestrationBackend(
             ChallengeOrchestratorRouter(
-                local_orchestrator=SwarmChallengeOrchestrator(
-                    network_name=settings.docker.network_name,
-                    internal_network=settings.docker.internal_network,
-                    docker_broker_url=settings.docker.broker_url,
-                ),
+                local_orchestrator=SwarmChallengeOrchestrator(**swarm_kwargs),
                 gpu_clients=gpu_clients_factory(),
             )
         )
