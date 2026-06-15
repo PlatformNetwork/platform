@@ -14,6 +14,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir uv docker
 
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.5.3.tgz -o /tmp/docker.tgz \
+    && tar -xzf /tmp/docker.tgz -C /tmp \
+    && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker /tmp/docker.tgz \
+    && docker --version
+
 COPY . .
 RUN if [ -f pyproject.toml ]; then uv pip install --system -e ".[master]"; fi
 RUN groupadd --system --gid 1000 platform \
