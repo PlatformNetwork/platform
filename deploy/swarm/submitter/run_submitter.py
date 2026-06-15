@@ -170,6 +170,14 @@ def _build_runner(settings: Settings) -> NormalValidatorRunner:
 
 async def _run(settings: Settings) -> None:
     runner = _build_runner(settings)
+    # Re-assert logging AFTER the runtime is built. ``_build_runner`` calls
+    # ``create_bittensor_submit_runtime``, which initializes bittensor and
+    # resets root logging to WARNING ("Enabling default logging (Warning
+    # level)"), silencing this module's INFO records for the rest of the
+    # process. ``configure_logging`` uses ``basicConfig(..., force=True)``, so
+    # this re-call clears bittensor's handler and restores our INFO handler
+    # with no duplicates.
+    configure_logging(settings.observability.log_json)
     _log_startup_identity(runner, settings)
 
     async def submit_weights() -> None:
