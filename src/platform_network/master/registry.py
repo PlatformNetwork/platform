@@ -376,7 +376,7 @@ class DatabaseChallengeRegistry:
                 )
             if not updates:
                 return _record_from_model(model)
-            _apply_model_updates(model, updates)
+            await _apply_model_updates(session, model, updates)
             await session.flush()
             await session.refresh(model)
             await self._load_relationships(session, model)
@@ -629,7 +629,27 @@ def _model_from_payload(
     return model
 
 
-def _apply_model_updates(model: Challenge, updates: dict[str, Any]) -> None:
+async def _replace_collection(
+    session: AsyncSession, model: Challenge, attribute: str, new_rows: list[Any]
+) -> None:
+    """Replace a child collection delete-before-insert to avoid UNIQUE clashes.
+
+    Reassigning ``model.<attribute> = [new rows]`` in one flush makes SQLAlchemy
+    emit the INSERT of the new rows BEFORE the orphan DELETE of the old rows,
+    which transiently violates the per-(parent, key/name) unique constraints on
+    e.g. ``challenge_env`` and ``challenge_capabilities``. Clearing the
+    collection and flushing first guarantees the orphan DELETE is issued before
+    the new rows are inserted on the subsequent flush.
+    """
+
+    setattr(model, attribute, [])
+    await session.flush()
+    setattr(model, attribute, new_rows)
+
+
+async def _apply_model_updates(
+    session: AsyncSession, model: Challenge, updates: dict[str, Any]
+) -> None:
     if "name" in updates:
         model.name = updates["name"]
     if "description" in updates:
@@ -660,37 +680,64 @@ def _apply_model_updates(model: Challenge, updates: dict[str, Any]) -> None:
         model.image.tag = tag
         model.image.digest = digest
     if "resources" in updates:
-        model.resources = [
-            ChallengeResource(id=uuid.uuid4(), key=key, value=value)
-            for key, value in (updates["resources"] or {}).items()
-        ]
+        await _replace_collection(
+            session,
+            model,
+            "resources",
+            [
+                ChallengeResource(id=uuid.uuid4(), key=key, value=value)
+                for key, value in (updates["resources"] or {}).items()
+            ],
+        )
     if "volumes" in updates:
         volumes = dict(updates["volumes"] or {})
         volumes.setdefault("sqlite", default_sqlite_volume_name(model.slug))
-        model.volumes = [
-            ChallengeVolume(id=uuid.uuid4(), name=name, mount_path=value, type="volume")
-            for name, value in volumes.items()
-        ]
+        await _replace_collection(
+            session,
+            model,
+            "volumes",
+            [
+                ChallengeVolume(
+                    id=uuid.uuid4(), name=name, mount_path=value, type="volume"
+                )
+                for name, value in volumes.items()
+            ],
+        )
     if "env" in updates:
-        model.env = [
-            ChallengeEnv(id=uuid.uuid4(), key=key, value_encrypted=value)
-            for key, value in (updates["env"] or {}).items()
-        ]
+        await _replace_collection(
+            session,
+            model,
+            "env",
+            [
+                ChallengeEnv(id=uuid.uuid4(), key=key, value_encrypted=value)
+                for key, value in (updates["env"] or {}).items()
+            ],
+        )
     if "secrets" in updates:
-        model.secrets = [
-            ChallengeSecret(
-                id=uuid.uuid4(),
-                name=name,
-                mount_path=f"/run/secrets/platform/{name}",
-                source_path=name,
-            )
-            for name in (updates["secrets"] or [])
-        ]
+        await _replace_collection(
+            session,
+            model,
+            "secrets",
+            [
+                ChallengeSecret(
+                    id=uuid.uuid4(),
+                    name=name,
+                    mount_path=f"/run/secrets/platform/{name}",
+                    source_path=name,
+                )
+                for name in (updates["secrets"] or [])
+            ],
+        )
     if "required_capabilities" in updates:
-        model.capabilities = [
-            ChallengeCapability(id=uuid.uuid4(), name=name)
-            for name in (updates["required_capabilities"] or [])
-        ]
+        await _replace_collection(
+            session,
+            model,
+            "capabilities",
+            [
+                ChallengeCapability(id=uuid.uuid4(), name=name)
+                for name in (updates["required_capabilities"] or [])
+            ],
+        )
 
 
 def _record_from_model(model: Challenge) -> ChallengeRecord:
