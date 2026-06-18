@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import re
 import secrets
 import subprocess
@@ -345,6 +346,20 @@ class DockerBrokerService:
                 )
         elif mount.source_type == "directory":
             source = mount_root
+            if not mount.read_only:
+                # The broker process (uid 1000) mkdir's mount_root at 0755 owned
+                # by itself, but eval containers run as a DIFFERENT uid (e.g.
+                # prism=1001) and must write files such as
+                # /artifacts/prism_run_manifest.v1.json at the mount root.
+                # Without world-writable perms they get EACCES and the eval
+                # fails with no score. The sticky bit (1777) keeps per-file
+                # ownership safe (only owners can delete/rename their files).
+                try:
+                    os.chmod(source, 0o1777)
+                except OSError:
+                    # A chmod failure must not crash an otherwise-valid request;
+                    # proceed and let the container surface any access error.
+                    pass
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
