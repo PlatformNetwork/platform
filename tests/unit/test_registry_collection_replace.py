@@ -16,6 +16,8 @@ import asyncio
 from decimal import Decimal
 from pathlib import Path
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from platform_network.db.migrations import upgrade
 from platform_network.db.session import create_engine, create_session_factory
 from platform_network.master.registry import DatabaseChallengeRegistry
@@ -34,7 +36,7 @@ def _payload(slug: str) -> ChallengeCreate:
     )
 
 
-def _make_registry(tmp_path: Path) -> tuple[object, DatabaseChallengeRegistry]:
+def _make_registry(tmp_path: Path) -> tuple[AsyncEngine, DatabaseChallengeRegistry]:
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'master.sqlite3'}"
     upgrade(Path(__file__).resolve().parents[2] / "alembic.ini", db_url)
     engine = create_engine(db_url)
