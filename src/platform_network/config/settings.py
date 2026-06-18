@@ -69,6 +69,22 @@ class DockerSettings(BaseModel):
     broker_privileged_slugs: list[str] = Field(default_factory=list)
     broker_node_role: Literal["manager", "worker"] = "manager"
     broker_allow_privileged_escape: bool = False
+    #: Challenge slugs whose Swarm jobs are bind-mounted the host Docker
+    #: socket (Docker-out-of-Docker) so the job can create sibling task
+    #: containers on the worker daemon. Swarm services cannot run
+    #: ``--privileged`` (``docker service create`` rejects it), so this is the
+    #: supported way to let a broker-created Swarm job spawn containers.
+    #: Socket access is root-equivalent on the worker, so the empty default
+    #: grants it to no one; gate enforced in ``SwarmBrokerService``.
+    broker_docker_socket_slugs: list[str] = Field(default_factory=list)
+    broker_docker_socket_path: str = "/var/run/docker.sock"
+    #: Read-only mounts injected into the Swarm eval job for the same slugs as
+    #: ``broker_docker_socket_slugs`` (e.g. the terminal-bench task cache + the
+    #: frozen digest manifest, provisioned out-of-band onto a host path or named
+    #: volume). Each entry is ``source:target`` where ``source`` is an absolute
+    #: host path or a Docker named volume and ``target`` is the absolute mount
+    #: path inside the job. Empty default mounts nothing.
+    broker_eval_readonly_mounts: list[str] = Field(default_factory=list)
     # Challenge API services run on the manager/host; broker jobs run on
     # workers, steered to CPU- vs GPU-labeled nodes (platform.workload).
     challenge_placement_constraint: str | None = "node.role==manager"

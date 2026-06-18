@@ -703,6 +703,17 @@ docker:
   allow_privileged: true
   broker_privileged_slugs:
     - agent-challenge
+  # Non-privileged Docker-out-of-Docker: the agent-challenge own_runner eval job
+  # is bind-mounted the host Docker socket (gated to this slug) so it can spawn
+  # sibling task containers without --privileged (which Swarm services reject).
+  broker_docker_socket_slugs:
+    - agent-challenge
+  # Read-only task cache + frozen digest manifest handed to the own_runner job
+  # from named volumes provisioned out-of-band by
+  # deploy/swarm/acquire-agent-challenge-cache.sh (source:target).
+  broker_eval_readonly_mounts:
+    - agent_challenge_task_cache:/opt/agent-challenge/task-cache
+    - agent_challenge_golden:/opt/agent-challenge/golden
 
 security:
   admin_token_file: ${SECRET_MOUNT_DIR}/admin_token

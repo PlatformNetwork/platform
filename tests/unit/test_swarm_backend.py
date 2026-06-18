@@ -276,6 +276,125 @@ def test_run_job_emits_tmpfs_mounts(tmp_path: Path) -> None:
     assert "type=tmpfs,destination=/tmp,tmpfs-size=512m" in mounts
 
 
+def test_run_job_mounts_docker_socket_for_allowlisted_slug(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner, docker_socket_slugs=frozenset({"agent"}))
+
+    service.run("agent", _run_request())
+
+    pairs = _pairs(runner.create_argv())
+    mounts = [value for flag, value in pairs if flag == "--mount"]
+    assert (
+        "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+        in mounts
+    )
+    # Socket must be read-write (Docker CLI issues write calls) and never
+    # emitted as --privileged on the Swarm service.
+    assert not any("docker.sock" in m and m.endswith(",readonly") for m in mounts)
+    assert "--privileged" not in runner.create_argv()
+
+
+def test_run_job_honors_custom_docker_socket_path(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(
+        tmp_path,
+        runner,
+        docker_socket_slugs=frozenset({"agent"}),
+        docker_socket_path="/run/docker.sock",
+    )
+
+    service.run("agent", _run_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    assert "type=bind,source=/run/docker.sock,destination=/run/docker.sock" in mounts
+
+
+def test_run_job_omits_docker_socket_for_non_allowlisted_slug(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner, docker_socket_slugs=frozenset({"other"}))
+
+    service.run("agent", _run_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    assert not any("docker.sock" in m for m in mounts)
+
+
+def test_run_job_omits_docker_socket_by_default(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner)
+
+    service.run("agent", _run_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    assert not any("docker.sock" in m for m in mounts)
+
+
+def test_run_job_mounts_eval_readonly_for_allowlisted_slug(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(
+        tmp_path,
+        runner,
+        docker_socket_slugs=frozenset({"agent"}),
+        eval_readonly_mounts=(
+            ("agent_challenge_task_cache", "/opt/agent-challenge/task-cache"),
+            ("/var/lib/agent-challenge/golden", "/opt/agent-challenge/golden"),
+        ),
+    )
+
+    service.run("agent", _run_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    # Named volume source -> type=volume; absolute host source -> type=bind. Both
+    # read-only so the job can never mutate the shared cache.
+    assert (
+        "type=volume,source=agent_challenge_task_cache,"
+        "destination=/opt/agent-challenge/task-cache,readonly" in mounts
+    )
+    assert (
+        "type=bind,source=/var/lib/agent-challenge/golden,"
+        "destination=/opt/agent-challenge/golden,readonly" in mounts
+    )
+
+
+def test_run_job_omits_eval_readonly_for_non_allowlisted_slug(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(
+        tmp_path,
+        runner,
+        docker_socket_slugs=frozenset({"other"}),
+        eval_readonly_mounts=(
+            ("agent_challenge_task_cache", "/opt/agent-challenge/task-cache"),
+        ),
+    )
+
+    service.run("agent", _run_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    assert not any("agent-challenge" in m for m in mounts)
+
+
+def test_run_job_omits_eval_readonly_by_default(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner)
+
+    service.run("agent", _run_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    assert not any("/opt/agent-challenge" in m for m in mounts)
+
+
 def test_run_failed_create_releases_ledger_and_raises(tmp_path: Path) -> None:
     runner = FakeSwarmRunner(create_rc=1)
     service = _broker(tmp_path, runner)

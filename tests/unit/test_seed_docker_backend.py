@@ -117,3 +117,46 @@ def test_runtime_controller_spec_carries_external_secret_names() -> None:
     )
     assert prism_spec.external_secrets == ()
     assert prism_spec.secret_names() == ("challenge_token", "docker_broker_token")
+
+
+def test_seed_agent_challenge_uses_own_runner_execution_plane() -> None:
+    registry = ChallengeRegistry()
+    registry.create(_agent_challenge_create())
+    asyncio.run(cli_module.seed_prism_challenges(registry, _docker_settings()))
+    env = registry.get("agent-challenge").env
+
+    # B1: own_runner backend only (the challenge config rejects platform_sdk).
+    assert env["CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND"] == "own_runner"
+    assert "CHALLENGE_PLATFORM_SDK_RUNNER_IMAGE" not in env
+    # B4: own_runner reads the runner job image from CHALLENGE_HARBOR_RUNNER_IMAGE.
+    assert env["CHALLENGE_HARBOR_RUNNER_IMAGE"] == (
+        cli_module.AGENT_CHALLENGE_TERMINAL_BENCH_RUNNER_IMAGE
+    )
+    # B2/B3: read-only task-cache + frozen digest manifest mount targets (must
+    # match docker.broker_eval_readonly_mounts in install-swarm.sh).
+    assert env["CHALLENGE_OWN_RUNNER_CACHE_ROOT"] == "/opt/agent-challenge/task-cache"
+    assert env["CHALLENGE_OWN_RUNNER_DIGEST_MANIFEST"] == (
+        "/opt/agent-challenge/golden/dataset-digest.json"
+    )
+    # C1: real-time log streaming back to the challenge API over the overlay.
+    assert env["CHALLENGE_TERMINAL_BENCH_LOG_STREAM_URL"] == (
+        "http://challenge-agent-challenge:8000"
+    )
+    assert env["CHALLENGE_DOCKER_BROKER_NETWORK"] == "platform_challenges"
+    assert env["CHALLENGE_DOCKER_BACKEND"] == "broker"
+
+
+def test_parse_eval_readonly_mounts_filters_malformed() -> None:
+    parsed = cli_module._parse_eval_readonly_mounts(
+        [
+            "agent_challenge_task_cache:/opt/agent-challenge/task-cache",
+            "/var/lib/x/golden:/opt/agent-challenge/golden",
+            "noslash",  # no colon -> skipped
+            "vol:relative/path",  # target not absolute -> skipped
+            "",  # empty -> skipped
+        ]
+    )
+    assert parsed == (
+        ("agent_challenge_task_cache", "/opt/agent-challenge/task-cache"),
+        ("/var/lib/x/golden", "/opt/agent-challenge/golden"),
+    )

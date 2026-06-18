@@ -1157,19 +1157,26 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
     assert agent.env["CHALLENGE_DOCKER_BROKER_TOKEN_FILE"] == (
         "/run/secrets/platform/docker_broker_token"
     )
-    assert agent.env["CHALLENGE_DOCKER_NETWORK"] == "default"
-    assert agent.env["CHALLENGE_HARBOR_ENV"] == ""
-    assert agent.env["CHALLENGE_HARBOR_INSTALL_MODE"] == "prebuilt"
-    assert agent.env["CHALLENGE_PLATFORM_SDK_ENVIRONMENT_IMPORT_PATH"] == (
-        "agent_challenge_runner.platform_environment:PlatformEnvironment"
-    )
-    assert agent.env["CHALLENGE_PLATFORM_SDK_RUNNER_IMAGE"] == (
+    assert agent.env["CHALLENGE_DOCKER_BROKER_NETWORK"] == "platform_challenges"
+    assert agent.env["CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND"] == "own_runner"
+    assert agent.env["CHALLENGE_HARBOR_RUNNER_IMAGE"] == (
         "ghcr.io/platformnetwork/agent-challenge-terminal-bench-runner:latest"
+    )
+    assert agent.env["CHALLENGE_OWN_RUNNER_CACHE_ROOT"] == (
+        "/opt/agent-challenge/task-cache"
+    )
+    assert agent.env["CHALLENGE_OWN_RUNNER_DIGEST_MANIFEST"] == (
+        "/opt/agent-challenge/golden/dataset-digest.json"
+    )
+    assert agent.env["CHALLENGE_TERMINAL_BENCH_LOG_STREAM_URL"] == (
+        "http://challenge-agent-challenge:8000"
     )
     assert agent.env["CHALLENGE_SUBMISSION_ENV_ENCRYPTION_KEY_FILE"] == (
         "/run/secrets/platform/submission_env_encryption_key"
     )
-    assert agent.env["CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND"] == "platform_sdk"
+    # platform_sdk knobs are retired by the own_runner cutover.
+    assert "CHALLENGE_PLATFORM_SDK_RUNNER_IMAGE" not in agent.env
+    assert "CHALLENGE_PLATFORM_SDK_ENVIRONMENT_IMPORT_PATH" not in agent.env
 
 
 def test_seed_prism_challenges_pins_images_for_production_policy(

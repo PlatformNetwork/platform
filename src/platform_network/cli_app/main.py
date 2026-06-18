@@ -270,13 +270,23 @@ AGENT_CHALLENGE_SLUG = "agent-challenge"
 AGENT_CHALLENGE_TERMINAL_BENCH_RUNNER_IMAGE = (
     "ghcr.io/platformnetwork/agent-challenge-terminal-bench-runner:latest"
 )
-AGENT_CHALLENGE_PLATFORM_ENVIRONMENT_IMPORT_PATH = (
-    "agent_challenge_runner.platform_environment:PlatformEnvironment"
-)
 AGENT_CHALLENGE_SUBMISSION_ENV_SECRET = "submission_env_encryption_key"
 AGENT_CHALLENGE_SUBMISSION_ENV_KEY_FILE = (
     f"{DEFAULT_SECRET_MOUNT_DIR}/{AGENT_CHALLENGE_SUBMISSION_ENV_SECRET}"
 )
+#: own_runner reads the task cache + frozen digest manifest from these in-job
+#: paths; the broker bind-mounts them read-only (``broker_eval_readonly_mounts``)
+#: from a host path or named volume provisioned out-of-band by
+#: ``deploy/swarm/acquire-agent-challenge-cache.sh``.
+AGENT_CHALLENGE_TASK_CACHE_DIR = "/opt/agent-challenge/task-cache"
+AGENT_CHALLENGE_GOLDEN_DIR = "/opt/agent-challenge/golden"
+#: Challenge API service DNS on the challenges overlay (matches
+#: ``default_internal_base_url("agent-challenge")``); own_runner jobs POST
+#: real-time trial logs here.
+AGENT_CHALLENGE_INTERNAL_BASE_URL = "http://challenge-agent-challenge:8000"
+#: Overlay the DooD eval job attaches to so it can reach the challenge API for
+#: log streaming (matches the install-swarm.sh challenges network).
+AGENT_CHALLENGE_JOB_NETWORK = "platform_challenges"
 PRISM_IMAGE = "ghcr.io/platformnetwork/prism:latest"
 PRISM_EVALUATOR_IMAGE = "ghcr.io/platformnetwork/prism-evaluator:latest"
 PRISM_VERSION = "0.1.0"
@@ -289,6 +299,22 @@ def _settings_docker_broker_url(settings: Any | None) -> str:
     docker_settings = getattr(settings, "docker", None)
     broker_url = getattr(docker_settings, "broker_url", None)
     return str(broker_url or DEFAULT_PLATFORM_BROKER_URL)
+
+
+def _parse_eval_readonly_mounts(values: list[str]) -> tuple[tuple[str, str], ...]:
+    """Parse ``source:target`` mount specs into ``(source, target)`` tuples.
+
+    ``source`` is an absolute host path or a Docker named volume; ``target`` is
+    the absolute container mount path (split on the final ``:`` so neither side
+    may itself contain a colon). Malformed entries are skipped.
+    """
+    parsed: list[tuple[str, str]] = []
+    for raw in values:
+        source, sep, target = raw.rpartition(":")
+        if not sep or not source or not target.startswith("/"):
+            continue
+        parsed.append((source, target))
+    return tuple(parsed)
 
 
 def _prism_image_for_settings(image: str, settings: Any | None) -> str:
@@ -305,7 +331,17 @@ def _prism_image_for_settings(image: str, settings: Any | None) -> str:
     return reference.pinned(resolve_remote_digest(reference))
 
 
-def _agent_challenge_platform_sdk_env(settings: Any | None) -> dict[str, str]:
+def _agent_challenge_own_runner_env(settings: Any | None) -> dict[str, str]:
+    """Env for the agent-challenge own_runner Swarm DooD execution plane.
+
+    The challenge's config validator accepts only
+    ``terminal_bench_execution_backend == "own_runner"``; this wires the
+    own_runner knobs: the runner job image (``CHALLENGE_HARBOR_RUNNER_IMAGE``,
+    the legacy knob name own_runner reads), the read-only task-cache + frozen
+    digest manifest mount targets (broker-injected via
+    ``broker_eval_readonly_mounts``), the per-attempt log-stream URL, and the
+    overlay the job attaches to so it can reach the challenge API.
+    """
     broker_url = _settings_docker_broker_url(settings)
     docker_broker_token_file = f"{DEFAULT_SECRET_MOUNT_DIR}/docker_broker_token"
     return {
@@ -314,19 +350,17 @@ def _agent_challenge_platform_sdk_env(settings: Any | None) -> dict[str, str]:
         "CHALLENGE_DOCKER_BACKEND": "broker",
         "CHALLENGE_DOCKER_BROKER_URL": broker_url,
         "CHALLENGE_DOCKER_BROKER_TOKEN_FILE": docker_broker_token_file,
-        "CHALLENGE_DOCKER_NETWORK": "default",
-        "CHALLENGE_HARBOR_ENV": "",
-        "CHALLENGE_HARBOR_INSTALL_MODE": "prebuilt",
-        "CHALLENGE_PLATFORM_SDK_ENVIRONMENT_IMPORT_PATH": (
-            AGENT_CHALLENGE_PLATFORM_ENVIRONMENT_IMPORT_PATH
+        "CHALLENGE_DOCKER_BROKER_NETWORK": AGENT_CHALLENGE_JOB_NETWORK,
+        "CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND": "own_runner",
+        "CHALLENGE_HARBOR_RUNNER_IMAGE": AGENT_CHALLENGE_TERMINAL_BENCH_RUNNER_IMAGE,
+        "CHALLENGE_OWN_RUNNER_CACHE_ROOT": AGENT_CHALLENGE_TASK_CACHE_DIR,
+        "CHALLENGE_OWN_RUNNER_DIGEST_MANIFEST": (
+            f"{AGENT_CHALLENGE_GOLDEN_DIR}/dataset-digest.json"
         ),
-        "CHALLENGE_PLATFORM_SDK_RUNNER_IMAGE": (
-            AGENT_CHALLENGE_TERMINAL_BENCH_RUNNER_IMAGE
-        ),
+        "CHALLENGE_TERMINAL_BENCH_LOG_STREAM_URL": AGENT_CHALLENGE_INTERNAL_BASE_URL,
         "CHALLENGE_SUBMISSION_ENV_ENCRYPTION_KEY_FILE": (
             AGENT_CHALLENGE_SUBMISSION_ENV_KEY_FILE
         ),
-        "CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND": "platform_sdk",
     }
 
 
@@ -427,7 +461,7 @@ async def seed_prism_challenges(
         metadata = dict(getattr(record, "metadata", {}) or {})
         metadata["worker_command"] = ["agent-challenge-worker"]
         env = dict(getattr(record, "env", {}) or {})
-        env.update(_agent_challenge_platform_sdk_env(settings))
+        env.update(_agent_challenge_own_runner_env(settings))
         required_capabilities = set(getattr(record, "required_capabilities", []) or [])
         required_capabilities.update({"docker_executor", "get_weights", "proxy_routes"})
         await _resolve(
@@ -535,6 +569,11 @@ def master_broker(config: Path = typer.Option(Path("config/master.example.yaml")
             ),
             cpu_job_constraint=settings.docker.cpu_job_constraint,
             gpu_job_constraint=settings.docker.gpu_job_constraint,
+            docker_socket_slugs=frozenset(settings.docker.broker_docker_socket_slugs),
+            docker_socket_path=settings.docker.broker_docker_socket_path,
+            eval_readonly_mounts=_parse_eval_readonly_mounts(
+                settings.docker.broker_eval_readonly_mounts
+            ),
         )
     )
     broker = create_docker_broker_app(registry=registry, service=docker_service)

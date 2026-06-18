@@ -310,6 +310,23 @@ class SwarmBrokerConfig(DockerBrokerConfig):
     gpu_job_constraint: str | None = DEFAULT_GPU_JOB_CONSTRAINT
     poll_interval_seconds: float = 1.0
     command_timeout_seconds: float = 60.0
+    #: Challenge slugs whose Swarm jobs receive a read-write bind mount of the
+    #: host Docker socket (Docker-out-of-Docker). This lets a broker-created
+    #: Swarm job spawn sibling task containers on the worker daemon without
+    #: ``--privileged`` (which ``docker service create`` rejects). The socket
+    #: is root-equivalent on the worker, so the empty default grants it to no
+    #: one; only allowlisted slugs (authenticated per-slug broker token) get
+    #: it. Hardening (read-only rootfs, cap-drop ALL, no-new-privileges) still
+    #: applies: the job is only a Docker *client* of the host daemon.
+    docker_socket_slugs: frozenset[str] = frozenset()
+    docker_socket_path: str = "/var/run/docker.sock"
+    #: Read-only mounts injected for the same slugs as ``docker_socket_slugs``
+    #: (the DooD eval slugs). Each entry is ``(source, target)`` where
+    #: ``source`` is an absolute host path or a Docker named volume and
+    #: ``target`` is the absolute container mount path. Used to hand the
+    #: terminal-bench task cache + frozen digest manifest to own_runner jobs
+    #: without baking them into the runner image. Empty default mounts nothing.
+    eval_readonly_mounts: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -400,7 +417,9 @@ class SwarmBrokerService(DockerBrokerService):
                 mounts=tuple(
                     _bind_mount_arg(m.source, m.target, m.read_only) for m in mounts
                 )
-                + tmpfs_mounts,
+                + tmpfs_mounts
+                + self._docker_socket_mounts(challenge_slug)
+                + self._eval_readonly_mounts(challenge_slug),
                 limit_cpus=limits.cpus,
                 limit_memory=limits.memory,
                 limit_pids=limits.pids_limit,
@@ -535,6 +554,35 @@ class SwarmBrokerService(DockerBrokerService):
             raise DockerExecutorError(
                 "Docker network must be 'none', 'default', or a platform network"
             )
+
+    def _docker_socket_mounts(self, challenge_slug: str) -> tuple[str, ...]:
+        """Return the host-Docker-socket bind mount for allowlisted slugs.
+
+        Empty for every non-allowlisted slug so non-agent jobs never gain
+        Docker-out-of-Docker access. The socket is mounted read-write because
+        the Docker CLI/SDK issues write calls (build/create/exec) over it.
+        """
+
+        if challenge_slug in self.swarm_config.docker_socket_slugs:
+            return (_socket_mount_arg(self.swarm_config.docker_socket_path),)
+        return ()
+
+    def _eval_readonly_mounts(self, challenge_slug: str) -> tuple[str, ...]:
+        """Return read-only cache/manifest mounts for DooD-allowlisted slugs.
+
+        Gated on the same ``docker_socket_slugs`` allowlist as the host Docker
+        socket: only an own_runner eval job (which already gets the socket) is
+        handed the out-of-band task cache + frozen digest manifest. Empty for
+        every other slug. Each mount is read-only so the job can never mutate
+        the shared cache volume.
+        """
+
+        if challenge_slug not in self.swarm_config.docker_socket_slugs:
+            return ()
+        return tuple(
+            _readonly_mount_arg(source, target)
+            for source, target in self.swarm_config.eval_readonly_mounts
+        )
 
     def _job_network(self, requested: str) -> str | None:
         if requested == "default":
@@ -1123,6 +1171,19 @@ def _bind_mount_arg(source: Path, target: str, read_only: bool) -> str:
     if read_only:
         arg += ",readonly"
     return arg
+
+
+def _socket_mount_arg(socket_path: str) -> str:
+    """Read-write bind mount of the host Docker socket (Docker-out-of-Docker)."""
+
+    return f"type=bind,source={socket_path},destination={socket_path}"
+
+
+def _readonly_mount_arg(source: str, target: str) -> str:
+    """Read-only mount of a host path (absolute ``source``) or named volume."""
+
+    mount_type = "bind" if source.startswith("/") else "volume"
+    return f"type={mount_type},source={source},destination={target},readonly"
 
 
 def _tmpfs_mount_arg(value: str) -> str:
