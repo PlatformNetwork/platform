@@ -137,14 +137,16 @@ plan docker volume create "${GOLDEN_VOLUME}"
 # ---------------------------------------------------------------------------
 # 2. Populate the volumes (read-only source mount; copy into the volume).
 #    The runner image has sh/cp/mkdir; reuse it so no extra image is pulled.
+#    All steps run with --network none: acquisition is copy + offline digest
+#    verification only, so they never need (and are denied) network egress.
 # ---------------------------------------------------------------------------
-plan docker run --rm \
+plan docker run --rm --network none \
   -v "${SOURCE_CACHE}:/src:ro" \
   -v "${CACHE_VOLUME}:${CACHE_TARGET}" \
   "${RUNNER_IMAGE}" \
   sh -ceu "rm -rf ${CACHE_TARGET:?}/* && cp -a /src/. ${CACHE_TARGET}/"
 
-plan docker run --rm \
+plan docker run --rm --network none \
   -v "${GOLDEN_FILE}:/src/dataset-digest.json:ro" \
   -v "${GOLDEN_VOLUME}:${GOLDEN_TARGET}" \
   "${RUNNER_IMAGE}" \
@@ -155,7 +157,7 @@ plan docker run --rm \
 #    load_all_tasks resolves + digest-verifies EVERY manifest task against the
 #    on-disk cache, so a green run == the eval plane will load every task.
 # ---------------------------------------------------------------------------
-plan docker run --rm \
+plan docker run --rm --network none \
   -e CHALLENGE_OWN_RUNNER_CACHE_ROOT="${CACHE_TARGET}" \
   -e CHALLENGE_OWN_RUNNER_DIGEST_MANIFEST="${GOLDEN_TARGET}/dataset-digest.json" \
   -v "${CACHE_VOLUME}:${CACHE_TARGET}:ro" \
