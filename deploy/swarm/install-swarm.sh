@@ -76,17 +76,23 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 # REPRODUCIBILITY CAVEAT — the live broker/prism run LOCAL-ONLY images (M2/M3).
 # The working live E2E stack does NOT run these :latest tags for the broker and
 # prism; it runs two LOCAL-ONLY images that are NOT on any registry:
-#   * platform-master-broker -> ghcr.io/platformnetwork/platform-master:cross-node-mount-fixed
+#   * platform-master-broker -> ghcr.io/platformnetwork/platform-master:readonly-data-mount
 #   * challenge-prism        -> ghcr.io/platformnetwork/prism:mount-fixed
-# Both were built by overlaying the UNPUSHED platform commits 1142bc53 (cross-node
-# mount materialization for GPU eval jobs) + 48ec8c5a (non-root mount extraction +
-# uncapped drain round-trip) onto the base images. prism pins its platform-network
+# The broker LOCAL-ONLY image is built from platform HEAD and carries the UNPUSHED
+# platform commits 1142bc53 (cross-node mount materialization for GPU eval jobs) +
+# 48ec8c5a (non-root mount extraction + uncapped drain round-trip) + e02ffbab
+# (per-slug read-only locked-data mount for the prism slug); challenge-prism overlays
+# the same base. The prism eval RO mounts (FineWeb-Edu train split + reference
+# tokenizers) are supplied by the broker built-in DEFAULT_PRISM_EVAL_READONLY_MOUNTS,
+# so no master.yaml broker_eval_readonly_mounts_by_slug entry is required for them to
+# be live. prism pins its platform-network
 # dependency by git (pyproject `platform-network @ git+https://github.com/PlatformNetwork/platform.git`,
-# public HEAD), so until those two commits are PUSHED a fresh `docker build` of
+# public HEAD), so until those commits are PUSHED a fresh `docker build` of
 # IMAGE_PRISM bundles the OLD published platform_network (lacking mount_transport /
-# the drain-restore path) and the GPU eval workspace+artifacts restore is broken.
-# CLEAN CANONICAL BRING-UP: first PUSH platform commits 1142bc53 + 48ec8c5a so the
-# prism git-pinned dependency picks them up, then rebuild IMAGE_MASTER + IMAGE_PRISM
+# the drain-restore path / the per-slug prism RO data mount) and the GPU eval
+# workspace+artifacts restore and locked-data auto-mount are broken.
+# CLEAN CANONICAL BRING-UP: first PUSH platform commits 1142bc53 + 48ec8c5a + e02ffbab
+# so the prism git-pinned dependency picks them up, then rebuild IMAGE_MASTER + IMAGE_PRISM
 # from HEAD normally — the overlay tags above then become unnecessary. The deploy
 # CONFIG this script sets (broker node.role==manager pin; prism
 # PRISM_ALLOW_INSECURE_SIGNATURES / PRISM_VALIDATOR_HOTKEYS) is independent of the
