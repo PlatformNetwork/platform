@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from platform_network.challenge_sdk.executors.docker import DockerExecutorError
-from platform_network.challenge_sdk.mount_transport import encode_dir_archive
+from platform_network.challenge_sdk.mount_transport import (
+    encode_dir_archive,
+    extract_archive_to_dir,
+    parse_drained_archives,
+    strip_drain_sections,
+)
 from platform_network.gpu.leases import (
     GpuCapacityError,
     GpuLeaseError,
@@ -707,6 +713,37 @@ def test_run_job_gpu_drains_writable_mount_to_manager_disk(tmp_path: Path) -> No
     )
     assert retrieved, "writable mount artifact was not round-tripped to the broker node"
     assert retrieved[0].read_text(encoding="utf-8") == "artifact-here"
+
+
+def test_run_job_gpu_drain_survives_log_cap_for_large_archive(tmp_path: Path) -> None:
+    # A drained checkpoint whose base64 archive far exceeds the 64_000-byte log
+    # cap. It rides back in BrokerRunResponse.stdout through the REAL _cap_log
+    # seam and the executor must restore it byte-for-byte: the cap may only
+    # touch the human-readable remainder, never the drain sections.
+    produced = tmp_path / "produced"
+    produced.mkdir()
+    checkpoint = os.urandom(128 * 1024)  # incompressible -> base64 well over cap
+    (produced / "checkpoint.bin").write_bytes(checkpoint)
+    drain = (
+        "@@PLATFORM_BROKER_MOUNT_OUT[1]:BEGIN@@\n"
+        f"{encode_dir_archive(produced)}\n"
+        "@@PLATFORM_BROKER_MOUNT_OUT[1]:END@@\n"
+    )
+    noisy = "training-log-line\n" * 8000  # human log also exceeds the cap
+    runner = FakeSwarmRunner(log_stdout=noisy + drain)
+    service = _broker(tmp_path, runner)
+
+    response = service.run(
+        "agent", _run_request(limits={"gpu_count": 1}, mounts=_gpu_mounts())
+    )
+
+    archives = parse_drained_archives(response.stdout)
+    assert set(archives) == {1}
+    restored = tmp_path / "restored"
+    extract_archive_to_dir(archives[1], restored)
+    assert (restored / "checkpoint.bin").read_bytes() == checkpoint
+    # The human-readable remainder stays bounded by the configured cap.
+    assert len(strip_drain_sections(response.stdout).encode()) <= 64_000
 
 
 def test_run_job_cpu_keeps_bind_mounts(tmp_path: Path) -> None:

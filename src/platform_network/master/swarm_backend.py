@@ -64,7 +64,9 @@ from platform_network.challenge_sdk.mount_transport import (
     build_bootstrap_command,
     encode_mount_in_env,
     extract_archive_to_dir,
+    extract_drain_sections,
     parse_drained_archives,
+    strip_drain_sections,
 )
 from platform_network.gpu.leases import GpuCapacityError, GpuLeaseLedger
 from platform_network.master.docker_broker import (
@@ -507,9 +509,22 @@ class SwarmBrokerService(DockerBrokerService):
                 if cross_node:
                     # Round-trip writable mounts the remote container wrote to a
                     # manager-visible location (the broker node), where the
-                    # challenge worker reads the eval manifest.
+                    # challenge worker reads the eval manifest. The cross-node
+                    # mounts are materialized as mode-1777 tmpfs, intentionally
+                    # loosening a mount's read-only intent; only writable mounts
+                    # are drained back, so any in-container writes to a ro mount
+                    # are simply discarded.
                     self._persist_drained_mounts(name, raw_stdout, mounts)
-                stdout = self._cap_log(raw_stdout)
+                    # The drain sections carry the writable-mount archives the
+                    # executor reconstructs; a drained checkpoint can dwarf the
+                    # log cap, so cap ONLY the human-readable remainder and
+                    # re-append the drain sections uncapped (truncating their
+                    # base64 would silently break restoration on the executor).
+                    stdout = self._cap_log(
+                        strip_drain_sections(raw_stdout)
+                    ) + extract_drain_sections(raw_stdout)
+                else:
+                    stdout = self._cap_log(raw_stdout)
                 stderr = self._cap_log(raw_stderr)
                 if outcome.error and not stderr:
                     stderr = self._cap_log(outcome.error)

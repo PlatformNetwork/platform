@@ -9,6 +9,11 @@ filename carries the ``broker`` selector token so the milestone gate runs it.
 from __future__ import annotations
 
 import json
+import os
+import pwd
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -150,6 +155,104 @@ def _archive_bytes(b64: str) -> bytes:
     import base64
 
     return base64.b64decode(b64)
+
+
+def test_broker_encode_dir_archive_has_no_root_dot_member(tmp_path: Path) -> None:
+    import base64
+    import io
+    import tarfile
+
+    source = tmp_path / "ws"
+    (source / "sub").mkdir(parents=True)
+    (source / "payload.json").write_text("{}", encoding="utf-8")
+    (source / "sub" / "f.txt").write_text("x", encoding="utf-8")
+
+    raw = base64.b64decode(encode_dir_archive(source))
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+        names = tar.getnames()
+    # No root-dir member ('.' / './...'): tar would try to chmod/utime the
+    # pre-existing root-owned 1777 mount root, which the non-root eval uid
+    # cannot do (-> tar exit 2 under the bootstrap's `set -e`).
+    assert "." not in names
+    assert not any(name == "./" or name.startswith("./") for name in names)
+    assert "payload.json" in names
+    assert "sub/f.txt" in names
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    raw_empty = base64.b64decode(encode_dir_archive(empty))
+    with tarfile.open(fileobj=io.BytesIO(raw_empty), mode="r:gz") as tar:
+        assert tar.getnames() == []
+
+
+def _non_root_account() -> tuple[int, int] | None:
+    """A non-root ``(uid, gid)`` to drop to, or ``None`` if none exists."""
+
+    for name in ("nobody", "daemon", "bin"):
+        try:
+            entry = pwd.getpwnam(name)
+        except KeyError:
+            continue
+        if entry.pw_uid != 0:
+            return entry.pw_uid, entry.pw_gid
+    return None
+
+
+@pytest.mark.skipif(
+    os.geteuid() != 0, reason="needs root to drop privileges to a non-root uid"
+)
+def test_broker_bootstrap_extracts_as_non_root_into_sticky_tmpfs(
+    tmp_path: Path,
+) -> None:
+    account = _non_root_account()
+    if account is None:
+        pytest.skip("no non-root account available to drop to")
+    uid, gid = account
+
+    source = tmp_path / "workspace"
+    (source / "project").mkdir(parents=True)
+    (source / "payload.json").write_text('{"sentinel":"READ-OK"}', encoding="utf-8")
+    (source / "project" / "runner.py").write_text("print('ok')\n", encoding="utf-8")
+
+    # Root-owned, world-writable + sticky (mode 1777) mount root reachable by
+    # the dropped uid: the cross-node materialization tmpfs shape. Built under
+    # /tmp (world-traversable) so the non-root child can reach it.
+    target_root = Path(tempfile.mkdtemp(dir="/tmp"))
+    target = target_root / "mount"
+    target.mkdir()
+    os.chmod(target_root, 0o1777)
+    os.chmod(target, 0o1777)
+    try:
+        env = dict(os.environ)
+        in_env = encode_mount_in_env(0, source)
+        env.update(in_env)
+        transport = (
+            TransportMount(
+                index=0, target=str(target), writable=False, in_chunks=len(in_env)
+            ),
+        )
+        command = build_bootstrap_command(
+            ["cat", str(target / "payload.json")], transport
+        )
+
+        proc = subprocess.run(
+            list(command),
+            env=env,
+            capture_output=True,
+            text=True,
+            user=uid,
+            group=gid,
+            extra_groups=[],
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert "READ-OK" in proc.stdout
+        assert (target / "payload.json").read_text(
+            encoding="utf-8"
+        ) == '{"sentinel":"READ-OK"}'
+        assert (target / "project" / "runner.py").exists()
+    finally:
+        shutil.rmtree(target_root, ignore_errors=True)
 
 
 class _BrokerResponse:

@@ -88,11 +88,22 @@ def encode_mount_in_env(index: int, source: Path) -> dict[str, str]:
 
 
 def encode_dir_archive(source: Path) -> str:
-    """Base64 gzip-tar of ``source``'s contents (non-regular members dropped)."""
+    """Base64 gzip-tar of ``source``'s contents (non-regular members dropped).
+
+    Each top-level child is archived under its own name rather than adding
+    ``source`` itself as a ``.`` member. The remote mount root is a root-owned
+    ``tmpfs-mode=1777`` dir; a ``.`` member makes the extracting non-root eval
+    uid try to chmod/utime that root-owned root, which fails and (under the
+    bootstrap's ``set -e``) aborts before the wrapped command runs. Nested dirs
+    are instead created by tar owned by the extracting uid, so their metadata is
+    settable; an empty source yields a members-less (but valid) archive that
+    extracts as a no-op.
+    """
 
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as tar:
-        tar.add(source, arcname=".", filter=_drop_non_regular)
+        for child in sorted(source.iterdir()):
+            tar.add(child, arcname=child.name, filter=_drop_non_regular)
     return base64.b64encode(stream.getvalue()).decode("ascii")
 
 
@@ -171,6 +182,18 @@ def strip_drain_sections(stdout: str) -> str:
     """Remove the sentinel-delimited drain sections from ``stdout``."""
 
     return _OUT_RE.sub("", stdout)
+
+
+def extract_drain_sections(stdout: str) -> str:
+    """Return the sentinel-delimited drain sections from ``stdout`` verbatim.
+
+    Complement of :func:`strip_drain_sections`. These sections carry the
+    writable-mount archives the executor restores, so a caller capping the
+    human-readable log can re-append them uncapped (a drained checkpoint can far
+    exceed any log cap, and truncating its base64 would break restoration).
+    """
+
+    return "".join(match.group(0) for match in _OUT_RE.finditer(stdout))
 
 
 def extract_archive_to_dir(archive: bytes, dest: Path) -> None:
