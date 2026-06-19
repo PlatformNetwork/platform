@@ -72,6 +72,25 @@ DAEMON_JSON_SRC="${DAEMON_JSON_SRC:-${SCRIPT_DIR}/daemon.validator.json}"
 DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 
 # Container images (LIVE INVENTORY — pinned GHCR tags).
+#
+# REPRODUCIBILITY CAVEAT — the live broker/prism run LOCAL-ONLY images (M2/M3).
+# The working live E2E stack does NOT run these :latest tags for the broker and
+# prism; it runs two LOCAL-ONLY images that are NOT on any registry:
+#   * platform-master-broker -> ghcr.io/platformnetwork/platform-master:cross-node-mount-fixed
+#   * challenge-prism        -> ghcr.io/platformnetwork/prism:mount-fixed
+# Both were built by overlaying the UNPUSHED platform commits 1142bc53 (cross-node
+# mount materialization for GPU eval jobs) + 48ec8c5a (non-root mount extraction +
+# uncapped drain round-trip) onto the base images. prism pins its platform-network
+# dependency by git (pyproject `platform-network @ git+https://github.com/PlatformNetwork/platform.git`,
+# public HEAD), so until those two commits are PUSHED a fresh `docker build` of
+# IMAGE_PRISM bundles the OLD published platform_network (lacking mount_transport /
+# the drain-restore path) and the GPU eval workspace+artifacts restore is broken.
+# CLEAN CANONICAL BRING-UP: first PUSH platform commits 1142bc53 + 48ec8c5a so the
+# prism git-pinned dependency picks them up, then rebuild IMAGE_MASTER + IMAGE_PRISM
+# from HEAD normally — the overlay tags above then become unnecessary. The deploy
+# CONFIG this script sets (broker node.role==manager pin; prism
+# PRISM_ALLOW_INSECURE_SIGNATURES / PRISM_VALIDATOR_HOTKEYS) is independent of the
+# image build and reproduces as-is.
 IMAGE_MASTER="ghcr.io/platformnetwork/platform-master:latest"
 IMAGE_AGENT_CHALLENGE="ghcr.io/platformnetwork/agent-challenge:latest"
 IMAGE_PRISM="ghcr.io/platformnetwork/prism:latest"
@@ -865,6 +884,19 @@ _deploy_master_service() {
       --user root
       --mount "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock"
       --mount "type=bind,source=${broker_ws},target=${broker_ws}"
+      # MANAGER PIN (required on any multi-node swarm): the broker shells out to
+      # `docker service create` to dispatch eval jobs, which REQUIRES a manager's
+      # docker.sock; it also binds the manager-local docker.sock + ${broker_ws}
+      # workspace and publishes the fixed host port 8082. With no constraint an
+      # update (stop-first) can reschedule the broker onto a joined worker (e.g.
+      # the GPU node), where it breaks: the manager-only docker API is absent, the
+      # local-only image is "No such image", and the workspace bind source does
+      # not exist. node.role is intrinsic, so this also matches the sole manager on
+      # a single-node swarm (no-op there). Canonicalizes the live M2/M3 pin
+      # (verified on platform-master-broker; see library/environment.md). Do NOT
+      # use --constraint-add on an already-pinned live service (not idempotent —
+      # see AGENTS.md "CONSTRAINT-ADD DEDUP GOTCHA").
+      --constraint "node.role==manager"
     )
   fi
 
@@ -973,6 +1005,14 @@ deploy_challenges() {
   # secret; it MUST equal the registry-written <secret_dir>/prism_docker_broker_token the
   # broker reads (registration writes it). prism's docker_allowed_images already permits
   # ghcr.io/platformnetwork/, so the eval image needs no override.
+  #
+  # Two LOCAL/DEV-ONLY allowances complete the E2E submission path (canonicalized
+  # from the live M3 service — see library/environment.md + library/user-testing.md):
+  #   * PRISM_ALLOW_INSECURE_SIGNATURES=true — the prism image lacks bittensor, so
+  #     real sr25519 verification is impossible in-image; this enables the dev-HMAC
+  #     fallback used by the E2E proof + negative cases (do NOT use in production).
+  #   * PRISM_VALIDATOR_HOTKEYS — a non-empty JSON array so the validator
+  #     self-submission 403 guard is reachable.
   CHALLENGE_ENV=(
     "CHALLENGE_SLUG=prism"
     "CHALLENGE_DOCKER_ENABLED=true"
@@ -983,6 +1023,20 @@ deploy_challenges() {
     "PRISM_PLATFORM_EVAL_GPU_COUNT=1"
     "PRISM_DATABASE_URL=sqlite+aiosqlite:////data/prism.sqlite3"
     "PRISM_LLM_REVIEW_ENABLED=false"
+    # LOCAL/DEV ONLY — do NOT enable in production. The prism service image does
+    # NOT bundle bittensor, so real sr25519 signature verification is impossible
+    # in-image (verify_hotkey_signature import-fails -> False). This documented
+    # allowance lets authenticate_miner fall back to the dev-HMAC path (canonical
+    # msg `prism:{hotkey}:{nonce}:{ts}:{sha256hex(body)}` keyed by the 32-byte
+    # challenge token) so the local E2E proof + negative cases can drive
+    # POST /v1/submissions. Without it EVERY signed submission 401s.
+    "PRISM_ALLOW_INSECURE_SIGNATURES=true"
+    # Non-empty validator-hotkey list so the self-submission guard can fire: a
+    # hotkey in this list submitting -> HTTP 403 "validator hotkey is not allowed
+    # to submit". An empty default leaves the guard unreachable. MUST be a JSON
+    # array (PrismSettings parses tuple fields as JSON via pydantic-settings).
+    # Value = the dev self-submit sentinel used by the prism negative-case proof.
+    "PRISM_VALIDATOR_HOTKEYS=[\"5PrismValidatorSelfSubmitDENY\"]"
   )
   _deploy_challenge_service \
     "challenge-prism" "${IMAGE_PRISM}" "${PRISM_PORT}" \
