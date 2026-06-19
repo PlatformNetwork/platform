@@ -17,6 +17,12 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from platform_network.challenge_sdk.mount_transport import (
+    extract_archive_to_dir,
+    parse_drained_archives,
+    strip_drain_sections,
+)
+
 _logger = logging.getLogger(__name__)
 
 _IMAGE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9./_:@+-]{0,254}$")
@@ -384,15 +390,35 @@ class DockerExecutor:
             "/v1/docker/run", payload, timeout_seconds=timeout_seconds + 15
         )
         returncode = data.get("returncode", 0)
+        stdout = str(data.get("stdout") or "")
+        # A broker job may run on a remote node; writable mounts it wrote are
+        # drained back through stdout sentinels. Repopulate each writable mount
+        # source so callers read artifacts (e.g. the eval manifest) from the
+        # path they staged, then drop the drain sections from the logs.
+        archives = parse_drained_archives(stdout)
+        if archives:
+            self._restore_drained_mounts(spec, archives)
+            stdout = strip_drain_sections(stdout)
         return DockerRunResult(
             container_name=str(data["container_name"]),
-            stdout=str(data.get("stdout") or ""),
+            stdout=stdout,
             stderr=str(data.get("stderr") or ""),
             returncode=returncode
             if isinstance(returncode, int)
             else int(str(returncode)),
             timed_out=bool(data.get("timed_out") or False),
         )
+
+    def _restore_drained_mounts(
+        self, spec: DockerRunSpec, archives: Mapping[int, bytes]
+    ) -> None:
+        for index, archive in archives.items():
+            if index >= len(spec.mounts):
+                continue
+            mount = spec.mounts[index]
+            if mount.read_only:
+                continue
+            extract_archive_to_dir(archive, mount.source)
 
     def _post_broker(
         self, path: str, payload: Mapping[str, object], timeout_seconds: int

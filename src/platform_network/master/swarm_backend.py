@@ -54,7 +54,18 @@ from typing import Any, Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from platform_network.challenge_sdk.executors.docker import DockerExecutorError
+from platform_network.challenge_sdk.executors.docker import (
+    DockerExecutorError,
+    DockerLimits,
+    DockerMount,
+)
+from platform_network.challenge_sdk.mount_transport import (
+    TransportMount,
+    build_bootstrap_command,
+    encode_mount_in_env,
+    extract_archive_to_dir,
+    parse_drained_archives,
+)
 from platform_network.gpu.leases import GpuCapacityError, GpuLeaseLedger
 from platform_network.master.docker_broker import (
     DockerBrokerConfig,
@@ -400,10 +411,42 @@ class SwarmBrokerService(DockerBrokerService):
             }
             if request.task_id:
                 labels["platform.task"] = request.task_id
+            # A GPU job is scheduled on the GPU worker, NOT on this (manager)
+            # broker node, so a host bind-mount source materialized here does
+            # not exist there. Ship the materialized mounts INTO the remote
+            # container as env-carried archives extracted by a bootstrap, and
+            # drain writable mounts back out via stdout (see ``mount_transport``
+            # and ``_persist_drained_mounts``). CPU jobs run on the broker node
+            # and keep the cheaper direct bind mounts.
+            cross_node = self._is_cross_node(limits) and bool(mounts)
+            if cross_node:
+                env = dict(request.env)
+                transport: list[TransportMount] = []
+                for index, m in enumerate(mounts):
+                    in_env = encode_mount_in_env(index, m.source)
+                    env.update(in_env)
+                    transport.append(
+                        TransportMount(
+                            index=index,
+                            target=m.target,
+                            writable=not m.read_only,
+                            in_chunks=len(in_env),
+                        )
+                    )
+                command = build_bootstrap_command(request.command, tuple(transport))
+                request_mount_args: tuple[str, ...] = tuple(
+                    _materialization_tmpfs_arg(m.target) for m in mounts
+                )
+            else:
+                command = tuple(request.command)
+                request_mount_args = tuple(
+                    _bind_mount_arg(m.source, m.target, m.read_only) for m in mounts
+                )
+                env = dict(request.env)
             plan = SwarmServicePlan(
                 name=name,
                 image=request.image,
-                command=tuple(request.command),
+                command=command,
                 mode="replicated-job",
                 constraint=(
                     self.swarm_config.gpu_job_constraint
@@ -411,12 +454,10 @@ class SwarmBrokerService(DockerBrokerService):
                     else self.swarm_config.cpu_job_constraint
                 ),
                 network=self._job_network(limits.network),
-                env=tuple(request.env.items()),
+                env=tuple(env.items()),
                 labels=tuple(labels.items()),
                 container_labels=tuple(labels.items()),
-                mounts=tuple(
-                    _bind_mount_arg(m.source, m.target, m.read_only) for m in mounts
-                )
+                mounts=request_mount_args
                 + tmpfs_mounts
                 + self._docker_socket_mounts(challenge_slug)
                 + self._eval_readonly_mounts(challenge_slug),
@@ -462,7 +503,14 @@ class SwarmBrokerService(DockerBrokerService):
                 self.ledger.register(replace(entry, key=service_id))
                 self.ledger.release(name)
                 outcome = self._wait_for_job(service_id, request.timeout_seconds)
-                stdout, stderr = self._collect_logs(service_id)
+                raw_stdout, raw_stderr = self._service_logs_raw(service_id)
+                if cross_node:
+                    # Round-trip writable mounts the remote container wrote to a
+                    # manager-visible location (the broker node), where the
+                    # challenge worker reads the eval manifest.
+                    self._persist_drained_mounts(name, raw_stdout, mounts)
+                stdout = self._cap_log(raw_stdout)
+                stderr = self._cap_log(raw_stderr)
                 if outcome.error and not stderr:
                     stderr = self._cap_log(outcome.error)
                 return BrokerRunResponse(
@@ -658,13 +706,48 @@ class SwarmBrokerService(DockerBrokerService):
             return None
         return _load_json_object(inspected.stdout)
 
-    def _collect_logs(self, service_id: str) -> tuple[str, str]:
+    def _service_logs_raw(self, service_id: str) -> tuple[str, str]:
         logs = self._command(
             [self.config.docker_bin, "service", "logs", "--raw", service_id]
         )
         if logs.returncode != 0:
             return "", ""
-        return self._cap_log(logs.stdout), self._cap_log(logs.stderr)
+        return logs.stdout, logs.stderr
+
+    def _collect_logs(self, service_id: str) -> tuple[str, str]:
+        stdout, stderr = self._service_logs_raw(service_id)
+        return self._cap_log(stdout), self._cap_log(stderr)
+
+    def _is_cross_node(self, limits: DockerLimits) -> bool:
+        """Whether a job runs on a node other than this broker node.
+
+        GPU jobs are steered to the GPU worker by ``gpu_job_constraint`` while
+        the broker (and CPU jobs) run on the manager, so a positive GPU count
+        is the signal that bind-mount sources on this node are unreachable by
+        the job and mounts must be transported across nodes.
+        """
+
+        return bool(limits.gpu_count)
+
+    def _persist_drained_mounts(
+        self, service_name: str, raw_stdout: str, mounts: Sequence[DockerMount]
+    ) -> None:
+        """Write writable-mount artifacts drained from the job back to disk.
+
+        The bootstrap prints each writable mount's archive to stdout between
+        sentinels; here they are extracted under ``workspace_dir/retrieved`` on
+        the broker (manager) node so the challenge worker — and validators over
+        ssh — can read the round-tripped artifacts.
+        """
+
+        archives = parse_drained_archives(raw_stdout)
+        if not archives:
+            return
+        base = self.config.workspace_dir / "retrieved" / service_name
+        for index, archive in archives.items():
+            if index >= len(mounts) or mounts[index].read_only:
+                continue
+            extract_archive_to_dir(archive, base / f"mount-{index}")
 
     def _remove_service(self, service: str) -> None:
         self._command([self.config.docker_bin, "service", "rm", service])
@@ -1196,6 +1279,17 @@ def _tmpfs_mount_arg(value: str) -> str:
             if option.startswith("size="):
                 arg += f",tmpfs-size={option.removeprefix('size=')}"
     return arg
+
+
+def _materialization_tmpfs_arg(target: str) -> str:
+    """Node-local writable tmpfs for a cross-node-transported mount.
+
+    Mode ``1777`` (world-writable + sticky) lets the non-root eval uid extract
+    the inbound archive and write artifacts without EACCES while keeping
+    per-file ownership safe; the container memory limit bounds its size.
+    """
+
+    return f"type=tmpfs,destination={target},tmpfs-mode=1777"
 
 
 def _service_name(challenge: str, job_id: str, task_id: str | None) -> str:

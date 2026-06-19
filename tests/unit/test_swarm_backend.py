@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from platform_network.challenge_sdk.executors.docker import DockerExecutorError
+from platform_network.challenge_sdk.mount_transport import encode_dir_archive
 from platform_network.gpu.leases import (
     GpuCapacityError,
     GpuLeaseError,
@@ -621,10 +622,110 @@ def test_run_gpu_request_emits_generic_resource_not_gpus(tmp_path: Path) -> None
     pairs = _pairs(argv)
     assert ("--generic-resource", "NVIDIA-GPU=1") in pairs
     assert "--gpus" not in argv
-    assert argv[-3:] == ("ghcr.io/platformnetwork/challenge:1.2.3", "python", "-V")
+    # The job carries a mount, so its command is wrapped for cross-node mount
+    # transport; the original argv is preserved as the trailing positionals.
+    assert argv[-2:] == ("python", "-V")
+    assert "sh" in argv
     assert response.returncode == 0
     # The GPU lease is held only for the duration of the job.
     assert service.gpu_leases.in_use == 0
+
+
+def _gpu_mounts() -> list[dict[str, Any]]:
+    return [
+        {
+            "target": "/workspace",
+            "read_only": True,
+            "source_type": "directory",
+            "source_name": ".",
+            "archive_b64": _archive_member("payload.json", b"{}"),
+        },
+        {
+            "target": "/artifacts",
+            "read_only": False,
+            "source_type": "directory",
+            "source_name": ".",
+            "archive_b64": _archive_member("seed", b""),
+        },
+    ]
+
+
+def test_run_job_gpu_materializes_mounts_cross_node(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner)
+
+    service.run(
+        "agent",
+        _run_request(
+            command=["torchrun", "/workspace/runner.py"],
+            workdir="/workspace",
+            limits={"gpu_count": 1},
+            mounts=_gpu_mounts(),
+        ),
+    )
+
+    argv = runner.create_argv()
+    mounts = [value for flag, value in _pairs(argv) if flag == "--mount"]
+    # Transported mounts become node-local tmpfs (writable for the eval uid),
+    # NOT bind mounts of a broker-node path the GPU worker cannot see.
+    assert "type=tmpfs,destination=/workspace,tmpfs-mode=1777" in mounts
+    assert "type=tmpfs,destination=/artifacts,tmpfs-mode=1777" in mounts
+    assert not any(
+        m.startswith("type=bind,") and "destination=/workspace" in m for m in mounts
+    )
+    # Each mount's content rides in env-carried (chunked) archive vars.
+    envs = [value for flag, value in _pairs(argv) if flag == "--env"]
+    assert any(e.startswith("PLATFORM_BROKER_MOUNT_IN_0_0=") for e in envs)
+    assert any(e.startswith("PLATFORM_BROKER_MOUNT_IN_1_0=") for e in envs)
+    # Command is wrapped; only the writable mount (index 1) is drained out.
+    image_index = argv.index("ghcr.io/platformnetwork/challenge:1.2.3")
+    assert argv[image_index + 1 : image_index + 3] == ("sh", "-c")
+    script = argv[image_index + 3]
+    assert "@@PLATFORM_BROKER_MOUNT_OUT[1]:BEGIN@@" in script
+    assert "@@PLATFORM_BROKER_MOUNT_OUT[0]:BEGIN@@" not in script
+    assert argv[-2:] == ("torchrun", "/workspace/runner.py")
+
+
+def test_run_job_gpu_drains_writable_mount_to_manager_disk(tmp_path: Path) -> None:
+    produced = tmp_path / "produced"
+    produced.mkdir()
+    (produced / "prism_run_manifest.v1.json").write_text(
+        "artifact-here", encoding="utf-8"
+    )
+    drain = (
+        "@@PLATFORM_BROKER_MOUNT_OUT[1]:BEGIN@@\n"
+        f"{encode_dir_archive(produced)}\n"
+        "@@PLATFORM_BROKER_MOUNT_OUT[1]:END@@\n"
+    )
+    runner = FakeSwarmRunner(log_stdout="job-log\n" + drain)
+    service = _broker(tmp_path, runner)
+
+    service.run("agent", _run_request(limits={"gpu_count": 1}, mounts=_gpu_mounts()))
+
+    retrieved = list(
+        (tmp_path / "work" / "retrieved").glob("*/mount-1/prism_run_manifest.v1.json")
+    )
+    assert retrieved, "writable mount artifact was not round-tripped to the broker node"
+    assert retrieved[0].read_text(encoding="utf-8") == "artifact-here"
+
+
+def test_run_job_cpu_keeps_bind_mounts(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner)
+
+    service.run("agent", _run_request(mounts=_gpu_mounts()))
+
+    argv = runner.create_argv()
+    mounts = [value for flag, value in _pairs(argv) if flag == "--mount"]
+    # CPU jobs run on the broker node, so direct bind mounts are retained and
+    # the command is not wrapped.
+    assert any(
+        m.startswith("type=bind,") and "destination=/artifacts" in m for m in mounts
+    )
+    assert "type=tmpfs,destination=/artifacts,tmpfs-mode=1777" not in mounts
+    envs = [value for flag, value in _pairs(argv) if flag == "--env"]
+    assert not any(e.startswith("PLATFORM_BROKER_MOUNT_IN_") for e in envs)
+    assert "sh" not in argv
 
 
 def test_run_gpu_capacity_one_refuses_second_and_release_frees(
