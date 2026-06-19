@@ -203,6 +203,105 @@ Evidence for local validation should live in a local, gitignored evidence direct
 
 ---
 
+## Local E2E Multi-Challenge Integration (agent-challenge + Prism)
+
+This section documents a local end-to-end (E2E) integration that runs two challenges together on a
+single Docker Swarm: `agent-challenge` (terminal-bench code challenge, own_runner eval) and `prism`
+(neural-architecture-search challenge, GPU eval). It proves the full pipeline end to end (real
+submission, real eval, leaderboard, normalized `get_weights`) with weights computed in **dry-run
+only**, never on-chain. Final scores may be low or zero; the goal is to prove the plumbing executes
+submitted code, not that the agent or model is good.
+
+The three repositories are sibling checkouts under a common parent (`platform/`, `agent-challenge/`,
+`prism/`). The fixes that make them run together E2E live in those local checkouts (see the
+reproducibility caveats below).
+
+### Topology
+
+A two-node Swarm named `next-terrier`:
+
+- Manager node (CPU, label `platform.workload=cpu`) runs the control plane and the challenge APIs
+  (each pinned with `node.role==manager`).
+- A GPU worker node (RTX PRO 6000, label `platform.workload=gpu`) runs GPU eval jobs. It advertises
+  the generic resource `NVIDIA-GPU` and sets `"default-runtime": "nvidia"` in its `daemon.json`. The
+  GPU node joins the manager's swarm with a worker join token (leaving any prior standalone swarm
+  first).
+
+The live stack runs on the Swarm `host` network: services talk over `127.0.0.1` and bind fixed host
+ports.
+
+| Service | Port | Placement |
+|---------|------|-----------|
+| platform-master-proxy | 18080 | manager |
+| platform-master-broker | 18082 | manager |
+| platform-master-admin | 18900 | manager |
+| platform-master-postgres | 15432 | manager (control-plane DB) |
+| challenge-agent-challenge (plus worker sidecar) | 18001 | manager |
+| agent-challenge postgres | 15433 | manager |
+| challenge-prism | 18002 | manager (host-networked, SQLite-backed) |
+
+GPU eval jobs are dispatched by the broker to the GPU worker via the constraint
+`node.labels.platform.workload==gpu` plus `--generic-resource NVIDIA-GPU=<N>`.
+
+### Prerequisites and environment
+
+- A real OpenRouter API key supplied as the Docker secret `platform_or_key_real`, mounted into the
+  prism challenge container at `/run/secrets/openrouter_api_key` (used by LLM review where enabled).
+- GPU node: NVIDIA container toolkit, the `NVIDIA-GPU` generic resource advertised in `daemon.json`
+  (`node-generic-resources`), and `"default-runtime": "nvidia"`. Without the default runtime, swarm
+  GPU tasks land on the GPU node but the driver and `nvidia-smi` are not injected, because swarm
+  services cannot set a per-service runtime.
+- No-NAT bridge caveat: on this host the default docker0 bridge has no outbound NAT. agent-challenge
+  own_runner bakes `tmux` into the task image at build time and falls back to `--network host` for
+  build steps that need the network. Eval task containers run `--network none`. Tasks that require
+  internet fail their verifier cleanly (terminal state, score 0) and are slow.
+
+### Bring-up
+
+`deploy/swarm/install-swarm.sh` is the canonical entry point. It is dry-run by default and mutates
+only with `--apply`. It deploys the control plane (proxy 18080, broker 18082, admin 18900, master
+Postgres 15432) and both challenges (challenge-agent-challenge on 18001 with its worker sidecar and
+Postgres on 15433, challenge-prism on 18002). The script folds in the live deploy fixes: the proxy
+submission-path config (secret-volume mount, upload allowlist, per-challenge token seeding written
+as root then chowned to uid 1000), the agent-challenge worker sidecar and allowed-images, the broker
+`node.role==manager` pin, and the prism `CHALLENGE_ENV` block (broker wiring,
+`PRISM_PLATFORM_EVAL_IMAGE`, `PRISM_PLATFORM_EVAL_GPU_COUNT=1`, SQLite database URL, and the
+dev-only `PRISM_ALLOW_INSECURE_SIGNATURES` and `PRISM_VALIDATOR_HOTKEYS`).
+
+```bash
+./deploy/swarm/install-swarm.sh            # dry-run: prints the planned docker swarm commands
+./deploy/swarm/install-swarm.sh --apply    # apply on a disposable host
+```
+
+### Run and test
+
+Each repo has its own `.venv`; the `--extra dev` is required or pytest, ruff, and mypy are stripped.
+
+```bash
+# install (all three sibling repos)
+cd agent-challenge && uv sync --frozen --extra dev
+cd ../prism        && uv sync --frozen --extra dev
+cd ../platform     && uv sync --frozen --extra dev
+
+# platform scoped tests, lint, and typecheck (from platform/)
+.venv/bin/python -m pytest tests/unit -q -k "broker or swarm"
+.venv/bin/ruff check src
+.venv/bin/mypy src/platform_network/master
+```
+
+### Reproducibility caveats
+
+- The code fixes for this integration were committed to the local checkouts of all three repos but
+  NOT pushed to their remotes.
+- The rebuilt agent-challenge images (`agent-challenge:own-runner-fixed` and
+  `agent-challenge-terminal-bench-runner:own-runner-fixed`) and the broker/prism overlay images
+  (`platform-master:cross-node-mount-fixed`, `prism:mount-fixed`) are local to the swarm nodes and
+  not in any public registry. The prism evaluator image is pre-staged on the GPU node.
+- A clean-room reproduce requires pushing those commits and rebuilding/publishing the images. The
+  canonicalized deploy config in `install-swarm.sh` is image-independent and reproduces as-is.
+
+---
+
 ## License
 
 Apache-2.0
