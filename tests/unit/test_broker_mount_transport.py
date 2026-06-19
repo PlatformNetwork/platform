@@ -77,7 +77,7 @@ def test_broker_bootstrap_wraps_command_and_drains_only_writable() -> None:
     assert "base64 -d | tar -xzf - -C '/artifacts'" in script
     assert "tar -czf - -C '/artifacts' . | base64" in script
     assert "tar -czf - -C '/workspace' . | base64" not in script
-    assert 'exit $__platform_rc' in script
+    assert "exit $__platform_rc" in script
 
 
 def test_broker_drain_parse_strip_and_extract_roundtrip(tmp_path: Path) -> None:
@@ -87,9 +87,7 @@ def test_broker_drain_parse_strip_and_extract_roundtrip(tmp_path: Path) -> None:
         json.dumps({"schema_version": "prism_run_manifest.v1"}), encoding="utf-8"
     )
 
-    stdout = (
-        "PRISM_METRICS_JSON={\"q_arch\":0.0}\n" + _drain_section(1, source)
-    )
+    stdout = 'PRISM_METRICS_JSON={"q_arch":0.0}\n' + _drain_section(1, source)
 
     archives = parse_drained_archives(stdout)
     assert set(archives) == {1}
