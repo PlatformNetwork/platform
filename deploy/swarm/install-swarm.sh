@@ -75,6 +75,10 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 IMAGE_MASTER="ghcr.io/platformnetwork/platform-master:latest"
 IMAGE_AGENT_CHALLENGE="ghcr.io/platformnetwork/agent-challenge:latest"
 IMAGE_PRISM="ghcr.io/platformnetwork/prism:latest"
+# Prism GPU evaluator (CUDA cu128 torchrun runner). Must satisfy BOTH prism
+# docker_allowed_images AND the broker broker_allowed_images (ghcr.io/platformnetwork/);
+# pre-pulled on the GPU worker so the broker eval job resolves it locally.
+IMAGE_PRISM_EVALUATOR="${IMAGE_PRISM_EVALUATOR:-ghcr.io/platformnetwork/prism-evaluator:latest}"
 IMAGE_POSTGRES="postgres:16-alpine"
 
 # Minimum Docker engine major version required (validator runs 29.x today).
@@ -958,6 +962,28 @@ deploy_challenges() {
     "platform_openrouter_api_key:openrouter_api_key"
 
   # PRISM service (port 8080). Reached over the overlay; no host publish.
+  # Prism runtime config for the local E2E + weights dry-run slice (research prism
+  # §5,§7,§10): broker dispatch (docker_backend=broker), an ACTIVE GPU lease
+  # (platform_eval_gpu_count=1), the cu128 evaluator image (allowlisted by both prism
+  # and the broker), SQLite on /data, synthetic dataset (the in-container runner trains
+  # on random tokens — no download), and LLM policy review disabled (set
+  # PRISM_LLM_REVIEW_ENABLED=true + PRISM_CHUTES_BASE_URL/MODEL/API_KEY_FILE to route it
+  # at OpenRouter instead). docker_backend already defaults to broker but is set
+  # explicitly. The broker token file is the mounted platform_prism_docker_broker_token
+  # secret; it MUST equal the registry-written <secret_dir>/prism_docker_broker_token the
+  # broker reads (registration writes it). prism's docker_allowed_images already permits
+  # ghcr.io/platformnetwork/, so the eval image needs no override.
+  CHALLENGE_ENV=(
+    "CHALLENGE_SLUG=prism"
+    "CHALLENGE_DOCKER_ENABLED=true"
+    "CHALLENGE_DOCKER_BACKEND=broker"
+    "CHALLENGE_DOCKER_BROKER_URL=http://platform-master-broker:${MASTER_BROKER_PORT}"
+    "CHALLENGE_DOCKER_BROKER_TOKEN_FILE=${SECRET_MOUNT_DIR}/docker_broker_token"
+    "PRISM_PLATFORM_EVAL_IMAGE=${IMAGE_PRISM_EVALUATOR}"
+    "PRISM_PLATFORM_EVAL_GPU_COUNT=1"
+    "PRISM_DATABASE_URL=sqlite+aiosqlite:////data/prism.sqlite3"
+    "PRISM_LLM_REVIEW_ENABLED=false"
+  )
   _deploy_challenge_service \
     "challenge-prism" "${IMAGE_PRISM}" "${PRISM_PORT}" \
     "platform_prism_pg" \
