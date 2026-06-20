@@ -77,7 +77,14 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 # The working live E2E stack does NOT run these :latest tags for the broker and
 # prism; it runs two LOCAL-ONLY images that are NOT on any registry:
 #   * platform-master-broker -> ghcr.io/platformnetwork/platform-master:readonly-data-mount
-#   * challenge-prism        -> ghcr.io/platformnetwork/prism:mount-fixed
+#   * challenge-prism        -> ghcr.io/platformnetwork/prism:m3-reexec
+# (M3) challenge-prism is rebuilt from prism HEAD (PRISM v2 forced-init runner + instrumented
+# loss + scoring + harness robustness + multi-GPU) as the LOCAL-ONLY tag :m3-reexec and
+# redeployed manager-pinned, `--update-order stop-first --no-resolve-image`. Its evaluator is
+# pointed at the LOCAL-ONLY ghcr.io/platformnetwork/prism-evaluator:augmented (see below).
+# The host-side held-out delta also needs the SECRET val split present as a manager-local
+# volume `prism_fineweb_edu_val` (populated from the kept val staging) so the RO mount above
+# resolves; if absent the held-out is gracefully skipped.
 # The broker LOCAL-ONLY image is built from platform HEAD and carries the UNPUSHED
 # platform commits 1142bc53 (cross-node mount materialization for GPU eval jobs) +
 # 48ec8c5a (non-root mount extraction + uncapped drain round-trip) + e02ffbab
@@ -103,7 +110,10 @@ IMAGE_PRISM="ghcr.io/platformnetwork/prism:latest"
 # Prism GPU evaluator (CUDA cu128 torchrun runner). Must satisfy BOTH prism
 # docker_allowed_images AND the broker broker_allowed_images (ghcr.io/platformnetwork/);
 # pre-pulled on the GPU worker so the broker eval job resolves it locally.
-IMAGE_PRISM_EVALUATOR="${IMAGE_PRISM_EVALUATOR:-ghcr.io/platformnetwork/prism-evaluator:latest}"
+# NB: PRISM v2 forced-init re-execution requires the :augmented tag (bundles sentencepiece +
+# offline tiktoken/HF assets for the locked FineWeb-Edu pipeline). The registry :latest is STALE
+# and lacks those — it is a LOCAL-ONLY image pre-pulled/built on the GPU node. Do NOT use :latest.
+IMAGE_PRISM_EVALUATOR="${IMAGE_PRISM_EVALUATOR:-ghcr.io/platformnetwork/prism-evaluator:augmented}"
 IMAGE_POSTGRES="postgres:16-alpine"
 
 # Minimum Docker engine major version required (validator runs 29.x today).
@@ -171,6 +181,10 @@ CHALLENGE_DOCKER_ALLOWED_IMAGES="${CHALLENGE_DOCKER_ALLOWED_IMAGES:-[\"platformn
 # (reset after each deploy). Declared here so `set -u` never trips on `${#..[@]}`.
 CHALLENGE_ENV=()
 CHALLENGE_CMD=()
+# Per-call extra `--mount` specs consumed by _deploy_challenge_service (e.g. the prism scorer's
+# read-only SECRET held-out val volume). Reset after each deploy. Declared here so `set -u`
+# never trips on `${#..[@]}`.
+CHALLENGE_EXTRA_MOUNTS=()
 
 # ============================================================================
 # Flags (all default to the SAFE / non-mutating / non-destructive value).
@@ -1029,6 +1043,13 @@ deploy_challenges() {
     "PRISM_PLATFORM_EVAL_GPU_COUNT=1"
     "PRISM_DATABASE_URL=sqlite+aiosqlite:////data/prism.sqlite3"
     "PRISM_LLM_REVIEW_ENABLED=false"
+    # Host-side held-out delta (m3-heldout-delta): the SECRET val split must be readable by the
+    # manager-pinned prism SCORER process (NOT the network=none eval container). Mount the val
+    # volume read-only (see CHALLENGE_EXTRA_MOUNTS below) and point the scorer at it. The host
+    # reloads the cross-node-returned trained_state.pt and runs the random-twin vs trained val
+    # bpb delta. If the volume is absent or the eval exceeds its CPU budget, the held-out is
+    # gracefully SKIPPED (the scored run never fails on held-out).
+    "PRISM_PLATFORM_EVAL_VAL_DATA_DIR=/secret/val"
     # LOCAL/DEV ONLY — do NOT enable in production. The prism service image does
     # NOT bundle bittensor, so real sr25519 signature verification is impossible
     # in-image (verify_hotkey_signature import-fails -> False). This documented
@@ -1043,6 +1064,12 @@ deploy_challenges() {
     # array (PrismSettings parses tuple fields as JSON via pydantic-settings).
     # Value = the dev self-submit sentinel used by the prism negative-case proof.
     "PRISM_VALIDATOR_HOTKEYS=[\"5PrismValidatorSelfSubmitDENY\"]"
+  )
+  # SECRET held-out val split, mounted RO on the manager so the host-side scorer can read it
+  # (matches PRISM_PLATFORM_EVAL_VAL_DATA_DIR above). The val/test splits NEVER enter the
+  # network=none eval container — only the locked TRAIN split is broker-mounted there.
+  CHALLENGE_EXTRA_MOUNTS=(
+    "type=volume,source=prism_fineweb_edu_val,destination=/secret/val,readonly=true"
   )
   _deploy_challenge_service \
     "challenge-prism" "${IMAGE_PRISM}" "${PRISM_PORT}" \
@@ -1082,6 +1109,14 @@ _deploy_challenge_service() {
       argv+=(--env "${env_kv}")
     done
   fi
+  # Caller-supplied extra mounts (e.g. the prism scorer's read-only SECRET held-out val volume
+  # so the host-side held-out delta can run; the eval container NEVER mounts val/test).
+  local mnt_spec
+  if [[ "${#CHALLENGE_EXTRA_MOUNTS[@]}" -gt 0 ]]; then
+    for mnt_spec in "${CHALLENGE_EXTRA_MOUNTS[@]}"; do
+      argv+=(--mount "${mnt_spec}")
+    done
+  fi
   local spec secret_name target
   for spec in "$@"; do
     secret_name="${spec%%:*}"
@@ -1096,6 +1131,7 @@ _deploy_challenge_service() {
   plan "${argv[@]}"
   CHALLENGE_ENV=()
   CHALLENGE_CMD=()
+  CHALLENGE_EXTRA_MOUNTS=()
   : "${port}"  # port documented in inventory; challenges are overlay-internal
 }
 
