@@ -39,6 +39,63 @@ the `node-generic-resources` advertised in the GPU worker's `daemon.json` (see
 below). The resource name `NVIDIA-GPU` is the contract; do not rename it on one
 side only.
 
+## PRISM evaluation read-only data mounts
+
+PRISM v2 GPU evals re-execute the miner's training loop on locked FineWeb-Edu
+data under a forced random init. The broker delivers that locked data to the eval
+container through a **per-slug read-only mount** mechanism that is decoupled from
+the Docker-socket allowlist, so the prism eval job gets the data without the
+(root-equivalent) host Docker socket:
+
+- `SwarmBrokerConfig.eval_readonly_mounts_by_slug` (`master/swarm_backend.py`) is
+  merged with the legacy socket-gated `eval_readonly_mounts` in
+  `_eval_readonly_mounts(slug)` (deduplicated, order-preserving). It is configured
+  via `docker.broker_eval_readonly_mounts_by_slug` (`config/settings.py`) and
+  wired by `cli_app/main.py::_eval_readonly_mounts_by_slug`.
+- The prism slug gets a built-in default (`DEFAULT_PRISM_EVAL_READONLY_MOUNTS`),
+  so the wiring is live with **no `master.yaml` entry**: the locked train volume
+  `prism_fineweb_edu_train` → `/data/fineweb-edu/train` and the offline reference
+  tokenizers `prism_reference_tokenizers` → `/opt/prism/reference-tokenizers`,
+  both **read-only**.
+- Only the `train` split is exposed. The secret `val`/`test` held-out splits are
+  never mounted into the eval container, which runs `network=none` on the internal
+  `platform_jobs_internal` overlay and carries no OpenRouter secret.
+- To override the volumes/paths, set `docker.broker_eval_readonly_mounts_by_slug`
+  in `master.yaml`:
+
+  ```yaml
+  docker:
+    broker_eval_readonly_mounts_by_slug:
+      prism:
+        - prism_fineweb_edu_train:/data/fineweb-edu/train
+        - prism_reference_tokenizers:/opt/prism/reference-tokenizers
+  ```
+
+  A bare name is a Docker named volume; an absolute host path is a bind mount;
+  both are emitted read-only.
+
+### install-swarm.sh PRISM v2 deploy wiring
+
+`install-swarm.sh` canonicalizes the prism eval-plane deploy config on the
+challenge service (the broker supplies the eval-container data mounts above):
+
+- **Augmented evaluator image** — `IMAGE_PRISM_EVALUATOR` defaults to
+  `ghcr.io/platformnetwork/prism-evaluator:augmented` (bundles `sentencepiece` +
+  the offline tiktoken cache for the locked pipeline) and is passed as
+  `PRISM_PLATFORM_EVAL_IMAGE`. The registry `:latest` evaluator is stale; do not
+  use it.
+- **Host-side held-out** — the manager-pinned prism scorer (NOT the
+  `network=none` eval container) mounts the SECRET val split read-only
+  (`prism_fineweb_edu_val` → `/secret/val`) and reads it via
+  `PRISM_PLATFORM_EVAL_VAL_DATA_DIR=/secret/val` for the held-out delta. The
+  non-secret train split is also mounted at `/secret/train`
+  (`PRISM_PLATFORM_EVAL_TRAIN_DATA_DIR`) for the converged memorization-gap
+  reference. If val is absent the held-out is gracefully skipped.
+- **OpenRouter LLM hard gate** — `PRISM_LLM_REVIEW_ENABLED=true`; the key is
+  mounted on the challenge service ONLY at `/run/secrets/openrouter_api_key` (from
+  the `platform_openrouter_api_key` Docker secret, created from
+  `$OPENROUTER_API_KEY`). The eval container never carries the key.
+
 ## Files
 
 | File | Target node | Purpose |
