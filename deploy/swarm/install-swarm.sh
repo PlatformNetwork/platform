@@ -137,13 +137,21 @@ OVERLAY_MTU="1450"
 #   (docker_orchestrator.py:32 DEFAULT_SECRET_MOUNT_DIR = "/run/secrets/platform").
 SECRET_MOUNT_DIR="/run/secrets/platform"
 
-# Master service network endpoints (LIVE INVENTORY ports).
-#   admin  : platform master run     -> admin_host:admin_port  (8000)
-#   broker : platform master broker  -> docker.broker_*        (8082)
-#   proxy  : platform master proxy   -> proxy_host:proxy_port  (8080)
-MASTER_ADMIN_PORT=8000
-MASTER_BROKER_PORT=8082
-MASTER_PROXY_PORT=8080
+# Master service network endpoints (LIVE host ports — the live 18xxx stack).
+# Overridable via env so a fresh bring-up reproduces the live box exactly; each
+# value flows to BOTH the container target + host --publish AND the rendered
+# master config (admin_port/proxy_port/broker_port/broker_url), so the published
+# host port, the in-container listen port, and the overlay broker_url stay
+# mutually consistent.
+#   admin  : platform master run     -> admin_host:admin_port  (18900)
+#   broker : platform master broker  -> docker.broker_*        (18082)
+#   proxy  : platform master proxy   -> proxy_host:proxy_port  (18080)
+MASTER_ADMIN_PORT="${MASTER_ADMIN_PORT:-18900}"
+MASTER_BROKER_PORT="${MASTER_BROKER_PORT:-18082}"
+MASTER_PROXY_PORT="${MASTER_PROXY_PORT:-18080}"
+# Challenge container-internal listen ports (overlay-internal; NO host publish —
+# clients reach them THROUGH the proxy). Separate network namespaces, so these do
+# NOT collide with the master host ports above.
 AGENT_CHALLENGE_PORT=8000
 PRISM_PORT=8080
 
@@ -726,11 +734,11 @@ _verify_rowcounts() {
 #    config + secrets mounted and ports published.
 #
 #    Service name <-> command <-> port:
-#      platform-master-admin  : `platform master run`    : 8000 (admin_host:admin_port)
-#      platform-master-broker : `platform master broker` : 8082 (docker.broker_*)
-#      platform-master-proxy  : `platform master proxy`  : 8080 (proxy_host:proxy_port)
+#      platform-master-admin  : `platform master run`    : 18900 (admin_host:admin_port)
+#      platform-master-broker : `platform master broker` : 18082 (docker.broker_*)
+#      platform-master-proxy  : `platform master proxy`  : 18080 (proxy_host:proxy_port)
 #    The broker service MUST be named platform-master-broker so the configured
-#    broker_url (http://platform-master-broker:8082) resolves over the overlay.
+#    broker_url (http://platform-master-broker:18082) resolves over the overlay.
 # ============================================================================
 deploy_master() {
   log "STEP 9/12 deploy_master"
@@ -893,7 +901,7 @@ _deploy_master_service() {
   #     admin/broker/proxy all read per-challenge tokens from here. The PROXY needs
   #     it to load each challenge's bearer token when verifying miner uploads (else
   #     500 "Challenge token file is missing"). Seeded by _seed_proxy_challenge_tokens.
-  #   * --update-order stop-first: these are FIXED host-port services (8000/8082/8080,
+  #   * --update-order stop-first: these are FIXED host-port services (18900/18082/18080,
   #     mode=host); the default start-first ordering causes a transient port collision
   #     (EADDRINUSE) on update. stop-first releases the port before the new task binds.
   local -a extra=(
@@ -920,7 +928,7 @@ _deploy_master_service() {
       # MANAGER PIN (required on any multi-node swarm): the broker shells out to
       # `docker service create` to dispatch eval jobs, which REQUIRES a manager's
       # docker.sock; it also binds the manager-local docker.sock + ${broker_ws}
-      # workspace and publishes the fixed host port 8082. With no constraint an
+      # workspace and publishes the fixed host port 18082. With no constraint an
       # update (stop-first) can reschedule the broker onto a joined worker (e.g.
       # the GPU node), where it breaks: the manager-only docker API is absent, the
       # local-only image is "No such image", and the workspace bind source does
@@ -992,8 +1000,8 @@ deploy_challenges() {
     "CHALLENGE_DOCKER_ALLOWED_IMAGES=${CHALLENGE_DOCKER_ALLOWED_IMAGES}"
   )
 
-  # agent-challenge primary API service (port 8000). Reached over the overlay by
-  # the proxy/master; no host publish (avoids clashing with master-admin:8000).
+  # agent-challenge primary API service (container port 8000). Overlay-internal —
+  # reached over the overlay by the proxy/master; no host publish.
   CHALLENGE_ENV=("${ac_eval_env[@]}")
   _deploy_challenge_service \
     "challenge-agent-challenge" "${IMAGE_AGENT_CHALLENGE}" "${AGENT_CHALLENGE_PORT}" \
@@ -1026,7 +1034,7 @@ deploy_challenges() {
     "platform_agent_challenge_submission_env_encryption_key:submission_env_encryption_key" \
     "platform_openrouter_api_key:openrouter_api_key"
 
-  # PRISM service (port 8080). Reached over the overlay; no host publish.
+  # PRISM service (container port 8080). Overlay-internal — reached over the overlay; no host publish.
   # Prism runtime config for the local E2E + weights dry-run slice (research prism
   # §5,§7,§10): broker dispatch (docker_backend=broker), an ACTIVE GPU lease
   # (platform_eval_gpu_count=1), the cu128 evaluator image (allowlisted by both prism

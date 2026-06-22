@@ -252,17 +252,35 @@ The three backend repositories are sibling checkouts under a common parent
 | CPU worker | `node.labels.platform.workload==cpu` | Short-lived CPU broker jobs |
 | GPU worker | `node.labels.platform.workload==gpu` | Short-lived GPU broker jobs; advertises `NVIDIA-GPU` as a Swarm generic resource |
 
-Canonical host ports published by the manager services:
+The manager control-plane services are published on fixed host ports by
+`install-swarm.sh --apply` (overridable via the `MASTER_PROXY_PORT` /
+`MASTER_BROKER_PORT` / `MASTER_ADMIN_PORT` env vars; the defaults below match the
+live box):
 
-| Service | Host port |
+| Manager service (host-published) | Host port |
 |---------|-----------|
-| platform-master-proxy | 18080 |
+| platform-master-proxy (public entry; routes `/challenges/*`) | 18080 |
 | platform-master-broker | 18082 |
-| platform-master-admin | 18900 |
-| control-plane Postgres | 15432 |
-| challenge-agent-challenge (plus worker sidecar) | 18001 |
-| agent-challenge Postgres | 15433 |
-| challenge-prism (SQLite-backed) | 18002 |
+| platform-master-admin (registry / weights) | 18900 |
+
+The challenge services and the Postgres backing stores are **overlay-internal**
+(no host publish): clients reach the challenges **through the proxy** over the
+`platform_challenges` overlay (e.g. `http://127.0.0.1:18080/challenges/prism/...`),
+and the master reaches Postgres by service name. They listen on their container
+ports only:
+
+| Overlay-internal service (reached via the proxy / by service name) | Container port |
+|---------|-----------|
+| challenge-agent-challenge (plus worker sidecar) | 8000 |
+| challenge-prism (SQLite-backed) | 8080 |
+| platform-master-postgres (control plane) | 5432 |
+| challenge-agent-challenge-postgres | 5432 |
+| challenge-prism-postgres | 5432 |
+
+> The **live box** additionally exposes some of these on the host for **direct
+> debugging only** (not the canonical client path): prism on `18002`,
+> agent-challenge on `18001`, and the Postgres stores on `15432` / `15433` /
+> `15434`. Production clients always go through the proxy.
 
 GPU eval jobs are dispatched by the broker to a GPU worker via the constraint
 `node.labels.platform.workload==gpu` plus `--generic-resource NVIDIA-GPU=<N>`.
@@ -394,12 +412,17 @@ Full submitter configuration and the operator FAQ are in the
 
 ### Step 7 — Verify
 
+The three manager services answer `/health` on their published host ports. The
+challenges are overlay-internal, so verify them **through the proxy** (the
+canonical client path) rather than on a host port:
+
 ```bash
 docker service ls
-curl -sf http://127.0.0.1:18080/health    # proxy
-curl -sf http://127.0.0.1:18082/health    # broker
-curl -sf http://127.0.0.1:18900/health    # admin / registry / weights
-curl -sf http://127.0.0.1:18002/health    # prism challenge
+curl -sf http://127.0.0.1:18080/health                                 # proxy
+curl -sf http://127.0.0.1:18082/health                                 # broker
+curl -sf http://127.0.0.1:18900/health                                 # admin / registry / weights
+curl -sf http://127.0.0.1:18080/challenges/prism/leaderboard           # prism, via the proxy
+curl -sf http://127.0.0.1:18080/challenges/agent-challenge/leaderboard  # agent-challenge, via the proxy
 ```
 
 A GPU eval job lands on a GPU worker via `node.labels.platform.workload==gpu` plus
