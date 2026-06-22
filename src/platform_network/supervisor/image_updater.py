@@ -1,7 +1,7 @@
 """Supervisor image-updater — master Swarm service digest pinning.
 
 A :class:`ScheduledTask` that resolves the public GHCR tag digest and pins
-the first-party master Swarm services (admin/proxy/broker/...) to
+the first-party master Swarm services (proxy/broker/...) to
 ``tag@sha256:<digest>`` only when the digest changes. It reuses the
 registry-only digest-resolution core (:func:`resolve_remote_digest` /
 :func:`parse_image_reference` / :func:`extract_digest` from
@@ -28,10 +28,12 @@ recipe parity but deliberately not consulted.
 
 Swarm service naming: the master-side first-party service names are not yet
 pinned by deployment (Task 24/27 territory). The defaults below
-(``platform-admin``/``platform-proxy``/``platform-broker``/
-``platform-config-sync``, all tracking the master image) are the chosen
-convention; a service that does not exist on the daemon is a logged skip,
-so partial deployments are safe.
+(``platform-proxy``/``platform-broker``/``platform-config-sync``, all
+tracking the master image) are the chosen convention; a service that does
+not exist on the daemon is a logged skip, so partial deployments are safe.
+The single-port consolidation removed the separate ``platform-admin``
+service (the admin/registry surface is served by the proxy), so it is no
+longer a rollout target.
 """
 
 from __future__ import annotations
@@ -73,7 +75,6 @@ class ImageUpdateTarget:
 
 
 DEFAULT_FIRST_PARTY_TARGETS: tuple[ImageUpdateTarget, ...] = (
-    ImageUpdateTarget(service="platform-admin", image=DEFAULT_MASTER_IMAGE),
     ImageUpdateTarget(service="platform-proxy", image=DEFAULT_MASTER_IMAGE),
     ImageUpdateTarget(service="platform-broker", image=DEFAULT_MASTER_IMAGE),
     ImageUpdateTarget(service="platform-config-sync", image=DEFAULT_MASTER_IMAGE),

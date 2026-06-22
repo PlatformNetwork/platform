@@ -278,10 +278,10 @@ def test_swarm_defaults_preserve_contract_and_exclude_self() -> None:
     assert CONFIG_SYNC_INTERVAL_SECONDS == 60.0
     assert DEFAULT_CONFIG_TARGET_PATH == "/etc/platform/master.yaml"
     assert DEFAULT_ROLLOUT_SERVICES == (
-        "platform-admin",
         "platform-proxy",
         "platform-broker",
     )
+    assert "platform-admin" not in DEFAULT_ROLLOUT_SERVICES
     assert "platform-config-sync" not in DEFAULT_ROLLOUT_SERVICES
     source = ConfigSyncSource.default()
     assert source.repository == "PlatformNetwork/platform"

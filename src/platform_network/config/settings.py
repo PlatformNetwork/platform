@@ -19,6 +19,8 @@ class NetworkSettings(BaseModel):
 
 class MasterSettings(BaseModel):
     registry_url: str = "https://chain.platform.network"
+    # Ignored back-compat: the admin/registry surface is served by the proxy on
+    # proxy_port (single public API); there is no separate admin listener.
     admin_host: str = "0.0.0.0"
     admin_port: int = 8080
     proxy_host: str = "0.0.0.0"

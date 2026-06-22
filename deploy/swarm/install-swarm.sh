@@ -140,13 +140,14 @@ SECRET_MOUNT_DIR="/run/secrets/platform"
 # Master service network endpoints (LIVE host ports — the live 18xxx stack).
 # Overridable via env so a fresh bring-up reproduces the live box exactly; each
 # value flows to BOTH the container target + host --publish AND the rendered
-# master config (admin_port/proxy_port/broker_port/broker_url), so the published
+# master config (proxy_port/broker_port/broker_url), so the published
 # host port, the in-container listen port, and the overlay broker_url stay
 # mutually consistent.
-#   admin  : platform master run     -> admin_host:admin_port  (18900)
 #   broker : platform master broker  -> docker.broker_*        (18082)
 #   proxy  : platform master proxy   -> proxy_host:proxy_port  (18080)
-MASTER_ADMIN_PORT="${MASTER_ADMIN_PORT:-18900}"
+# SINGLE PUBLIC API: the proxy also serves the admin/registry surface
+# (/v1/registry, /v1/weights/latest, /health) on :18080, so there is no separate
+# admin service/port (the former platform-master-admin on 18900 is removed).
 MASTER_BROKER_PORT="${MASTER_BROKER_PORT:-18082}"
 MASTER_PROXY_PORT="${MASTER_PROXY_PORT:-18080}"
 # Challenge container-internal listen ports (overlay-internal; NO host publish —
@@ -160,7 +161,7 @@ VOL_MASTER_PG="platform_master_pg"
 VOL_AGENT_CHALLENGE_PG="agent_challenge_pg"
 VOL_PRISM_PG="prism_pg"
 
-# Shared platform secrets volume, mounted by admin/broker/proxy at the master's
+# Shared platform secrets volume, mounted by broker/proxy at the master's
 # DockerSettings.secret_dir. The master reads each challenge's bearer token and
 # the per-challenge docker-broker token from <secret_dir>/<slug>_challenge_token
 # (registry.py:_token_path). The PROXY in particular needs this mount or miner
@@ -730,13 +731,17 @@ _verify_rowcounts() {
 # ============================================================================
 # 9. deploy_master()
 #    Render /etc/platform/master.yaml (backend=docker, single-node values) then
-#    deploy admin/broker/proxy services from the platform-master image with the
+#    deploy broker/proxy services from the platform-master image with the
 #    config + secrets mounted and ports published.
 #
 #    Service name <-> command <-> port:
-#      platform-master-admin  : `platform master run`    : 18900 (admin_host:admin_port)
 #      platform-master-broker : `platform master broker` : 18082 (docker.broker_*)
 #      platform-master-proxy  : `platform master proxy`  : 18080 (proxy_host:proxy_port)
+#    The proxy is the SINGLE public API: it serves /v1/registry, /v1/weights/latest,
+#    /health, the admin/management routes (token-gated), the signed upload bridge,
+#    and the /challenges/* passthrough, AND it runs the orchestrator that creates
+#    challenges dynamically (the separate `platform master run` admin service on
+#    18900 is removed).
 #    The broker service MUST be named platform-master-broker so the configured
 #    broker_url (http://platform-master-broker:18082) resolves over the overlay.
 # ============================================================================
@@ -746,11 +751,10 @@ deploy_master() {
   _ensure_master_config_secret
   _seed_proxy_challenge_tokens  # proxy bearer-token files in the shared secrets volume
 
-  # admin (orchestrator + admin API) — this is what dynamically creates challenges.
-  _deploy_master_service "platform-master-admin" "run" "${MASTER_ADMIN_PORT}" "${MASTER_ADMIN_PORT}"
   # broker — challenge workload broker (frozen contract / Swarm backend).
   _deploy_master_service "platform-master-broker" "broker" "${MASTER_BROKER_PORT}" "${MASTER_BROKER_PORT}"
-  # proxy — public miner-facing proxy.
+  # proxy — public single API (registry/weights/health + admin + upload bridge +
+  # /challenges/* passthrough) and the orchestrator that creates challenges.
   _deploy_master_service "platform-master-proxy" "proxy" "${MASTER_PROXY_PORT}" "${MASTER_PROXY_PORT}"
 }
 
@@ -777,8 +781,6 @@ network:
   master_uid: 0
 
 master:
-  admin_host: 0.0.0.0
-  admin_port: ${MASTER_ADMIN_PORT}
   proxy_host: 0.0.0.0
   proxy_port: ${MASTER_PROXY_PORT}
 
@@ -867,12 +869,12 @@ _seed_proxy_challenge_tokens() {
 # _seed_challenge_token SLUG ENVVAR — write $ENVVAR into the secrets volume at
 # <slug>_challenge_token (mode 600, owner-only). Idempotent (overwrites in place).
 #
-# Ownership: the master image runs as uid 1000 (proxy/admin are uid 1000; only the
-# broker is --user root), so the proxy/admin read these files AS uid 1000. The
+# Ownership: the master image runs as uid 1000 (the proxy is uid 1000; only the
+# broker is --user root), so the proxy reads these files AS uid 1000. The
 # writer container runs as root (the default — required because a FRESH
 # vol_platform_secrets volume root is owned root:root 0755, so a --user 1000:1000
 # writer could not create the file), then chowns the file to 1000:1000 keeping
-# mode 600. A root-owned 600 file would be UNREADABLE by the proxy/admin on a
+# mode 600. A root-owned 600 file would be UNREADABLE by the proxy on a
 # fresh volume (-> 500 "Challenge token file is missing" / 401 "invalid bearer
 # token").
 _seed_challenge_token() {
@@ -898,10 +900,10 @@ _deploy_master_service() {
 
   # Common extras for ALL master services:
   #   * shared secrets volume at the master secret_dir (/var/lib/platform/secrets):
-  #     admin/broker/proxy all read per-challenge tokens from here. The PROXY needs
+  #     broker/proxy read per-challenge tokens from here. The PROXY needs
   #     it to load each challenge's bearer token when verifying miner uploads (else
   #     500 "Challenge token file is missing"). Seeded by _seed_proxy_challenge_tokens.
-  #   * --update-order stop-first: these are FIXED host-port services (18900/18082/18080,
+  #   * --update-order stop-first: these are FIXED host-port services (18082/18080,
   #     mode=host); the default start-first ordering causes a transient port collision
   #     (EADDRINUSE) on update. stop-first releases the port before the new task binds.
   local -a extra=(
@@ -968,7 +970,7 @@ _deploy_master_service() {
 # ============================================================================
 # 10. deploy_challenges()
 #     DEFAULT: do NOTHING here — the running master orchestrator (`platform
-#     master run`, deployed above) creates challenge services dynamically via
+#     master proxy`, deployed above) creates challenge services dynamically via
 #     SwarmChallengeOrchestrator (this is the real-system behavior). Only when
 #     --static-challenges is set do we create the challenge services directly,
 #     for a static single-node bring-up.
@@ -1212,14 +1214,12 @@ healthcheck() {
   log "STEP 11/12 healthcheck"
   if [[ "${APPLY}" != "true" ]]; then
     log "  (dry-run) would HTTP-probe /health on:"
-    log "    http://127.0.0.1:${MASTER_ADMIN_PORT}/health   (platform-master-admin)"
     log "    http://127.0.0.1:${MASTER_BROKER_PORT}/health  (platform-master-broker)"
     log "    http://127.0.0.1:${MASTER_PROXY_PORT}/health   (platform-master-proxy)"
     log "  and would verify challenge services converge to 1/1 replicas + overlay /health."
     return 0
   fi
 
-  _http_health "platform-master-admin"  "http://127.0.0.1:${MASTER_ADMIN_PORT}/health"
   _http_health "platform-master-broker" "http://127.0.0.1:${MASTER_BROKER_PORT}/health"
   _http_health "platform-master-proxy"  "http://127.0.0.1:${MASTER_PROXY_PORT}/health"
 

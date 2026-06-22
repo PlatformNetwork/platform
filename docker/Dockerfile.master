@@ -33,4 +33,4 @@ EXPOSE 8000 8001 8082
 
 USER 1000:1000
 
-CMD ["platform", "master", "run", "--config", "config/master.example.yaml"]
+CMD ["platform", "master", "proxy", "--config", "config/master.example.yaml"]

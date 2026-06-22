@@ -9,8 +9,6 @@ network:
 
 master:
   registry_url: https://chain.platform.network
-  admin_host: 0.0.0.0
-  admin_port: 8080
   proxy_host: 0.0.0.0
   proxy_port: 8081
   epoch_interval_seconds: 360

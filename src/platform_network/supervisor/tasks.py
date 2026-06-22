@@ -92,14 +92,15 @@ def build_scheduled_tasks(
     # Task 18 registration point (image-updater):
     # Task 28 #1: call-site override targets the broker by its CANONICAL name
     # `platform-docker-broker` (the settings.docker.broker_url host) and drops
-    # the non-service `platform-config-sync`. DEFAULT_FIRST_PARTY_TARGETS stays
-    # as-is for the regression tests; do not "simplify" back to the default.
+    # the non-service `platform-config-sync`. The single-port consolidation also
+    # dropped the separate `platform-admin` service (proxy serves admin/registry).
+    # DEFAULT_FIRST_PARTY_TARGETS stays as-is for the regression tests; do not
+    # "simplify" back to the default.
     tasks.append(
         build_image_updater_task(
             settings,
             health_gate=gate,
             targets=(
-                ImageUpdateTarget(service="platform-admin", image=DEFAULT_MASTER_IMAGE),
                 ImageUpdateTarget(service="platform-proxy", image=DEFAULT_MASTER_IMAGE),
                 ImageUpdateTarget(
                     service="platform-docker-broker", image=DEFAULT_MASTER_IMAGE
@@ -110,14 +111,14 @@ def build_scheduled_tasks(
     # Task 19 registration point (challenge-image-updater).
     tasks.append(build_challenge_image_updater_task(settings, health_gate=gate))
     # Task 20 registration point (config-sync).
-    # Task 28 #1: same canonical-broker call-site override;
+    # Task 28 #1: same canonical-broker call-site override; single-port
+    # consolidation drops the removed `platform-admin` rollout target.
     # DEFAULT_ROLLOUT_SERVICES stays as-is.
     tasks.append(
         build_config_sync_task(
             settings,
             health_gate=gate,
             rollout_services=(
-                "platform-admin",
                 "platform-proxy",
                 "platform-docker-broker",
             ),

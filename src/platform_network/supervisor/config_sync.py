@@ -33,7 +33,9 @@ dockerd — never the broker — so the shared gate is accepted but
 deliberately not consulted.
 
 Rollout targets: the config consumers among Task 18's first-party
-service names — ``platform-admin``/``platform-proxy``/``platform-broker``.
+service names — ``platform-proxy``/``platform-broker`` (the single-port
+consolidation removed the separate ``platform-admin`` service; the
+admin/registry surface is now served by the proxy).
 ``platform-config-sync`` is deliberately absent: under the supervisor,
 config-sync is this very task, not a Swarm service, and it must not
 force-restart itself. A target that does not exist on the daemon is a
@@ -73,7 +75,6 @@ DEFAULT_CONFIG_MAP_NAME = "platform-config"
 DEFAULT_NAMESPACE = "platform-master"
 
 DEFAULT_ROLLOUT_SERVICES: tuple[str, ...] = (
-    "platform-admin",
     "platform-proxy",
     "platform-broker",
 )
