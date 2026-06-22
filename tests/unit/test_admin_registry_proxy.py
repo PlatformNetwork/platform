@@ -2320,3 +2320,94 @@ def test_production_admin_accepts_pinned_image_and_latest_digest_update() -> Non
     )
     assert unsafe_patch.status_code == 400
     assert "digest" in unsafe_patch.text
+
+
+def _single_port_app(
+    registry: ChallengeRegistry, **kwargs: Any
+) -> FastAPI:
+    return create_proxy_app(
+        registry=registry,
+        nonce_store=FakeNonceStore(),
+        metagraph_cache=FakeCache(),  # type: ignore[arg-type]
+        runtime_controller=FakeRuntimeController(),
+        admin_token_provider=lambda: "admin-secret",
+        **kwargs,
+    )
+
+
+def test_single_port_proxy_serves_registry_weights_health_and_challenges() -> None:
+    registry = ChallengeRegistry()
+    registry.create(
+        ChallengeCreate(
+            **{
+                **_payload("weights-smoke"),
+                "emission_percent": "100",
+                "status": ChallengeStatus.ACTIVE,
+                "internal_base_url": "http://challenge-weights-smoke:8000",
+            }
+        )
+    )
+    service = FakeWeightService()
+    app = _single_port_app(
+        registry,
+        weight_service=service,
+        netuid=42,
+        chain_endpoint="wss://chain.example:9944",
+        now_fn=lambda: datetime(2030, 1, 1, 12, 0, tzinfo=UTC),
+    )
+    client = TestClient(app)
+
+    # The duplicate GET /health is deduped: exactly one registration remains.
+    health_routes = [
+        route for route in app.routes if getattr(route, "path", None) == "/health"
+    ]
+    assert len(health_routes) == 1
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
+
+    # Public registry + weights + dashboard are served on the single port.
+    assert client.get("/v1/registry").status_code == 200
+    weights = client.get("/v1/weights/latest")
+    assert weights.status_code == 200
+    assert weights.json()["netuid"] == 42
+    assert client.get("/v1/challenges/dashboard.svg").status_code == 200
+
+    # The signed upload bridge + challenge passthrough still resolve via the proxy.
+    assert client.get("/challenges/does-not-exist").status_code == 404
+
+
+def test_single_port_proxy_keeps_admin_routes_token_gated() -> None:
+    registry = ChallengeRegistry()
+    client = TestClient(_single_port_app(registry))
+
+    # Write/management/runtime-control routes are 401 without a valid token.
+    assert client.post("/v1/admin/challenges", json=_payload("new")).status_code == 401
+    assert client.get("/admin").status_code == 401
+    assert client.get("/admin/challenges").status_code == 401
+    assert client.post("/v1/admin/challenges/new/activate").status_code == 401
+    assert client.post("/v1/admin/challenges/new/pull").status_code == 401
+    assert client.get("/v1/admin/challenges/new/status").status_code == 401
+
+    headers = {"X-Admin-Token": "admin-secret"}
+    created = client.post("/v1/admin/challenges", json=_payload("new"), headers=headers)
+    assert created.status_code == 201
+    assert client.get("/admin", headers=headers).status_code == 200
+    # Runtime-control route is wired to the runtime_controller once authorized.
+    pulled = client.post("/v1/admin/challenges/new/pull", headers=headers)
+    assert pulled.status_code == 200
+
+
+def test_proxy_app_without_admin_deps_has_no_admin_routes() -> None:
+    registry = ChallengeRegistry()
+    app = create_proxy_app(
+        registry=registry,
+        nonce_store=FakeNonceStore(),
+        metagraph_cache=FakeCache(),  # type: ignore[arg-type]
+    )
+    client = TestClient(app)
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/v1/registry").status_code == 404
+    assert client.get("/v1/weights/latest").status_code == 404
+    assert client.post("/v1/admin/challenges", json=_payload()).status_code == 404

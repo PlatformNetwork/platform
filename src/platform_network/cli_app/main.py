@@ -19,7 +19,6 @@ from platform_network.bittensor.validator_loop import run_epoch_loop
 from platform_network.config import load_settings
 from platform_network.config.policy import production_policy_enabled_for_settings
 from platform_network.db.session import create_engine, create_session_factory
-from platform_network.master.app_admin import create_admin_app
 from platform_network.master.app_proxy import create_proxy_app
 from platform_network.master.challenge_client import ChallengeClient
 from platform_network.master.docker_broker import create_docker_broker_app
@@ -523,33 +522,6 @@ async def seed_prism_challenges(
     return result
 
 
-@master_app.command("run")
-def master_run(config: Path = typer.Option(Path("config/master.example.yaml"))):
-    settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
-    import uvicorn
-
-    _run_startup_migrations(settings)
-    session_factory = _master_session_factory(settings)
-    registry = _master_registry(settings, session_factory)
-    orchestrator = _challenge_orchestrator(settings)
-    admin = create_admin_app(
-        registry=registry,
-        runtime_controller=DockerRuntimeController(registry, orchestrator),
-        weight_service=_master_weight_service(settings),
-        netuid=settings.network.netuid,
-        chain_endpoint=settings.network.chain_endpoint or "",
-        admin_token_provider=lambda: read_secret(
-            settings.security.admin_token,
-            settings.security.admin_token_file,
-        ),
-        enforce_production_policy=production_policy_enabled_for_settings(settings),
-    )
-    endpoint = f"{settings.master.admin_host}:{settings.master.admin_port}"
-    typer.echo(f"Starting master admin API on {endpoint}")
-    uvicorn.run(admin, host=settings.master.admin_host, port=settings.master.admin_port)
-
-
 @master_app.command("proxy")
 def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))):
     settings = load_settings(config)
@@ -565,6 +537,16 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
         session_factory,
         ttl_seconds=settings.master.upload_nonce_ttl_seconds,
     )
+    # Single public API: the proxy app also serves the admin/registry router, so
+    # build the orchestrator + runtime controller + weight service (reusing the
+    # already-built metagraph cache) and the admin token provider here. The
+    # separate ``master run`` admin server is retired.
+    orchestrator = _challenge_orchestrator(settings)
+    runtime_controller = DockerRuntimeController(registry, orchestrator)
+    weight_service = _master_weight_service(
+        settings,
+        metagraph_cache=runtime.metagraph_cache,
+    )
     proxy = create_proxy_app(
         registry=registry,
         metagraph_cache=runtime.metagraph_cache,
@@ -575,6 +557,14 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
         upload_max_body_bytes=settings.master.upload_max_body_bytes,
         upload_require_registered_hotkey=settings.master.upload_require_registered_hotkey,
         extra_registered_hotkeys=settings.master.upload_extra_registered_hotkeys,
+        runtime_controller=runtime_controller,
+        weight_service=weight_service,
+        chain_endpoint=settings.network.chain_endpoint or "",
+        admin_token_provider=lambda: read_secret(
+            settings.security.admin_token,
+            settings.security.admin_token_file,
+        ),
+        enforce_production_policy=production_policy_enabled_for_settings(settings),
     )
     endpoint = f"{settings.master.proxy_host}:{settings.master.proxy_port}"
     typer.echo(f"Starting proxy API on {endpoint}")

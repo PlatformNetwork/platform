@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, NoReturn
 
 from fastapi import (
+    APIRouter,
     Depends,
     FastAPI,
     Header,
@@ -62,7 +63,7 @@ def _not_found(slug: str) -> HTTPException:
     )
 
 
-def create_admin_app(
+def build_admin_router(
     *,
     registry: Any,
     runtime_controller: RuntimeController,
@@ -73,10 +74,19 @@ def create_admin_app(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     admin_token_provider: TokenProvider = load_admin_token_from_environment,
     enforce_production_policy: bool = False,
-) -> FastAPI:
-    """Create the private admin/registry FastAPI app."""
+    include_health: bool = True,
+) -> APIRouter:
+    """Build the admin/registry routes as a reusable ``APIRouter``.
 
-    app = FastAPI(title="Platform Network Admin API", version="1.0")
+    The public reads (``/v1/registry``, ``/v1/weights/latest``,
+    ``/v1/challenges/dashboard.svg`` and, when ``include_health`` is set,
+    ``GET /health``) stay open; every management/write/runtime-control route is
+    gated by ``require_admin``. Pass ``include_health=False`` when including this
+    router into an app that already serves ``GET /health`` (the proxy) so the
+    duplicate registration is deduped.
+    """
+
+    router = APIRouter()
     challenge_registry = registry
     controller = runtime_controller
 
@@ -119,11 +129,11 @@ def create_admin_app(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized"
             )
 
-    @app.get("/v1/registry", response_model=RegistryResponse)
+    @router.get("/v1/registry", response_model=RegistryResponse)
     async def get_registry() -> RegistryResponse:
         return await registry_response()
 
-    @app.get("/v1/weights/latest", response_model=MasterWeightsResponse)
+    @router.get("/v1/weights/latest", response_model=MasterWeightsResponse)
     async def get_latest_weights() -> MasterWeightsResponse:
         if weight_service is None:
             raise HTTPException(
@@ -146,11 +156,13 @@ def create_admin_app(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
             ) from exc
 
-    @app.get("/health", include_in_schema=False)
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    if include_health:
 
-    @app.get("/v1/challenges/dashboard.svg")
+        @router.get("/health", include_in_schema=False)
+        async def health() -> dict[str, str]:
+            return {"status": "ok"}
+
+    @router.get("/v1/challenges/dashboard.svg")
     async def get_challenges_dashboard_svg() -> Response:
         svg = render_challenges_dashboard_svg(
             await registry_list(), metrics_provider=metrics_provider
@@ -161,7 +173,7 @@ def create_admin_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.get("/admin", dependencies=[Depends(require_admin)])
+    @router.get("/admin", dependencies=[Depends(require_admin)])
     async def admin_home() -> Response:
         content = (
             "<h1>Platform Admin</h1>"
@@ -171,7 +183,7 @@ def create_admin_app(
         )
         return Response(content=content, media_type="text/html")
 
-    @app.get("/admin/challenges", dependencies=[Depends(require_admin)])
+    @router.get("/admin/challenges", dependencies=[Depends(require_admin)])
     async def admin_challenges() -> Response:
         rows = "".join(
             "<tr>"
@@ -187,7 +199,7 @@ def create_admin_app(
             media_type="text/html",
         )
 
-    @app.post(
+    @router.post(
         "/v1/admin/challenges",
         response_model=ChallengeCreateResponse,
         status_code=status.HTTP_201_CREATED,
@@ -221,7 +233,7 @@ def create_admin_app(
             docker_broker_token=broker_token,
         )
 
-    @app.get(
+    @router.get(
         "/v1/admin/challenges/{slug}",
         response_model=ChallengeAdminView,
         dependencies=[Depends(require_admin)],
@@ -232,7 +244,7 @@ def create_admin_app(
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
 
-    @app.patch(
+    @router.patch(
         "/v1/admin/challenges/{slug}",
         response_model=ChallengeAdminView,
         dependencies=[Depends(require_admin)],
@@ -251,7 +263,7 @@ def create_admin_app(
         except ProductionPolicyError as exc:
             _raise_policy_error(exc)
 
-    @app.post(
+    @router.post(
         "/v1/admin/challenges/{slug}/activate",
         response_model=ChallengeAdminView,
         dependencies=[Depends(require_admin)],
@@ -264,7 +276,7 @@ def create_admin_app(
         except ChallengeNotFoundError as exc:
             raise _not_found(slug) from exc
 
-    @app.post(
+    @router.post(
         "/v1/admin/challenges/{slug}/deactivate",
         response_model=ChallengeAdminView,
         dependencies=[Depends(require_admin)],
@@ -289,7 +301,7 @@ def create_admin_app(
             return await controller.restart(slug)
         return await controller.status(slug)
 
-    @app.post(
+    @router.post(
         "/v1/admin/challenges/{slug}/pull",
         response_model=RuntimeOperationResponse,
         dependencies=[Depends(require_admin)],
@@ -297,7 +309,7 @@ def create_admin_app(
     async def pull_challenge(slug: str) -> RuntimeOperationResponse:
         return await _runtime_operation(slug, "pull")
 
-    @app.post(
+    @router.post(
         "/v1/admin/challenges/{slug}/restart",
         response_model=RuntimeOperationResponse,
         dependencies=[Depends(require_admin)],
@@ -305,7 +317,7 @@ def create_admin_app(
     async def restart_challenge(slug: str) -> RuntimeOperationResponse:
         return await _runtime_operation(slug, "restart")
 
-    @app.get(
+    @router.get(
         "/v1/admin/challenges/{slug}/status",
         response_model=RuntimeOperationResponse,
         dependencies=[Depends(require_admin)],
@@ -313,11 +325,48 @@ def create_admin_app(
     async def challenge_status(slug: str) -> RuntimeOperationResponse:
         return await _runtime_operation(slug, "status")
 
+    return router
+
+
+def create_admin_app(
+    *,
+    registry: Any,
+    runtime_controller: RuntimeController,
+    metrics_provider: ChallengeMetricsProvider | None = None,
+    weight_service: MasterWeightService | None = None,
+    netuid: int = 100,
+    chain_endpoint: str = "",
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    admin_token_provider: TokenProvider = load_admin_token_from_environment,
+    enforce_production_policy: bool = False,
+) -> FastAPI:
+    """Create the private admin/registry FastAPI app.
+
+    Thin wrapper around :func:`build_admin_router`; the single-port proxy app
+    includes the same router so the admin/registry surface is served on one port.
+    """
+
+    app = FastAPI(title="Platform Network Admin API", version="1.0")
+    app.include_router(
+        build_admin_router(
+            registry=registry,
+            runtime_controller=runtime_controller,
+            metrics_provider=metrics_provider,
+            weight_service=weight_service,
+            netuid=netuid,
+            chain_endpoint=chain_endpoint,
+            now_fn=now_fn,
+            admin_token_provider=admin_token_provider,
+            enforce_production_policy=enforce_production_policy,
+            include_health=True,
+        )
+    )
+
     @app.middleware("http")
     async def no_secret_request_state(request: Request, call_next):  # type: ignore[no-untyped-def]
         # This middleware intentionally does not log request headers or tokens.
         return await call_next(request)
 
-    app.state.challenge_registry = challenge_registry
-    app.state.runtime_controller = controller
+    app.state.challenge_registry = registry
+    app.state.runtime_controller = runtime_controller
     return app

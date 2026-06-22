@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from datetime import UTC, datetime
 from posixpath import normpath
 from typing import Any
 from urllib.parse import quote
@@ -15,8 +16,16 @@ from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
 from platform_network.bittensor.metagraph_cache import MetagraphCache
+from platform_network.master.admin.auth import (
+    TokenProvider,
+    load_admin_token_from_environment,
+)
+from platform_network.master.admin.runtime import RuntimeController
+from platform_network.master.app_admin import build_admin_router
+from platform_network.master.challenge_dashboard import ChallengeMetricsProvider
 from platform_network.master.docker_orchestrator import DockerOrchestrationError
 from platform_network.master.registry import ChallengeNotFoundError
+from platform_network.master.service import MasterWeightService
 from platform_network.schemas.challenge import ChallengeRecord, ChallengeStatus
 from platform_network.security.miner_auth import (
     MinerAuthError,
@@ -265,10 +274,22 @@ def create_proxy_app(
     upload_max_body_bytes: int = 2_000_000,
     upload_require_registered_hotkey: bool = True,
     extra_registered_hotkeys: list[str] | None = None,
+    runtime_controller: RuntimeController | None = None,
+    weight_service: MasterWeightService | None = None,
+    metrics_provider: ChallengeMetricsProvider | None = None,
+    chain_endpoint: str = "",
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    admin_token_provider: TokenProvider = load_admin_token_from_environment,
+    enforce_production_policy: bool = False,
 ) -> FastAPI:
     """Create the public proxy FastAPI app.
 
-    Admin/registry concerns are intentionally not mounted in this app.
+    This is the single public API. When ``runtime_controller`` is provided, the
+    admin/registry router (``/v1/registry``, ``/v1/weights/latest``,
+    ``/v1/challenges/dashboard.svg``, ``/admin`` and the token-gated
+    ``/v1/admin/*`` management/runtime-control routes) is included on the same
+    app, so everything is served on one port. The admin router's duplicate
+    ``GET /health`` is deduped (the proxy's own ``/health`` is kept).
     """
 
     app = FastAPI(title="Platform Network Challenge Proxy", version="1.0")
@@ -509,6 +530,23 @@ def create_proxy_app(
     )
     async def proxy_path(slug: str, path: str, request: Request) -> Response:
         return await proxy_request(slug, path, request)
+
+    if runtime_controller is not None:
+        app.include_router(
+            build_admin_router(
+                registry=challenge_registry,
+                runtime_controller=runtime_controller,
+                metrics_provider=metrics_provider,
+                weight_service=weight_service,
+                netuid=netuid,
+                chain_endpoint=chain_endpoint,
+                now_fn=now_fn,
+                admin_token_provider=admin_token_provider,
+                enforce_production_policy=enforce_production_policy,
+                include_health=False,
+            )
+        )
+        app.state.runtime_controller = runtime_controller
 
     app.state.challenge_registry = challenge_registry
     app.state.miner_upload_verifier = verifier

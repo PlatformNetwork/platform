@@ -458,6 +458,93 @@ def test_cli_create_and_runtime_controller(tmp_path: Path) -> None:
     assert asyncio.run(controller.status("demo"))["status"] == "unknown"
 
 
+def test_cli_master_proxy_builds_single_port_app_with_admin_deps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "master.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "network:",
+                "  netuid: 21",
+                "  chain_endpoint: ws://chain",
+                "master:",
+                "  proxy_host: 127.0.0.1",
+                "  proxy_port: 0",
+                "docker:",
+                f"  secret_dir: {tmp_path / 'secrets'}",
+                "security:",
+                "  admin_token: top-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class Cache:
+        def get(self) -> dict[str, int]:
+            return {}
+
+    runtime = SimpleNamespace(metagraph_cache=Cache())
+    orchestrator = object()
+    weight_service = object()
+    registry = object()
+    nonce_store = object()
+
+    def fake_weight_service(settings: object, metagraph_cache: object = None) -> object:
+        captured["weight_service_cache"] = metagraph_cache
+        return weight_service
+
+    def fake_create_proxy_app(**kwargs: object) -> object:
+        captured["proxy_kwargs"] = kwargs
+        return SimpleNamespace()
+
+    import uvicorn
+
+    monkeypatch.setattr(
+        cli_module, "create_bittensor_runtime", lambda settings: runtime
+    )
+    monkeypatch.setattr(
+        cli_module, "_challenge_orchestrator", lambda settings: orchestrator
+    )
+    monkeypatch.setattr(cli_module, "_master_weight_service", fake_weight_service)
+    monkeypatch.setattr(cli_module, "create_proxy_app", fake_create_proxy_app)
+    monkeypatch.setattr(cli_module, "_run_startup_migrations", lambda settings: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_master_registry",
+        lambda settings, session_factory=None: registry,
+    )
+    monkeypatch.setattr(cli_module, "create_engine", lambda url: object())
+    monkeypatch.setattr(cli_module, "create_session_factory", lambda engine: object())
+    monkeypatch.setattr(
+        cli_module, "SqlAlchemyMinerNonceStore", lambda *a, **k: nonce_store
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+
+    result = CliRunner().invoke(app, ["master", "proxy", "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    proxy_kwargs = cast(dict[str, object], captured["proxy_kwargs"])
+    assert proxy_kwargs["weight_service"] is weight_service
+    assert proxy_kwargs["chain_endpoint"] == "ws://chain"
+    controller = proxy_kwargs["runtime_controller"]
+    assert isinstance(controller, DockerRuntimeController)
+    assert controller.orchestrator is orchestrator
+    assert controller.registry is registry
+    token_provider = proxy_kwargs["admin_token_provider"]
+    assert callable(token_provider)
+    assert token_provider() == "top-secret"
+    assert captured["weight_service_cache"] is runtime.metagraph_cache
+    assert proxy_kwargs["enforce_production_policy"] is False
+
+
+def test_cli_master_run_admin_server_is_retired() -> None:
+    result = CliRunner().invoke(app, ["master", "run", "--help"], env={"TERM": "dumb"})
+
+    assert result.exit_code != 0
+
+
 def test_cli_master_weights_once_defaults_to_compute_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
