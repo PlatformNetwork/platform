@@ -17,7 +17,7 @@
 
 [Unit]
 Description=Platform Network control-plane supervisor (Docker backend)
-Documentation=https://github.com/PlatformNetwork/platform
+Documentation=https://github.com/BaseIntelligence/platform
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service

@@ -27,7 +27,7 @@
 
 [Unit]
 Description=Platform Network submit-only on-chain weight submitter
-Documentation=https://github.com/PlatformNetwork/platform
+Documentation=https://github.com/BaseIntelligence/platform
 After=network-online.target
 Wants=network-online.target
 

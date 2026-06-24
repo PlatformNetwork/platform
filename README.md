@@ -6,8 +6,8 @@
 
 **[Miner Guide](docs/miner/README.md) • [Validator Guide](docs/validator/README.md) • [Foundation Master Guide](docs/master/README.md) • [Architecture](docs/architecture.md) • [Challenges](docs/challenges.md) • [Security](docs/security.md) • [Website](https://platform.network)**
 
-[![CI](https://github.com/PlatformNetwork/platform/actions/workflows/ci.yml/badge.svg)](https://github.com/PlatformNetwork/platform/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/PlatformNetwork/platform)](https://github.com/PlatformNetwork/platform/blob/main/LICENSE)
+[![CI](https://github.com/BaseIntelligence/platform/actions/workflows/ci.yml/badge.svg)](https://github.com/BaseIntelligence/platform/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/PlatformNetwork/platform)](https://github.com/BaseIntelligence/platform/blob/main/LICENSE)
 [![Bittensor](https://img.shields.io/badge/Bittensor-subnet-black.svg)](https://bittensor.com/)
 
 ![Platform Banner](assets/banner.jpg)
@@ -310,7 +310,7 @@ tiktoken cache the locked FineWeb-Edu pipeline needs. The registry `:latest` eva
 not use it.
 
 > **Build-order coupling:** prism pins its `platform-network` dependency by git
-> (`platform-network @ git+https://github.com/PlatformNetwork/platform.git`, public HEAD), so a fresh
+> (`platform-network @ git+https://github.com/BaseIntelligence/platform.git`, public HEAD), so a fresh
 > `prism` build bundles whatever is on the **pushed** platform HEAD. Push the platform commits the
 > prism/broker images depend on **before** building `prism` / `prism-evaluator`.
 

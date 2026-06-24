@@ -56,7 +56,7 @@ def _prism_payload() -> dict[str, Any]:
         "internal_base_url": "http://challenge-prism:8000",
         "required_capabilities": ["get_weights", "proxy_routes"],
         "metadata": {
-            "repository_url": "https://github.com/PlatformNetwork/prism",
+            "repository_url": "https://github.com/BaseIntelligence/prism",
             "category": "Agentic (Multi-step)",
             "benchmark_label": "PRISM architecture and training reward boards",
             "token": "fixture-token",
@@ -414,7 +414,7 @@ def test_prism_registry_contract_and_agent_challenge_emission_update() -> None:
     assert prism["public_proxy_base_path"] == "/challenges/prism"
     assert prism["required_capabilities"] == ["get_weights", "proxy_routes"]
     assert prism["metadata"] == {
-        "repository_url": "https://github.com/PlatformNetwork/prism",
+        "repository_url": "https://github.com/BaseIntelligence/prism",
         "category": "Agentic (Multi-step)",
         "benchmark_label": "PRISM architecture and training reward boards",
     }

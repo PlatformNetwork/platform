@@ -99,7 +99,7 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 # tokenizers) are supplied by the broker built-in DEFAULT_PRISM_EVAL_READONLY_MOUNTS,
 # so no master.yaml broker_eval_readonly_mounts_by_slug entry is required for them to
 # be live. prism pins its platform-network
-# dependency by git (pyproject `platform-network @ git+https://github.com/PlatformNetwork/platform.git`,
+# dependency by git (pyproject `platform-network @ git+https://github.com/BaseIntelligence/platform.git`,
 # public HEAD), so until those commits are PUSHED a fresh `docker build` of
 # IMAGE_PRISM bundles the OLD published platform_network (lacking mount_transport /
 # the drain-restore path / the per-slug prism RO data mount) and the GPU eval

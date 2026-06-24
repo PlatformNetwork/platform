@@ -451,7 +451,7 @@ def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
         },
         secrets=["challenge_token", "docker_broker_token"],
         metadata={
-            "repository_url": "https://github.com/PlatformNetwork/prism",
+            "repository_url": "https://github.com/BaseIntelligence/prism",
             "category": "Agentic (Multi-step)",
             "benchmark_label": "PRISM architecture and training reward boards",
             "evaluation_timeout_seconds": 900,
