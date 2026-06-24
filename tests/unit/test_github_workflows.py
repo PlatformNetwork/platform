@@ -24,8 +24,7 @@ def test_ci_workflow_runs_postgres_orm_integration_gate() -> None:
     assert "continue-on-error" not in postgres_orm
     assert postgres_orm["env"] == {
         "BASE_TEST_DATABASE_URL": (
-            "postgresql+asyncpg://base:base@localhost:5432/"
-            "base_test"
+            "postgresql+asyncpg://base:base@localhost:5432/base_test"
         ),
     }
 
@@ -186,12 +185,8 @@ def test_ci_workflow_creates_github_releases_after_tag_image_publish() -> None:
         "ghcr.io/baseintelligence/base-master:${{ steps.release.outputs.version }}"
         in release_body
     )
-    assert (
-        "ghcr.io/baseintelligence/base-master:${{ github.ref_name }}" in release_body
-    )
-    assert (
-        "ghcr.io/baseintelligence/base-master:sha-${{ github.sha }}" in release_body
-    )
+    assert "ghcr.io/baseintelligence/base-master:${{ github.ref_name }}" in release_body
+    assert "ghcr.io/baseintelligence/base-master:sha-${{ github.sha }}" in release_body
     assert "Production deployments should pin" in release_body
     assert "docs/versioning.md" in release_body
 

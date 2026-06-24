@@ -40,8 +40,7 @@ def _database_url() -> str:
         return configured_url
 
     raise RuntimeError(
-        "Database URL must be set via BASE_DATABASE_URL, "
-        "DATABASE_URL, or alembic.ini"
+        "Database URL must be set via BASE_DATABASE_URL, DATABASE_URL, or alembic.ini"
     )
 
 

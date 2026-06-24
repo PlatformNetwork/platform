@@ -207,9 +207,7 @@ def test_swarm_fetch_failure_logged_skip_tick_never_raises(
     previously_disabled = sync_logger.disabled
     sync_logger.disabled = False
     try:
-        with caplog.at_level(
-            logging.WARNING, logger="base.supervisor.config_sync"
-        ):
+        with caplog.at_level(logging.WARNING, logger="base.supervisor.config_sync"):
             sync.run_once()
     finally:
         sync_logger.disabled = previously_disabled

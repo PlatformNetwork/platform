@@ -678,9 +678,7 @@ def worker_label(
     """Label a node so the broker schedules cpu/gpu jobs onto it."""
     if workload not in {"cpu", "gpu"}:
         raise typer.BadParameter("workload must be 'cpu' or 'gpu'")
-    _docker_cli(
-        ["node", "update", "--label-add", f"base.workload={workload}", node]
-    )
+    _docker_cli(["node", "update", "--label-add", f"base.workload={workload}", node])
 
 
 @worker_app.command("drain")

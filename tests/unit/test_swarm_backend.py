@@ -1191,8 +1191,7 @@ def test_orchestrator_external_secret_emits_reference_without_create(
     pairs = _pairs(runner.create_argv())
     assert (
         "--secret",
-        "source=base_agent_challenge_challenge_token,target=base/"
-        "challenge_token",
+        "source=base_agent_challenge_challenge_token,target=base/challenge_token",
     ) in pairs
     assert (
         "--secret",

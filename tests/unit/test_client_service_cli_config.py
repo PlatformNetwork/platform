@@ -1430,9 +1430,7 @@ def test_registry_client_trailing_slash_requests_single_registry_path(
         import base.validator.registry_client as module
 
         monkeypatch.setattr(module.httpx, "AsyncClient", Client)
-        response = await RegistryClient(
-            "https://chain.joinbase.ai/"
-        ).fetch_registry()
+        response = await RegistryClient("https://chain.joinbase.ai/").fetch_registry()
         assert response.challenges == []
 
     asyncio.run(run())

@@ -2322,9 +2322,7 @@ def test_production_admin_accepts_pinned_image_and_latest_digest_update() -> Non
     assert "digest" in unsafe_patch.text
 
 
-def _single_port_app(
-    registry: ChallengeRegistry, **kwargs: Any
-) -> FastAPI:
+def _single_port_app(registry: ChallengeRegistry, **kwargs: Any) -> FastAPI:
     return create_proxy_app(
         registry=registry,
         nonce_store=FakeNonceStore(),
