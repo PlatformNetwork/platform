@@ -207,6 +207,10 @@ class ChallengeSpec:
     port: int = DEFAULT_CHALLENGE_PORT
     worker_command: tuple[str, ...] = ()
     workload_class: WorkloadClass = "job"
+    #: Explicit Swarm placement constraint (config seam). ``None`` defers to the
+    #: backend default (byte-identical to prior behavior); a deploy can steer a
+    #: workload from config without code edits (e.g. ``"node.role==manager"``).
+    placement_constraint: str | None = None
 
     def __post_init__(self) -> None:
         if self.workload_class not in get_args(WorkloadClass):

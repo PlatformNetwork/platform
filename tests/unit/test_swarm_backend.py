@@ -1024,6 +1024,60 @@ def test_orchestrator_service_spec_becomes_replicated_service(
     assert runtime.container_name == "challenge-agent"
 
 
+def test_orchestrator_spec_placement_constraint_overrides_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = FakeSwarmRunner(network_exists=False)
+    orchestrator = SwarmChallengeOrchestrator(
+        runner=runner,
+        ledger=WorkloadLedger(),
+        challenge_placement_constraint="node.role==worker",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    spec = ChallengeSpec(
+        slug="agent",
+        image="ghcr.io/baseintelligence/agent:1.0.0",
+        workload_class="service",
+        placement_constraint="node.role==manager",
+    )
+
+    orchestrator.start_challenge(spec)
+
+    pairs = _pairs(runner.create_argv())
+    assert ("--constraint", "node.role==manager") in pairs
+    assert ("--constraint", "node.role==worker") not in pairs
+
+
+def test_orchestrator_spec_without_placement_uses_orchestrator_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = FakeSwarmRunner(network_exists=False)
+    orchestrator = SwarmChallengeOrchestrator(
+        runner=runner,
+        ledger=WorkloadLedger(),
+        challenge_placement_constraint="node.role==worker",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    spec = ChallengeSpec(
+        slug="agent",
+        image="ghcr.io/baseintelligence/agent:1.0.0",
+        workload_class="service",
+    )
+
+    orchestrator.start_challenge(spec)
+
+    pairs = _pairs(runner.create_argv())
+    assert ("--constraint", "node.role==worker") in pairs
+
+
 def test_orchestrator_job_spec_becomes_replicated_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

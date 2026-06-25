@@ -1103,7 +1103,11 @@ class SwarmChallengeOrchestrator:
             command=tuple(spec.worker_command),
             mode=mode,
             replicas=1,
-            constraint=self.challenge_placement_constraint,
+            constraint=(
+                spec.placement_constraint
+                if spec.placement_constraint is not None
+                else self.challenge_placement_constraint
+            ),
             network=self.network_name,
             env=tuple(self._build_environment(spec).items()),
             labels=tuple(labels.items()),
