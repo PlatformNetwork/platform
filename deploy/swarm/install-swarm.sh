@@ -91,7 +91,7 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 # rationale at the broker service-create below. The deploy CONFIG this script sets is
 # independent of the image build and reproduces as-is.
 IMAGE_MASTER="${IMAGE_MASTER:-ghcr.io/baseintelligence/base-master@sha256:838ed7ca090f276a014a9c04820b84cc48ac3833af9b37c4047dfa8677156cb7}"
-IMAGE_AGENT_CHALLENGE="${IMAGE_AGENT_CHALLENGE:-ghcr.io/baseintelligence/agent-challenge@sha256:75b6d3fe467cddde4241b4bf0b5611ffc3f648f24e3211cb718841d39a498929}"
+IMAGE_AGENT_CHALLENGE="${IMAGE_AGENT_CHALLENGE:-ghcr.io/baseintelligence/agent-challenge@sha256:d12690a39b0a1311ffe237001f9c2fef364303c6162111d37d3b305a8d3159c5}"
 IMAGE_PRISM="${IMAGE_PRISM:-ghcr.io/baseintelligence/prism@sha256:e052a3eced0b76424c858fcea5c04e948a6764b051a862a9b99d011a44f9ffd9}"
 # Prism GPU evaluator (CUDA cu128 torchrun runner). Must satisfy BOTH prism
 # docker_allowed_images AND the broker broker_allowed_images (ghcr.io/baseintelligence/);
@@ -1052,6 +1052,9 @@ deploy_challenges() {
     "CHALLENGE_SLUG=agent-challenge"
     "CHALLENGE_HARBOR_RUNNER_IMAGE=${AGENT_CHALLENGE_RUNNER_IMAGE}"
     "CHALLENGE_DOCKER_ALLOWED_IMAGES=${CHALLENGE_DOCKER_ALLOWED_IMAGES}"
+    "CHALLENGE_VALIDATOR_ROLE=master"
+    "CHALLENGE_OPENROUTER_API_KEY_FILE=${SECRET_MOUNT_DIR}/openrouter_api_key"
+    "CHALLENGE_DATABASE_URL_FILE=${SECRET_MOUNT_DIR}/database_url"
   )
 
   # agent-challenge primary API service (container port 8000). Overlay-internal —
@@ -1063,6 +1066,7 @@ deploy_challenges() {
     "base_agent_challenge_challenge_token:challenge_token" \
     "base_agent_challenge_docker_broker_token:docker_broker_token" \
     "base_agent_challenge_submission_env_encryption_key:submission_env_encryption_key" \
+    "base_agent_challenge_database_url:database_url" \
     "base_openrouter_api_key:openrouter_api_key"
 
   # agent-challenge worker sidecar (command `agent-challenge-worker`; see
@@ -1086,6 +1090,7 @@ deploy_challenges() {
     "base_agent_challenge_challenge_token:challenge_token" \
     "base_agent_challenge_docker_broker_token:docker_broker_token" \
     "base_agent_challenge_submission_env_encryption_key:submission_env_encryption_key" \
+    "base_agent_challenge_database_url:database_url" \
     "base_openrouter_api_key:openrouter_api_key"
 
   # PRISM service (container port 8080). Overlay-internal — reached over the overlay; no host publish.
