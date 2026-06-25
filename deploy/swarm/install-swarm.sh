@@ -979,6 +979,16 @@ _deploy_master_service() {
   if [[ "${subcommand}" == "proxy" ]]; then
     extra+=(
       --env "BASE_MASTER__UPLOAD_EXTRA_REGISTERED_HOTKEYS=${UPLOAD_EXTRA_REGISTERED_HOTKEYS}"
+      # WORKER PIN (multi-node swarms where the chain is reachable only from a
+      # worker): `base master proxy` UNCONDITIONALLY builds the Bittensor runtime
+      # (master_proxy -> MetagraphCache/create_bittensor_runtime; cli_app/main.py),
+      # so on a chain-isolated manager startup raises a connection TimeoutError and
+      # the task dies. Unconstrained, Swarm flaps it onto the manager (observed: 4x
+      # Failed on next-terrier before landing on the worker). This mirrors the
+      # broker's intrinsic node.role==manager pin above and fixes the mode=host
+      # port (18080) location. Do NOT --constraint-add on an already-pinned live
+      # service (not idempotent — see AGENTS.md "CONSTRAINT-ADD DEDUP GOTCHA").
+      --constraint "node.role==worker"
     )
   fi
 
