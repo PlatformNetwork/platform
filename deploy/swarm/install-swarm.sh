@@ -216,6 +216,13 @@ FORCE=false               # allow proceeding even if node already in a swarm.
 RESTART_DOCKERD=false      # opt-in: write daemon.json + restart dockerd (DESTRUCTIVE).
 SINGLE_NODE_PLACEMENT=false # opt-in: non-default placement override (see REVIEW).
 STATIC_CHALLENGES=false    # opt-in: create challenge services directly here.
+# Greenfield (no-restore) bring-up. When false (DEFAULT) the behavior is exactly
+# as before: preflight HARD-requires the k3s cutover dumps and restore_data loads
+# them. When true the script is a fresh-install path — it SKIPS the backup-dump
+# preflight requirement AND SKIPS restore_data, so the empty postgres volumes
+# initialize via the services' own normal migrations/bootstrap. Required because
+# the operator moved off k3s to Swarm, so the k3s dumps will NOT exist at deploy.
+GREENFIELD=false           # opt-in: skip backup-dump preflight + restore_data (fresh DBs).
 
 # ============================================================================
 # Output helpers
@@ -281,6 +288,13 @@ Opt-in DESTRUCTIVE / non-default steps (each separate, NOT in default --apply):
   --static-challenges     Create challenge services directly instead of letting
                           the master orchestrator create them dynamically.
 
+Bring-up mode:
+  --greenfield            Fresh install with NO k3s restore: skip the backup-dump
+                          preflight requirement AND skip restore_data, letting the
+                          empty postgres volumes initialize via the services' own
+                          normal migrations/bootstrap. Without this flag the dumps
+                          in --backup-dir are REQUIRED and restored (default).
+
 Configuration:
   --advertise-addr IP     Swarm advertise address (default: 51.83.112.164).
   --backup-dir DIR        pg_dump + baseline dir (default: /root/cutover-backups/LATEST).
@@ -314,6 +328,7 @@ parse_args() {
       --restart-dockerd) RESTART_DOCKERD=true ;;
       --single-node-placement) SINGLE_NODE_PLACEMENT=true ;;
       --static-challenges) STATIC_CHALLENGES=true ;;
+      --greenfield) GREENFIELD=true ;;
       --advertise-addr) ADVERTISE_ADDR="${2:?--advertise-addr needs a value}"; shift ;;
       --backup-dir) BACKUP_DIR="${2:?--backup-dir needs a value}"; shift ;;
       --master-config) MASTER_CONFIG_PATH="${2:?--master-config needs a value}"; shift ;;
@@ -356,13 +371,18 @@ preflight() {
     log "  swarm state '${swarm_state}' OK"
   fi
 
-  # Backup dir + dump files.
-  [[ -d "${BACKUP_DIR}" ]] || die "backup dir not found: ${BACKUP_DIR}"
-  local dump
-  for dump in base.sql agent-challenge.sql prism.sql; do
-    [[ -f "${BACKUP_DIR}/${dump}" ]] || die "missing dump file: ${BACKUP_DIR}/${dump}"
-  done
-  log "  backup dumps present in ${BACKUP_DIR} OK (prism.sql may be empty — expected)"
+  # Backup dir + dump files. In --greenfield this requirement is SKIPPED: there
+  # are no k3s dumps to restore, so the empty DBs bootstrap via migrations.
+  if [[ "${GREENFIELD}" == "true" ]]; then
+    log "  --greenfield set: SKIPPING backup-dump preflight (fresh DBs via migrations/bootstrap)"
+  else
+    [[ -d "${BACKUP_DIR}" ]] || die "backup dir not found: ${BACKUP_DIR}"
+    local dump
+    for dump in base.sql agent-challenge.sql prism.sql; do
+      [[ -f "${BACKUP_DIR}/${dump}" ]] || die "missing dump file: ${BACKUP_DIR}/${dump}"
+    done
+    log "  backup dumps present in ${BACKUP_DIR} OK (prism.sql may be empty — expected)"
+  fi
 
   # GHCR credentials must be present (values never printed).
   [[ -n "${GHCR_USER:-}" ]] || die "GHCR_USER not set (required for ghcr.io login)"
@@ -1304,6 +1324,7 @@ main() {
   log "  restart-dockerd     : ${RESTART_DOCKERD}   (destructive; opt-in)"
   log "  single-node-placement: ${SINGLE_NODE_PLACEMENT}  (non-default; opt-in)"
   log "  static-challenges   : ${STATIC_CHALLENGES}  (opt-in)"
+  log "  greenfield          : ${GREENFIELD}  (skip backup-dump preflight + restore_data; opt-in)"
   log "============================================================"
 
   preflight                  # 1
@@ -1314,7 +1335,11 @@ main() {
   create_networks            # 5
   create_secrets             # 6
   deploy_postgres            # 7
-  restore_data               # 8
+  if [[ "${GREENFIELD}" == "true" ]]; then
+    log "STEP 8/12 restore_data: --greenfield set — SKIPPING restore (fresh DBs init via migrations/bootstrap)"
+  else
+    restore_data             # 8
+  fi
   deploy_master              # 9
   deploy_challenges          # 10 (master-orchestrated by default; direct via --static-challenges)
   healthcheck                # 11
