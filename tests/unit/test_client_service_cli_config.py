@@ -321,6 +321,7 @@ async def test_master_weight_service_uid_zero_fallback_without_challenges() -> N
             "netuid": 42,
             "uids": [0],
             "weights": [1.0],
+            "version_key": 0,
             "wait_for_inclusion": False,
             "wait_for_finalization": False,
         }

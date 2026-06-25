@@ -41,7 +41,10 @@ import signal
 
 from base.bittensor.factory import create_bittensor_submit_runtime
 from base.bittensor.validator_loop import run_epoch_loop
-from base.bittensor.weight_setter import is_rejected_set_weights_result
+from base.bittensor.weight_setter import (
+    is_rejected_set_weights_result,
+    set_weights_rejection_message,
+)
 from base.config import Settings, load_settings
 from base.observability.logging import configure_logging
 from base.validator.normal_runner import NormalValidatorRunner
@@ -128,14 +131,20 @@ async def _submit_once(runner: NormalValidatorRunner) -> None:
         return
 
     try:
-        # WeightSetter.set_weights raises RuntimeError on a subtensor rejection,
-        # so the rejection reason is captured by this exception handler.
+        # WeightSetter.set_weights raises RuntimeError on a subtensor rejection
+        # (incl. a commit-reveal ExtrinsicResponse with success=False), so the
+        # rejection reason is captured by this exception handler.
         result = runner.weight_setter.set_weights(payload.uids, payload.weights)
     except Exception:
         logger.exception("weights submission failed (incl. on-chain rejection)")
         return
+    # Defence-in-depth: if a future setter ever returns a rejected result instead
+    # of raising, surface it as a failure here rather than logging success.
     if is_rejected_set_weights_result(result):
-        logger.warning("weights submission rejected by subtensor")
+        logger.warning(
+            "weights submission rejected by subtensor: %s",
+            set_weights_rejection_message(result),
+        )
         return
     logger.info(
         "weights submitted on-chain: netuid=%s n_weights=%s",

@@ -41,10 +41,15 @@ validator:
   # so the docker submitter submits the same live vector during the soak.
   # resolved_weights_url returns weights_url when set, so this is authoritative.
   weights_url: https://chain.joinbase.ai
-  weights_interval_seconds: 360
+  # netuid 100 on-chain weights_rate_limit = 100 blocks (~1200s @12s/block).
+  # Cadence MUST be >= that spacing or commit-reveal submissions are rejected as
+  # "too fast". 1260s adds margin above the ~1200s floor.
+  weights_interval_seconds: 1260
   weights_timeout_seconds: 15.0
   weights_retries: 3
-  weights_freshness_seconds: 720
+  # Freshness must be >= the cadence; otherwise a vector is deemed stale before
+  # the chain rate limit even allows a re-submission.
+  weights_freshness_seconds: 1260
 
 observability:
   log_json: true
