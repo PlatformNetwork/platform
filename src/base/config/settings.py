@@ -117,6 +117,23 @@ class ObservabilitySettings(BaseModel):
     log_json: bool = True
     sentry_dsn: str | None = None
     otel_service_name: str = "base"
+    # Task 16: lightweight, config-driven webhook alerting (NO Prometheus/
+    # Grafana). All endpoints default to None so a default deploy makes ZERO
+    # network calls — the alert hook is a structured-log-only no-op until a
+    # webhook URL is set, and the drand/GPU reachability probes are skipped
+    # until their health URLs are configured.
+    alert_webhook_url: str | None = None
+    alert_webhook_timeout_seconds: float = 5.0
+    #: drand beacon reachability probe target (e.g. a drand HTTP API health
+    #: URL). When set, a supervisor probe fires a ``drand_unreachable`` alert on
+    #: failure; when None the probe is skipped.
+    drand_health_url: str | None = None
+    #: GPU liveness probe target (e.g. the GPU worker's health endpoint). When
+    #: set, a supervisor probe fires a ``gpu_down`` alert on failure; when None
+    #: the probe is skipped.
+    gpu_health_url: str | None = None
+    #: Cadence for the drand/GPU reachability probe task.
+    health_probe_interval_seconds: float = 60.0
 
 
 class Settings(BaseModel):

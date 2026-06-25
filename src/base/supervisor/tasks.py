@@ -23,6 +23,7 @@ built here so the gate instance can be shared with future job builders.
 from __future__ import annotations
 
 from base.config.settings import Settings
+from base.supervisor.alerts import build_alert_hook, build_health_probe_task
 from base.supervisor.challenge_image_updater import (
     build_challenge_image_updater_task,
 )
@@ -84,6 +85,13 @@ def build_scheduled_tasks(
     health_task, gate = build_broker_health_task(settings, gate=health_gate)
     tasks: list[ScheduledTask] = [health_task]
 
+    # Task 16 alert hook: a single config-driven webhook hook (no-op until
+    # settings.observability.alert_webhook_url is set) shared by every failure
+    # surface below. It IS the Task-8 AlertEmitter seam, so wiring it here makes
+    # the existing commit-reject/backoff path emit to the webhook with no
+    # duplication.
+    alert_hook = build_alert_hook(settings)
+
     # ------------------------------------------------------------------
     # Task 17 registration point (reaper):
     # The reaper builder owns WorkloadLedger.reconstruct on first tick and
@@ -131,7 +139,9 @@ def build_scheduled_tasks(
     # is human-gated (plan Task 27). It health-gates on eval-pipeline scores and
     # backs off + alerts (Task-16 seam) on a commit-reveal rejection, never
     # silently dropping an epoch.
-    tasks.append(build_weight_submit_task(settings, health_gate=gate))
+    tasks.append(
+        build_weight_submit_task(settings, health_gate=gate, alert_emit=alert_hook)
+    )
     # Task 22 registration point (self-update).
     # Startup-side rollback agent (Task 22): MUST run once before workers
     # start — it flips `current` back + exits when a pending update is
@@ -139,6 +149,10 @@ def build_scheduled_tasks(
     # release / without a pending update.
     run_startup_rollback_check()
     tasks.append(build_self_update_task(settings, health_gate=gate))
+    # Task 16 reachability probe: fires gpu_down / drand_unreachable alerts when
+    # the configured GPU/drand health URLs fail. Skips each probe whose URL is
+    # unset, so it is a no-op in a default deploy.
+    tasks.append(build_health_probe_task(settings, hook=alert_hook))
     # ------------------------------------------------------------------
 
     return tuple(tasks), gate

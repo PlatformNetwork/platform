@@ -41,6 +41,7 @@ from base.bittensor.weight_setter import (
     set_weights_rejection_message,
 )
 from base.config.settings import Settings
+from base.master.aggregator import ZeroMinerWeightError
 from base.schemas.weights import MasterWeightsResponse
 from base.supervisor.health import BrokerHealthGate
 from base.supervisor.scheduler import ScheduledTask
@@ -224,17 +225,51 @@ class OnChainWeightSubmitter:
             return
         try:
             response = self._compute(self._settings)
+        except ZeroMinerWeightError as exc:
+            logger.warning(
+                "weights submission skipped: zero-miner fallback aborted "
+                "(refusing to submit a chain-invalid vector): %s",
+                exc,
+            )
+            self._alert_emit(
+                WeightsAlert(
+                    kind="zero_miner_abort",
+                    message=str(exc),
+                    details={"netuid": self._settings.network.netuid},
+                )
+            )
+            return
         except Exception as exc:
             logger.warning(
                 "weights submission skipped: weight computation failed "
                 "(eval pipeline error): %s",
                 exc,
             )
+            self._alert_emit(
+                WeightsAlert(
+                    kind="eval_pipeline_failure",
+                    message=str(exc),
+                    details={
+                        "netuid": self._settings.network.netuid,
+                        "phase": "compute",
+                    },
+                )
+            )
             return
         health = self._health_check(response)
         if not health.healthy:
             logger.warning(
                 "weights submission skipped: pipeline unhealthy: %s", health.reason
+            )
+            self._alert_emit(
+                WeightsAlert(
+                    kind="eval_pipeline_failure",
+                    message=health.reason,
+                    details={
+                        "netuid": self._settings.network.netuid,
+                        "phase": "health_gate",
+                    },
+                )
             )
             return
         self._submit(response)
