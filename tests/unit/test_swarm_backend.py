@@ -510,6 +510,72 @@ def test_run_job_prism_eval_has_no_review_secret(tmp_path: Path) -> None:
     assert not any("openrouter" in token.lower() for token in argv)
 
 
+# --- Task 14: untrusted eval job is egress-locked to the internal overlay --------
+
+_PRISM_EGRESS_LOCKED = frozenset({"prism"})
+
+
+def test_job_network_forces_internal_for_egress_locked_slug(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner, egress_locked_slugs=_PRISM_EGRESS_LOCKED)
+    # An egress-locked slug (untrusted miner code) can NEVER reach an external
+    # route: even an explicit request for the egress-capable "default" network
+    # is overridden to the dedicated *internal* (no external route) overlay.
+    assert service._job_network("default", "prism") == "base_jobs_internal"
+    assert service._job_network("none", "prism") == "base_jobs_internal"
+    assert service._job_network("base_other", "prism") == "base_jobs_internal"
+
+
+def test_job_network_leaves_unlocked_slug_unaffected(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(tmp_path, runner, egress_locked_slugs=_PRISM_EGRESS_LOCKED)
+    # A slug NOT on the egress-lock allowlist keeps the legacy behavior:
+    # "default" -> host egress (None), "none" -> internal overlay.
+    assert service._job_network("default", "agent") is None
+    assert service._job_network("none", "agent") == "base_jobs_internal"
+
+
+def test_run_job_egress_locked_prism_pins_internal_network(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(
+        tmp_path,
+        runner,
+        egress_locked_slugs=_PRISM_EGRESS_LOCKED,
+        eval_readonly_mounts_by_slug=_PRISM_EVAL_READONLY_BY_SLUG,
+    )
+
+    # A prism eval job that REQUESTS the egress-capable default network is still
+    # pinned to the internal overlay (a compromised miner has no external route).
+    service.run(
+        "prism",
+        _prism_gpu_request(limits={"gpu_count": 1, "network": "default"}),
+    )
+
+    pairs = _pairs(runner.create_argv())
+    assert ("--network", "base_jobs_internal") in pairs
+    assert ("--network", "default") not in pairs
+
+
+def test_run_job_prism_eval_never_mounts_heldout_volumes(tmp_path: Path) -> None:
+    runner = FakeSwarmRunner(log_stdout="ok\n")
+    service = _broker(
+        tmp_path,
+        runner,
+        egress_locked_slugs=_PRISM_EGRESS_LOCKED,
+        eval_readonly_mounts_by_slug=_PRISM_EVAL_READONLY_BY_SLUG,
+    )
+
+    service.run("prism", _prism_gpu_request())
+
+    mounts = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--mount"
+    ]
+    # The SECRET held-out volumes are NEVER bind-mounted into the untrusted
+    # eval/miner container (only the trusted scorer service mounts them).
+    assert not any("prism_fineweb_edu_val" in m for m in mounts)
+    assert not any("prism_fineweb_edu_test" in m for m in mounts)
+
+
 def test_run_job_prism_eval_network_none_is_isolated(tmp_path: Path) -> None:
     runner = FakeSwarmRunner(log_stdout="ok\n")
     service = _broker(

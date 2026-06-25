@@ -351,6 +351,14 @@ class SwarmBrokerConfig(DockerBrokerConfig):
     eval_readonly_mounts_by_slug: Mapping[str, tuple[tuple[str, str], ...]] = field(
         default_factory=dict
     )
+    #: Challenge slugs whose Swarm eval job runs UNTRUSTED miner code and must
+    #: never reach an external route. For these slugs the job is force-attached
+    #: to the dedicated *internal* (``--internal``, no egress) overlay
+    #: regardless of the requested network, closing the host-egress drift where
+    #: ``network="default"`` would otherwise return ``None`` (host bridge with
+    #: egress). The trusted long-lived challenge scorer service is NOT a broker
+    #: job and is unaffected. Empty default locks no one.
+    egress_locked_slugs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -466,7 +474,7 @@ class SwarmBrokerService(DockerBrokerService):
                     if (limits.gpu_count or 0)
                     else self.swarm_config.cpu_job_constraint
                 ),
-                network=self._job_network(limits.network),
+                network=self._job_network(limits.network, challenge_slug),
                 env=tuple(env.items()),
                 labels=tuple(labels.items()),
                 container_labels=tuple(labels.items()),
@@ -674,7 +682,13 @@ class SwarmBrokerService(DockerBrokerService):
             mounts.append(_readonly_mount_arg(source, target))
         return tuple(mounts)
 
-    def _job_network(self, requested: str) -> str | None:
+    def _job_network(self, requested: str, challenge_slug: str) -> str | None:
+        if challenge_slug in self.swarm_config.egress_locked_slugs:
+            # Untrusted miner code: pin to the internal (no external route)
+            # overlay regardless of the requested network, so a compromised
+            # eval container can never exfiltrate over an egress-capable net.
+            self._ensure_overlay_network(self.swarm_config.job_network, internal=True)
+            return self.swarm_config.job_network
         if requested == "default":
             return None
         if requested == "none":

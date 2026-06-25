@@ -101,6 +101,11 @@ class DockerSettings(BaseModel):
     broker_eval_readonly_mounts_by_slug: dict[str, list[str]] = Field(
         default_factory=dict
     )
+    #: Challenge slugs whose untrusted Swarm eval job is pinned to the internal
+    #: (no-egress) overlay regardless of the requested network. The prism slug
+    #: is locked by default in ``cli_app.main._egress_locked_slugs``; entries
+    #: here are added to that allowlist.
+    broker_egress_locked_slugs: list[str] = Field(default_factory=list)
     # Challenge API services run on the manager/host; broker jobs run on
     # workers, steered to CPU- vs GPU-labeled nodes (base.workload).
     challenge_placement_constraint: str | None = "node.role==manager"

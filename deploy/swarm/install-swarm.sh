@@ -580,6 +580,13 @@ create_secrets() {
 
   # openrouter_api_key is shared (used by challenge eval). Named generically.
   _ensure_secret "base_openrouter_api_key"                OPENROUTER_API_KEY
+
+  # hf_token is OPTIONAL: FineWeb-Edu is a public dataset, so the one-time prep
+  # download usually needs no credential. When a token IS supplied (private
+  # mirror / rate-limit relief) it MUST travel as a docker secret consumed via
+  # HF_TOKEN_FILE (=/run/secrets/hf_token), never a plaintext env/image/CI value.
+  # Absent env => skip silently (no hard error, unlike the required secrets).
+  _ensure_optional_secret "base_hf_token"                 HF_TOKEN
 }
 
 # _ensure_secret NAME ENVVAR — idempotent secret create from $ENVVAR (stdin).
@@ -588,6 +595,22 @@ _ensure_secret() {
   local name="$1" envvar="$2"
   if [[ -z "${!envvar:-}" ]]; then
     die "required secret env var \$${envvar} is empty (for docker secret '${name}')"
+  fi
+  if docker secret inspect "${name}" >/dev/null 2>&1; then
+    log "  secret ${name} already exists — skipping (idempotent; rotate out-of-band)"
+    return 0
+  fi
+  plan_secret_stdin "${name}" "${envvar}" -- docker secret create "${name}" -
+}
+
+# _ensure_optional_secret NAME ENVVAR — like _ensure_secret but a missing/empty
+# env var is NOT an error: it logs and returns 0 (used for credentials that are
+# genuinely optional, e.g. a public-dataset HF token).
+_ensure_optional_secret() {
+  local name="$1" envvar="$2"
+  if [[ -z "${!envvar:-}" ]]; then
+    log "  optional secret ${name} skipped (\$${envvar} unset)"
+    return 0
   fi
   if docker secret inspect "${name}" >/dev/null 2>&1; then
     log "  secret ${name} already exists — skipping (idempotent; rotate out-of-band)"

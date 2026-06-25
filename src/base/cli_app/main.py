@@ -357,6 +357,16 @@ def _eval_readonly_mounts_by_slug(
     return resolved
 
 
+def _egress_locked_slugs(configured: list[str] | None) -> frozenset[str]:
+    """Resolve the egress-locked eval slugs for the broker.
+
+    The prism slug is locked by default so its untrusted eval job is pinned to
+    the internal (no external route) overlay out of the box; any slug present
+    in ``docker.broker_egress_locked_slugs`` is added to that allowlist.
+    """
+    return frozenset({PRISM_SLUG, *(configured or ())})
+
+
 def _prism_image_for_settings(image: str, settings: Any | None) -> str:
     if settings is None or not production_policy_enabled_for_settings(settings):
         return image
@@ -607,6 +617,9 @@ def master_broker(config: Path = typer.Option(Path("config/master.example.yaml")
             ),
             eval_readonly_mounts_by_slug=_eval_readonly_mounts_by_slug(
                 settings.docker.broker_eval_readonly_mounts_by_slug
+            ),
+            egress_locked_slugs=_egress_locked_slugs(
+                settings.docker.broker_egress_locked_slugs
             ),
         )
     )
