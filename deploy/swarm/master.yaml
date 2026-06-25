@@ -30,7 +30,7 @@ validator:
 
 database:
   # Override the password via BASE_DATABASE__URL in production.
-  url: postgresql+asyncpg://base:base@base-postgres:5432/base
+  url: postgresql+asyncpg://base:base@base-master-postgres:5432/base
 
 docker:
   network_name: base_challenges

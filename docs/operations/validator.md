@@ -44,9 +44,9 @@ manager node. Inspect them with the Swarm CLI:
 
 ```bash
 docker service ls
-docker service ps base-master-proxy base-master-broker
+docker service ps base-master-proxy base-docker-broker
 docker service logs -f base-master-proxy
-docker service logs --tail 200 base-master-broker
+docker service logs --tail 200 base-docker-broker
 docker node ls
 ```
 
@@ -112,7 +112,7 @@ Use placeholder service names only and avoid printing token values:
 ```bash
 docker service ps <agent-challenge-service>
 docker service logs <agent-challenge-service> --since=30m | rg 'terminal_bench|own_runner|tb_running'
-docker service logs base-master-broker --since=30m | rg 'run request|created job|agent-challenge-terminal-bench-runner'
+docker service logs base-docker-broker --since=30m | rg 'run request|created job|agent-challenge-terminal-bench-runner'
 curl -sS '<api-base-url>/submissions/<submission-id>/status' | rg '"status":"evaluating"|"phase":"evaluation"|"status":"valid"|"status":"error"'
 ```
 

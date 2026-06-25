@@ -76,7 +76,7 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 # REPRODUCIBILITY CAVEAT — the live broker/prism run LOCAL-ONLY images (M2/M3).
 # The working live E2E stack does NOT run these :latest tags for the broker and
 # prism; it runs two LOCAL-ONLY images that are NOT on any registry:
-#   * base-master-broker -> ghcr.io/baseintelligence/base-master:readonly-data-mount
+#   * base-docker-broker -> ghcr.io/baseintelligence/base-master:readonly-data-mount
 #   * challenge-prism        -> ghcr.io/baseintelligence/prism:m5
 # (M5) challenge-prism is rebuilt from prism HEAD (PRISM v2 forced-init runner + instrumented
 # loss + scoring + harness robustness + multi-GPU + M4 anti-cheat/held-out/compute-block + the
@@ -143,12 +143,12 @@ SECRET_MOUNT_DIR="/run/secrets/base"
 # master config (proxy_port/broker_port/broker_url), so the published
 # host port, the in-container listen port, and the overlay broker_url stay
 # mutually consistent.
-#   broker : base master broker  -> docker.broker_*        (18082)
+#   broker : base master broker  -> docker.broker_*        (8082)
 #   proxy  : base master proxy   -> proxy_host:proxy_port  (18080)
 # SINGLE PUBLIC API: the proxy also serves the admin/registry surface
 # (/v1/registry, /v1/weights/latest, /health) on :18080, so there is no separate
 # admin service/port (the former base-master-admin on 18900 is removed).
-MASTER_BROKER_PORT="${MASTER_BROKER_PORT:-18082}"
+MASTER_BROKER_PORT="${MASTER_BROKER_PORT:-8082}"
 MASTER_PROXY_PORT="${MASTER_PROXY_PORT:-18080}"
 # Challenge container-internal listen ports (overlay-internal; NO host publish —
 # clients reach them THROUGH the proxy). Separate network namespaces, so these do
@@ -755,15 +755,15 @@ _verify_rowcounts() {
 #    config + secrets mounted and ports published.
 #
 #    Service name <-> command <-> port:
-#      base-master-broker : `base master broker` : 18082 (docker.broker_*)
+#      base-docker-broker : `base master broker` : 8082 (docker.broker_*)
 #      base-master-proxy  : `base master proxy`  : 18080 (proxy_host:proxy_port)
 #    The proxy is the SINGLE public API: it serves /v1/registry, /v1/weights/latest,
 #    /health, the admin/management routes (token-gated), the signed upload bridge,
 #    and the /challenges/* passthrough, AND it runs the orchestrator that creates
 #    challenges dynamically (the separate `base master run` admin service on
 #    18900 is removed).
-#    The broker service MUST be named base-master-broker so the configured
-#    broker_url (http://base-master-broker:18082) resolves over the overlay.
+#    The broker service MUST be named base-docker-broker so the configured
+#    broker_url (http://base-docker-broker:8082) resolves over the overlay.
 # ============================================================================
 deploy_master() {
   log "STEP 9/12 deploy_master"
@@ -772,7 +772,7 @@ deploy_master() {
   _seed_proxy_challenge_tokens  # proxy bearer-token files in the shared secrets volume
 
   # broker — challenge workload broker (frozen contract / Swarm backend).
-  _deploy_master_service "base-master-broker" "broker" "${MASTER_BROKER_PORT}" "${MASTER_BROKER_PORT}"
+  _deploy_master_service "base-docker-broker" "broker" "${MASTER_BROKER_PORT}" "${MASTER_BROKER_PORT}"
   # proxy — public single API (registry/weights/health + admin + upload bridge +
   # /challenges/* passthrough) and the orchestrator that creates challenges.
   _deploy_master_service "base-master-proxy" "proxy" "${MASTER_PROXY_PORT}" "${MASTER_PROXY_PORT}"
@@ -821,7 +821,7 @@ docker:
   internal_network: true
   broker_host: 0.0.0.0
   broker_port: ${MASTER_BROKER_PORT}
-  broker_url: http://base-master-broker:${MASTER_BROKER_PORT}
+  broker_url: http://base-docker-broker:${MASTER_BROKER_PORT}
   broker_allowed_images:
     - ghcr.io/baseintelligence/
   allow_privileged: true
@@ -923,7 +923,7 @@ _deploy_master_service() {
   #     broker/proxy read per-challenge tokens from here. The PROXY needs
   #     it to load each challenge's bearer token when verifying miner uploads (else
   #     500 "Challenge token file is missing"). Seeded by _seed_proxy_challenge_tokens.
-  #   * --update-order stop-first: these are FIXED host-port services (18082/18080,
+  #   * --update-order stop-first: these are FIXED host-port services (8082/18080,
   #     mode=host); the default start-first ordering causes a transient port collision
   #     (EADDRINUSE) on update. stop-first releases the port before the new task binds.
   local -a extra=(
@@ -950,13 +950,13 @@ _deploy_master_service() {
       # MANAGER PIN (required on any multi-node swarm): the broker shells out to
       # `docker service create` to dispatch eval jobs, which REQUIRES a manager's
       # docker.sock; it also binds the manager-local docker.sock + ${broker_ws}
-      # workspace and publishes the fixed host port 18082. With no constraint an
+      # workspace and publishes the fixed host port 8082. With no constraint an
       # update (stop-first) can reschedule the broker onto a joined worker (e.g.
       # the GPU node), where it breaks: the manager-only docker API is absent, the
       # local-only image is "No such image", and the workspace bind source does
       # not exist. node.role is intrinsic, so this also matches the sole manager on
       # a single-node swarm (no-op there). Canonicalizes the live M2/M3 pin
-      # (verified on base-master-broker; see library/environment.md). Do NOT
+      # (verified on base-docker-broker; see library/environment.md). Do NOT
       # use --constraint-add on an already-pinned live service (not idempotent —
       # see AGENTS.md "CONSTRAINT-ADD DEDUP GOTCHA").
       --constraint "node.role==manager"
@@ -1043,7 +1043,7 @@ deploy_challenges() {
     "CHALLENGE_TERMINAL_BENCH_EXECUTION_BACKEND=own_runner"
     "CHALLENGE_DOCKER_ENABLED=true"
     "CHALLENGE_DOCKER_BACKEND=broker"
-    "CHALLENGE_DOCKER_BROKER_URL=http://base-master-broker:${MASTER_BROKER_PORT}"
+    "CHALLENGE_DOCKER_BROKER_URL=http://base-docker-broker:${MASTER_BROKER_PORT}"
     "CHALLENGE_DOCKER_BROKER_TOKEN_FILE=${SECRET_MOUNT_DIR}/docker_broker_token"
     "CHALLENGE_ARTIFACT_ROOT=/data"
   )
@@ -1089,7 +1089,7 @@ deploy_challenges() {
     "CHALLENGE_SLUG=prism"
     "CHALLENGE_DOCKER_ENABLED=true"
     "CHALLENGE_DOCKER_BACKEND=broker"
-    "CHALLENGE_DOCKER_BROKER_URL=http://base-master-broker:${MASTER_BROKER_PORT}"
+    "CHALLENGE_DOCKER_BROKER_URL=http://base-docker-broker:${MASTER_BROKER_PORT}"
     "CHALLENGE_DOCKER_BROKER_TOKEN_FILE=${SECRET_MOUNT_DIR}/docker_broker_token"
     "PRISM_BASE_EVAL_IMAGE=${IMAGE_PRISM_EVALUATOR}"
     "PRISM_BASE_EVAL_GPU_COUNT=1"
@@ -1234,13 +1234,13 @@ healthcheck() {
   log "STEP 11/12 healthcheck"
   if [[ "${APPLY}" != "true" ]]; then
     log "  (dry-run) would HTTP-probe /health on:"
-    log "    http://127.0.0.1:${MASTER_BROKER_PORT}/health  (base-master-broker)"
+    log "    http://127.0.0.1:${MASTER_BROKER_PORT}/health  (base-docker-broker)"
     log "    http://127.0.0.1:${MASTER_PROXY_PORT}/health   (base-master-proxy)"
     log "  and would verify challenge services converge to 1/1 replicas + overlay /health."
     return 0
   fi
 
-  _http_health "base-master-broker" "http://127.0.0.1:${MASTER_BROKER_PORT}/health"
+  _http_health "base-docker-broker" "http://127.0.0.1:${MASTER_BROKER_PORT}/health"
   _http_health "base-master-proxy"  "http://127.0.0.1:${MASTER_PROXY_PORT}/health"
 
   if [[ "${STATIC_CHALLENGES}" == "true" ]]; then

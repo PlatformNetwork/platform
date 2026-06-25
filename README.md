@@ -260,7 +260,7 @@ The manager control-plane services are published on fixed host ports by
 | Manager service (host-published) | Host port |
 |---------|-----------|
 | base-master-proxy (single public API; serves `/v1/registry`, `/v1/weights/latest`, `/health`, and routes `/challenges/*`) | 18080 |
-| base-master-broker | 18082 |
+| base-docker-broker | 8082 |
 
 `/v1/registry` and `/v1/weights/latest` are served by the proxy on `18080`; there
 is no separate admin service or port.
@@ -421,7 +421,7 @@ canonical client path) rather than on a host port:
 ```bash
 docker service ls
 curl -sf http://127.0.0.1:18080/health                                 # proxy
-curl -sf http://127.0.0.1:18082/health                                 # broker
+curl -sf http://127.0.0.1:8082/health                                  # broker
 curl -sf http://127.0.0.1:18080/v1/registry                            # registry (served by the proxy)
 curl -sf http://127.0.0.1:18080/v1/weights/latest                      # weights (served by the proxy)
 curl -sf http://127.0.0.1:18080/challenges/prism/leaderboard           # prism, via the proxy

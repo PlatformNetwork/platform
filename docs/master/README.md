@@ -91,7 +91,7 @@ The broker then schedules CPU jobs onto `node.labels.base.workload==cpu` and GPU
 
 ```bash
 docker service ls
-docker service ps base-master-proxy base-master-broker
+docker service ps base-master-proxy base-docker-broker
 docker service logs -f base-master-proxy
 journalctl -u base-supervisor.service -f
 docker node ls
