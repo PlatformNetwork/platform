@@ -44,6 +44,7 @@ from base.supervisor.self_update import (
     build_self_update_task,
     run_startup_rollback_check,
 )
+from base.supervisor.weight_submit import build_weight_submit_task
 
 BROKER_HEALTH_PROBE_INTERVAL_SECONDS = 10.0
 
@@ -124,9 +125,13 @@ def build_scheduled_tasks(
             ),
         )
     )
-    # Task 21 weights: DISABLED for docker cutover — orphaned (output discarded;
-    # admin serves /v1/weights/latest on-demand). Re-enable only for on-chain submit.
-    # tasks.append(build_weights_task(settings, health_gate=gate))
+    # Task 21 weights (on-chain submit): code-CAPABLE, RUNTIME-OFF by default.
+    # The submit path only fires when settings.validator.submit_on_chain_enabled
+    # is True (defaults False), so a deploy never auto-commits; the first commit
+    # is human-gated (plan Task 27). It health-gates on eval-pipeline scores and
+    # backs off + alerts (Task-16 seam) on a commit-reveal rejection, never
+    # silently dropping an epoch.
+    tasks.append(build_weight_submit_task(settings, health_gate=gate))
     # Task 22 registration point (self-update).
     # Startup-side rollback agent (Task 22): MUST run once before workers
     # start — it flips `current` back + exits when a pending update is

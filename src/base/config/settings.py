@@ -46,6 +46,10 @@ class ValidatorSettings(BaseModel):
     weights_timeout_seconds: float = 15.0
     weights_retries: int = 3
     weights_freshness_seconds: int = 720
+    # RUNTIME-OFF gate for the supervisor on-chain weights task (plan Task 8).
+    # Defaults False so a deploy NEVER auto-commits weights on-chain; the first
+    # on-chain commit is human-gated (plan Task 27) by flipping this flag.
+    submit_on_chain_enabled: bool = False
 
     @property
     def resolved_weights_url(self) -> str:
