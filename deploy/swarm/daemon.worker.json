@@ -1,4 +1,5 @@
 {
+  "default-runtime": "nvidia",
   "node-generic-resources": [
     "NVIDIA-GPU=GPU-00000000-0000-0000-0000-000000000000"
   ],
