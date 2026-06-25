@@ -22,6 +22,14 @@
 #
 # What this script does (in order):
 #   1. preflight       — docker present, required inputs supplied (read-only).
+#   1b. ghcr_login     — authenticate to ghcr.io so deploy-time pulls of the
+#                        private ghcr.io/baseintelligence/* images work on this
+#                        worker. Credentials come from the RUNTIME env
+#                        (GHCR_USER / GHCR_TOKEN); token is fed on stdin (never
+#                        argv, never logged, never hardcoded). Non-fatal skip
+#                        when the vars are unset (the manager can still ship
+#                        creds per-service via `docker service create
+#                        --with-registry-auth`). Mirrors install-swarm.sh.
 #   2. daemon.json     — prepare the right worker daemon.json:
 #                          cpu -> deploy/swarm/daemon.cpu-worker.json (as-is)
 #                          gpu -> deploy/swarm/daemon.worker.json with the GPU
@@ -79,6 +87,8 @@ RESTART_DOCKERD=false      # opt-in: install daemon.json + restart dockerd (DEST
 MANAGER_ADDR=""            # <ip:2377> of the Swarm manager (required).
 WORKLOAD=""                # cpu | gpu (required).
 JOIN_TOKEN="${JOIN_TOKEN:-}"   # worker join token (env preferred; never logged).
+GHCR_USER="${GHCR_USER:-}"     # ghcr.io username for private image pulls (non-secret).
+GHCR_TOKEN="${GHCR_TOKEN:-}"   # ghcr.io token; stdin-only, never argv/logged/hardcoded.
 
 # Resolved during prepare_daemon_json().
 DAEMON_JSON_STAGED=""      # path to the daemon.json that WOULD be installed.
@@ -118,6 +128,18 @@ _quote_argv() {
   printf '%s' "${out% }"
 }
 
+plan_secret_stdin() {
+  local label="$1" envvar="$2"
+  shift 2
+  [[ "$1" == "--" ]] || die "plan_secret_stdin: expected -- separator"
+  shift
+  printf '  + %s   # stdin: value from $%s (hidden)\n' "$(_quote_argv "$@")" "${envvar}"
+  if [[ "${APPLY}" == "true" ]]; then
+    printf '%s' "${!envvar}" | "$@"
+  fi
+  : "${label}"
+}
+
 # ============================================================================
 # Argument parsing
 # ============================================================================
@@ -135,6 +157,15 @@ Required:
                              the label hint printed for the manager.
   Join token                 Supply via JOIN_TOKEN env (preferred) or
                              --join-token <token>. NEVER hardcode it.
+
+Optional (private image pulls):
+  GHCR_USER / GHCR_TOKEN     ghcr.io credentials for pulling private
+                             ghcr.io/baseintelligence/* images on this worker.
+                             Supplied at runtime via env; the token is fed on
+                             stdin only (never argv/logged/hardcoded). If unset,
+                             the ghcr.io login step is skipped (non-fatal) and
+                             the worker relies on the manager's per-service
+                             'docker service create --with-registry-auth'.
 
 Safety flags:
   --apply                    Execute mutating commands. Without this, dry-run only.
@@ -199,6 +230,20 @@ preflight() {
     || die "join token required: set JOIN_TOKEN env (preferred) or pass --join-token (NEVER hardcode)"
 
   log "  inputs OK (workload=${WORKLOAD}, manager=${MANAGER_ADDR}, token present)"
+}
+
+ghcr_login() {
+  log "STEP 1b/3 ghcr_login: authenticate to ghcr.io for private image pulls"
+  if [[ -z "${GHCR_USER}" || -z "${GHCR_TOKEN}" ]]; then
+    warn "  GHCR_USER/GHCR_TOKEN not set: skipping ghcr.io login."
+    warn "  Private ghcr.io/baseintelligence/* pulls on this worker will then rely"
+    warn "  on the manager shipping creds per-service ('docker service create"
+    warn "  --with-registry-auth'). Set GHCR_USER/GHCR_TOKEN to enable direct"
+    warn "  'docker pull' on this node. (Never hardcode the token.)"
+    return 0
+  fi
+  plan_secret_stdin "ghcr-login" GHCR_TOKEN -- \
+    docker login ghcr.io --username "${GHCR_USER}" --password-stdin
 }
 
 # ============================================================================
@@ -348,9 +393,11 @@ main() {
   log "  workload         : ${WORKLOAD:-<unset>}"
   log "  restart-dockerd  : ${RESTART_DOCKERD}   (destructive; opt-in)"
   log "  join token       : $([[ -n "${JOIN_TOKEN}" ]] && echo 'present (hidden)' || echo '<unset>')"
+  log "  ghcr.io login    : $([[ -n "${GHCR_USER}" && -n "${GHCR_TOKEN}" ]] && echo 'enabled (token hidden)' || echo 'skipped (no GHCR_USER/GHCR_TOKEN)')"
   log "============================================================"
 
   preflight            # 1
+  ghcr_login           # 1b (ghcr.io auth for private pulls; skip if no creds)
   prepare_daemon_json  # 2a (read-only render)
   apply_daemon_json    # 2b (DESTRUCTIVE behind --restart-dockerd)
   swarm_join           # 3
