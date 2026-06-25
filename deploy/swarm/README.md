@@ -79,11 +79,11 @@ the Docker-socket allowlist, so the prism eval job gets the data without the
 `install-swarm.sh` canonicalizes the prism eval-plane deploy config on the
 challenge service (the broker supplies the eval-container data mounts above):
 
-- **Augmented evaluator image** — `IMAGE_PRISM_EVALUATOR` defaults to
-  `ghcr.io/baseintelligence/prism-evaluator:augmented` (bundles `sentencepiece` +
+- **CI-published evaluator image** — `IMAGE_PRISM_EVALUATOR` defaults to
+  `ghcr.io/baseintelligence/prism-evaluator:latest` (bundles `sentencepiece` +
   the offline tiktoken cache for the locked pipeline) and is passed as
-  `PRISM_BASE_EVAL_IMAGE`. The registry `:latest` evaluator is stale; do not
-  use it.
+  `PRISM_BASE_EVAL_IMAGE`. The image is deployed from the registry by digest; no
+  locally built evaluator tag is required.
 - **Host-side held-out** — the manager-pinned prism scorer (NOT the
   `network=none` eval container) mounts the SECRET val split read-only
   (`prism_fineweb_edu_val` → `/secret/val`) and reads it via

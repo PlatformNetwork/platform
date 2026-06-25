@@ -73,52 +73,34 @@ DAEMON_JSON_DST="${DAEMON_JSON_DST:-/etc/docker/daemon.json}"
 
 # Container images (LIVE INVENTORY — pinned GHCR tags).
 #
-# REPRODUCIBILITY CAVEAT — the live broker/prism run LOCAL-ONLY images (M2/M3).
-# The working live E2E stack does NOT run these :latest tags for the broker and
-# prism; it runs two LOCAL-ONLY images that are NOT on any registry:
-#   * base-docker-broker -> ghcr.io/baseintelligence/base-master:readonly-data-mount
-#   * challenge-prism        -> ghcr.io/baseintelligence/prism:m5
-# (M5) challenge-prism is rebuilt from prism HEAD (PRISM v2 forced-init runner + instrumented
-# loss + scoring + harness robustness + multi-GPU + M4 anti-cheat/held-out/compute-block + the
-# M5 OpenRouter LLM hard gate) as the LOCAL-ONLY tag :m5 and redeployed manager-pinned,
-# `--update-order stop-first --no-resolve-image`. Its evaluator stays the LOCAL-ONLY
-# ghcr.io/baseintelligence/prism-evaluator:augmented (see below) — UNCHANGED from M2/M3: the
-# anti-cheat sandbox/static phase + scoring/manifest authoring run HOST-SIDE in the challenge
-# service and the in-container runner.py is injected at run time, so M4/M5 needs no eval-image
-# rebuild (the only baked module the runner imports, reference_tokenizers, is unchanged).
-# The host-side held-out delta needs BOTH the SECRET val split (manager-local volume
-# `prism_fineweb_edu_val`, RO at /secret/val) AND the non-secret TRAIN split (manager-local
-# volume `prism_fineweb_edu_train`, RO at /secret/train) present + populated; with the train
-# mount the converged-memorization-gap path activates (gap_basis='converged'), else it falls
-# back to the prequential reference (no regression). If val is absent the held-out is skipped.
-# The broker LOCAL-ONLY image is built from base HEAD and carries the UNPUSHED
-# base commits 1142bc53 (cross-node mount materialization for GPU eval jobs) +
-# 48ec8c5a (non-root mount extraction + uncapped drain round-trip) + e02ffbab
-# (per-slug read-only locked-data mount for the prism slug); challenge-prism overlays
-# the same base. The prism eval RO mounts (FineWeb-Edu train split + reference
-# tokenizers) are supplied by the broker built-in DEFAULT_PRISM_EVAL_READONLY_MOUNTS,
-# so no master.yaml broker_eval_readonly_mounts_by_slug entry is required for them to
-# be live. prism pins its base
-# dependency by git (pyproject `base @ git+https://github.com/BaseIntelligence/base.git`,
-# public HEAD), so until those commits are PUSHED a fresh `docker build` of
-# IMAGE_PRISM bundles the OLD published base (lacking mount_transport /
-# the drain-restore path / the per-slug prism RO data mount) and the GPU eval
-# workspace+artifacts restore and locked-data auto-mount are broken.
-# CLEAN CANONICAL BRING-UP: first PUSH base commits 1142bc53 + 48ec8c5a + e02ffbab
-# so the prism git-pinned dependency picks them up, then rebuild IMAGE_MASTER + IMAGE_PRISM
-# from HEAD normally — the overlay tags above then become unnecessary. The deploy
-# CONFIG this script sets (broker node.role==manager pin) is independent of the
-# image build and reproduces as-is.
+# IMAGE PROVENANCE — the broker, master, agent-challenge and prism images below are
+# CI-published to ghcr.io/baseintelligence and deployed from their CI `:latest` tags
+# (pinned by digest at deploy time). There is NO local rebuild prerequisite and NO
+# dependency on unpushed or local-only images: the stack is reproducible from the
+# registry alone. The host-side prism held-out delta still needs BOTH the SECRET val
+# split (manager-local volume `prism_fineweb_edu_val`, RO at /secret/val) AND the
+# non-secret TRAIN split (manager-local volume `prism_fineweb_edu_train`, RO at
+# /secret/train) present + populated; with the train mount the
+# converged-memorization-gap path activates (gap_basis='converged'), else it falls
+# back to the prequential reference (no regression). If val is absent the held-out is
+# skipped. The prism eval RO mounts (FineWeb-Edu train split + reference tokenizers)
+# are supplied by the broker built-in DEFAULT_PRISM_EVAL_READONLY_MOUNTS, so no
+# master.yaml broker_eval_readonly_mounts_by_slug entry is required for them to be
+# live. The broker shells out to `docker service create` to dispatch eval jobs, so it
+# is pinned to the manager node (docker.sock + workspace bind) — see the manager-pin
+# rationale at the broker service-create below. The deploy CONFIG this script sets is
+# independent of the image build and reproduces as-is.
 IMAGE_MASTER="ghcr.io/baseintelligence/base-master:latest"
 IMAGE_AGENT_CHALLENGE="ghcr.io/baseintelligence/agent-challenge:latest"
 IMAGE_PRISM="ghcr.io/baseintelligence/prism:latest"
 # Prism GPU evaluator (CUDA cu128 torchrun runner). Must satisfy BOTH prism
 # docker_allowed_images AND the broker broker_allowed_images (ghcr.io/baseintelligence/);
 # pre-pulled on the GPU worker so the broker eval job resolves it locally.
-# NB: PRISM v2 forced-init re-execution requires the :augmented tag (bundles sentencepiece +
-# offline tiktoken/HF assets for the locked FineWeb-Edu pipeline). The registry :latest is STALE
-# and lacks those — it is a LOCAL-ONLY image pre-pulled/built on the GPU node. Do NOT use :latest.
-IMAGE_PRISM_EVALUATOR="${IMAGE_PRISM_EVALUATOR:-ghcr.io/baseintelligence/prism-evaluator:augmented}"
+# Uses the CI-published :latest evaluator image (digest-pinned by the deploy). The
+# runtime assets PRISM v2 forced-init re-execution needs (sentencepiece + offline
+# tiktoken/HF for the locked FineWeb-Edu pipeline) ship in that published image, so
+# no separate locally built evaluator tag is required.
+IMAGE_PRISM_EVALUATOR="${IMAGE_PRISM_EVALUATOR:-ghcr.io/baseintelligence/prism-evaluator:latest}"
 IMAGE_POSTGRES="postgres:16-alpine"
 
 # Minimum Docker engine major version required (validator runs 29.x today).
@@ -952,7 +934,8 @@ _deploy_master_service() {
       # workspace and publishes the fixed host port 8082. With no constraint an
       # update (stop-first) can reschedule the broker onto a joined worker (e.g.
       # the GPU node), where it breaks: the manager-only docker API is absent, the
-      # local-only image is "No such image", and the workspace bind source does
+      # pinned image digest may not be present on the worker ("No such image"), and
+      # the workspace bind source does
       # not exist. node.role is intrinsic, so this also matches the sole manager on
       # a single-node swarm (no-op there). Canonicalizes the live M2/M3 pin
       # (verified on base-docker-broker; see library/environment.md). Do NOT
