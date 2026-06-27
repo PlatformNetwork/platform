@@ -53,6 +53,16 @@ class ValidatorHealthEventType(StrEnum):
     CRASH_DETECTED = "crash_detected"
 
 
+class WorkAssignmentStatus(StrEnum):
+    """Lifecycle states for a work unit coordinated to a validator."""
+
+    PENDING = "pending"
+    ASSIGNED = "assigned"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class TimestampMixin:
     """Created/updated timestamp columns shared by mutable tables."""
 
@@ -476,6 +486,75 @@ class ValidatorHealthEvent(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class WorkAssignment(Base, TimestampMixin):
+    """A unit of evaluation work coordinated to an online validator.
+
+    The master fans submissions out into work units (agent-challenge: one per
+    selected task; prism: exactly one per submission) and assigns pending units
+    to eligible online validators. The master only coordinates; validators
+    execute the work on their own brokers.
+    """
+
+    __tablename__ = "work_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "challenge_slug",
+            "work_unit_id",
+            name="uq_work_assignments_challenge_work_unit",
+        ),
+        Index("ix_work_assignments_challenge_slug", "challenge_slug"),
+        Index("ix_work_assignments_status", "status"),
+        Index(
+            "ix_work_assignments_assigned_validator_hotkey",
+            "assigned_validator_hotkey",
+        ),
+        Index(
+            "ix_work_assignments_status_validator",
+            "status",
+            "assigned_validator_hotkey",
+        ),
+        Index("ix_work_assignments_status_deadline", "status", "deadline_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    challenge_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    work_unit_id: Mapped[str] = mapped_column(Text, nullable=False)
+    submission_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    required_capability: Mapped[str] = mapped_column(
+        Text, nullable=False, default="cpu", server_default="cpu"
+    )
+    assigned_validator_hotkey: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[WorkAssignmentStatus] = mapped_column(
+        Enum(
+            WorkAssignmentStatus,
+            name="work_assignment_status",
+            values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
+        ),
+        nullable=False,
+        default=WorkAssignmentStatus.PENDING,
+        server_default=WorkAssignmentStatus.PENDING.value,
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checkpoint_ref: Mapped[str | None] = mapped_column(Text)
+    result_ref: Mapped[str | None] = mapped_column(Text)
 
 
 class ValidatorRequestNonce(Base):

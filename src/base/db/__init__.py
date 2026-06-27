@@ -20,6 +20,8 @@ from base.db.models import (
     ValidatorHealthEventType,
     ValidatorRequestNonce,
     ValidatorStatus,
+    WorkAssignment,
+    WorkAssignmentStatus,
 )
 from base.db.repositories import ChallengeRepository
 from base.db.session import (
@@ -49,6 +51,8 @@ __all__ = [
     "ValidatorHealthEventType",
     "ValidatorRequestNonce",
     "ValidatorStatus",
+    "WorkAssignment",
+    "WorkAssignmentStatus",
     "create_engine",
     "create_session_factory",
     "session_scope",

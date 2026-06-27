@@ -26,6 +26,7 @@ APPLICATION_TABLES = (
     "validator_request_nonces",
     "validator_health_events",
     "validators",
+    "work_assignments",
     "llm_usage_records",
     "challenges",
 )
