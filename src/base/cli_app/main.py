@@ -20,6 +20,10 @@ from base.config import load_settings
 from base.config.policy import production_policy_enabled_for_settings
 from base.db.session import create_engine, create_session_factory
 from base.master.app_proxy import create_proxy_app
+from base.master.assignment_coordination import (
+    AssignmentCoordinationService,
+    WorkAssignmentLifecycleResolver,
+)
 from base.master.challenge_client import ChallengeClient
 from base.master.docker_broker import create_docker_broker_app
 from base.master.docker_orchestrator import (
@@ -29,6 +33,12 @@ from base.master.docker_orchestrator import (
     port_from_internal_base_url,
     worker_command_from_metadata,
 )
+from base.master.llm_gateway import (
+    LLMGatewayService,
+    ProviderConfig,
+    SqlAlchemyUsageRecorder,
+    build_llm_gateway_service,
+)
 from base.master.registry import (
     ChallengeNotFoundError,
     DatabaseChallengeRegistry,
@@ -37,6 +47,7 @@ from base.master.service import (
     MasterWeightService,
     active_challenge_inputs,
 )
+from base.master.validator_coordination import ValidatorCoordinationService
 from base.observability.logging import configure_logging
 from base.schemas.challenge import (
     ChallengeCreate,
@@ -46,6 +57,11 @@ from base.schemas.challenge import (
 from base.schemas.weights import FinalWeights, MasterWeightsResponse
 from base.security.admin_auth import read_secret
 from base.security.miner_auth import SqlAlchemyMinerNonceStore
+from base.security.validator_auth import (
+    MetagraphValidatorEligibility,
+    SqlAlchemyValidatorNonceStore,
+    ValidatorSignedRequestVerifier,
+)
 from base.template_engine import (
     ChallengeTemplateContext,
     render_challenge_template,
@@ -222,6 +238,69 @@ def _master_weight_service(
             timeout_seconds=settings.master.challenge_timeout_seconds,
             retries=settings.master.challenge_retries,
         ),
+    )
+
+
+def _validator_coordination_service(
+    settings: Any, session_factory: Any
+) -> ValidatorCoordinationService:
+    return ValidatorCoordinationService(
+        session_factory,
+        heartbeat_interval_seconds=settings.master.validator_heartbeat_interval_seconds,
+        heartbeat_timeout_seconds=settings.master.validator_heartbeat_timeout_seconds,
+    )
+
+
+def _validator_signed_request_verifier(
+    settings: Any,
+    session_factory: Any,
+    metagraph_cache: MetagraphCache,
+) -> ValidatorSignedRequestVerifier:
+    return ValidatorSignedRequestVerifier(
+        nonce_store=SqlAlchemyValidatorNonceStore(
+            session_factory,
+            ttl_seconds=settings.master.validator_nonce_ttl_seconds,
+        ),
+        eligibility=MetagraphValidatorEligibility(metagraph_cache),
+        ttl_seconds=settings.master.validator_signature_ttl_seconds,
+    )
+
+
+def _assignment_coordination_service(
+    settings: Any, session_factory: Any
+) -> AssignmentCoordinationService:
+    return AssignmentCoordinationService(
+        session_factory,
+        lease_seconds=settings.master.assignment_lease_seconds,
+    )
+
+
+def _llm_gateway_service(settings: Any, session_factory: Any) -> LLMGatewayService:
+    """Build the master LLM gateway from ``Settings.gateway``.
+
+    The work_assignments-backed resolver binds a scoped token to live assignment
+    state and the SQLAlchemy recorder persists per-(validator, assignment) usage.
+    Construction fails fast when a non-mock provider has no configured key.
+    """
+
+    gateway = settings.gateway
+    return build_llm_gateway_service(
+        deepseek_api_key=read_secret(
+            gateway.deepseek_api_key, gateway.deepseek_api_key_file
+        ),
+        openrouter_api_key=read_secret(
+            gateway.openrouter_api_key, gateway.openrouter_api_key_file
+        ),
+        token_secret=read_secret(gateway.token_secret, gateway.token_secret_file),
+        provider_config=ProviderConfig(
+            mode=gateway.provider_mode,
+            deepseek_base_url=gateway.deepseek_base_url,
+            openrouter_base_url=gateway.openrouter_base_url,
+            timeout_seconds=gateway.request_timeout_seconds,
+        ),
+        token_ttl_seconds=gateway.token_ttl_seconds,
+        usage_recorder=SqlAlchemyUsageRecorder(session_factory),
+        assignment_resolver=WorkAssignmentLifecycleResolver(session_factory),
     )
 
 
@@ -557,6 +636,16 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
         settings,
         metagraph_cache=runtime.metagraph_cache,
     )
+    # Coordination plane: hotkey-signed register/heartbeat/pull/progress/result
+    # routes, the token-gated GET /v1/validators read view, the in-app
+    # crash-detection loop, and the LLM gateway (metering + token lifecycle bound
+    # to live work_assignments state).
+    validator_service = _validator_coordination_service(settings, session_factory)
+    validator_verifier = _validator_signed_request_verifier(
+        settings, session_factory, runtime.metagraph_cache
+    )
+    assignment_service = _assignment_coordination_service(settings, session_factory)
+    llm_gateway_service = _llm_gateway_service(settings, session_factory)
     proxy = create_proxy_app(
         registry=registry,
         metagraph_cache=runtime.metagraph_cache,
@@ -575,6 +664,13 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
             settings.security.admin_token_file,
         ),
         enforce_production_policy=production_policy_enabled_for_settings(settings),
+        validator_service=validator_service,
+        validator_verifier=validator_verifier,
+        validator_health_interval_seconds=(
+            settings.master.validator_health_interval_seconds
+        ),
+        assignment_coordination_service=assignment_service,
+        llm_gateway_service=llm_gateway_service,
     )
     endpoint = f"{settings.master.proxy_host}:{settings.master.proxy_port}"
     typer.echo(f"Starting proxy API on {endpoint}")

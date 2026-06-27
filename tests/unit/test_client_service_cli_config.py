@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import cast
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import base.cli_app.main as cli_module
@@ -19,10 +22,16 @@ from base.bittensor.weight_setter import WeightSetter
 from base.cli_app.main import DockerRuntimeController, app
 from base.config.loader import load_settings
 from base.config.settings import ValidatorSettings
+from base.master.assignment_coordination import (
+    AssignmentCoordinationService,
+    WorkAssignmentLifecycleResolver,
+)
 from base.master.challenge_client import ChallengeClient
 from base.master.docker_orchestrator import ChallengeSpec
+from base.master.llm_gateway import LLMGatewayService, SqlAlchemyUsageRecorder
 from base.master.registry import ChallengeRegistry, FileChallengeRegistry
 from base.master.service import MasterWeightService
+from base.master.validator_coordination import ValidatorCoordinationService
 from base.observability.logging import JsonFormatter, configure_logging
 from base.observability.otel import init_otel
 from base.observability.sentry import init_sentry
@@ -46,6 +55,7 @@ from base.security.tokens import (
     token_hint,
     verify_token,
 )
+from base.security.validator_auth import ValidatorSignedRequestVerifier
 from base.validator.normal_runner import NormalValidatorRunner
 from base.validator.registry_client import RegistryClient
 from base.validator.weights_client import WeightsClient
@@ -476,6 +486,8 @@ def test_cli_master_proxy_builds_single_port_app_with_admin_deps(
                 f"  secret_dir: {tmp_path / 'secrets'}",
                 "security:",
                 "  admin_token: top-secret",
+                "gateway:",
+                "  token_secret: gw-secret",
             ]
         ),
         encoding="utf-8",
@@ -538,6 +550,189 @@ def test_cli_master_proxy_builds_single_port_app_with_admin_deps(
     assert token_provider() == "top-secret"
     assert captured["weight_service_cache"] is runtime.metagraph_cache
     assert proxy_kwargs["enforce_production_policy"] is False
+
+
+def test_cli_master_proxy_wires_coordination_plane_and_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "master.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "network:",
+                "  netuid: 21",
+                "master:",
+                "  proxy_host: 127.0.0.1",
+                "  proxy_port: 0",
+                "  validator_heartbeat_interval_seconds: 30",
+                "  validator_heartbeat_timeout_seconds: 90",
+                "  validator_health_interval_seconds: 7.5",
+                "  assignment_lease_seconds: 1200",
+                "docker:",
+                f"  secret_dir: {tmp_path / 'secrets'}",
+                "security:",
+                "  admin_token: top-secret",
+                "gateway:",
+                "  token_secret: gw-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class Cache:
+        def get(self) -> dict[str, int]:
+            return {}
+
+    runtime = SimpleNamespace(metagraph_cache=Cache())
+    session_factory = object()
+
+    def fake_create_proxy_app(**kwargs: object) -> object:
+        captured["proxy_kwargs"] = kwargs
+        return SimpleNamespace()
+
+    import uvicorn
+
+    monkeypatch.setattr(
+        cli_module, "create_bittensor_runtime", lambda settings: runtime
+    )
+    monkeypatch.setattr(
+        cli_module, "_challenge_orchestrator", lambda settings: object()
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_master_weight_service",
+        lambda settings, metagraph_cache=None: object(),
+    )
+    monkeypatch.setattr(cli_module, "create_proxy_app", fake_create_proxy_app)
+    monkeypatch.setattr(cli_module, "_run_startup_migrations", lambda settings: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_master_registry",
+        lambda settings, session_factory=None: object(),
+    )
+    monkeypatch.setattr(cli_module, "create_engine", lambda url: object())
+    monkeypatch.setattr(
+        cli_module, "create_session_factory", lambda engine: session_factory
+    )
+    monkeypatch.setattr(
+        cli_module, "SqlAlchemyMinerNonceStore", lambda *a, **k: object()
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+
+    result = CliRunner().invoke(app, ["master", "proxy", "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    proxy_kwargs = cast(dict[str, object], captured["proxy_kwargs"])
+
+    validator_service = proxy_kwargs["validator_service"]
+    assert isinstance(validator_service, ValidatorCoordinationService)
+    assert validator_service.heartbeat_interval_seconds == 30
+    assert validator_service.heartbeat_timeout_seconds == 90
+
+    assert isinstance(
+        proxy_kwargs["validator_verifier"], ValidatorSignedRequestVerifier
+    )
+    assert isinstance(
+        proxy_kwargs["assignment_coordination_service"],
+        AssignmentCoordinationService,
+    )
+    assert proxy_kwargs["validator_health_interval_seconds"] == 7.5
+
+    gateway = proxy_kwargs["llm_gateway_service"]
+    assert isinstance(gateway, LLMGatewayService)
+    # Real resolver + recorder bound to the master DB session factory.
+    assert isinstance(gateway._assignment_resolver, WorkAssignmentLifecycleResolver)
+    assert isinstance(gateway._usage_recorder, SqlAlchemyUsageRecorder)
+
+
+def test_cli_built_proxy_app_serves_coordination_and_runs_health_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "master.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "network:",
+                "  netuid: 21",
+                "master:",
+                "  proxy_host: 127.0.0.1",
+                "  proxy_port: 0",
+                "  validator_health_interval_seconds: 0.05",
+                "docker:",
+                f"  secret_dir: {tmp_path / 'secrets'}",
+                "security:",
+                "  admin_token: top-secret",
+                "gateway:",
+                "  token_secret: gw-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    cache = MetagraphCache(netuid=21, ttl_seconds=300)
+    cache.update_from_metagraph([], validator_permits=[], stakes=[])
+    runtime = SimpleNamespace(metagraph_cache=cache)
+
+    import uvicorn
+
+    monkeypatch.setattr(
+        cli_module, "create_bittensor_runtime", lambda settings: runtime
+    )
+    monkeypatch.setattr(
+        cli_module, "_challenge_orchestrator", lambda settings: object()
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_master_weight_service",
+        lambda settings, metagraph_cache=None: None,
+    )
+    monkeypatch.setattr(cli_module, "_run_startup_migrations", lambda settings: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_master_registry",
+        lambda settings, session_factory=None: object(),
+    )
+    monkeypatch.setattr(cli_module, "create_engine", lambda url: object())
+    monkeypatch.setattr(cli_module, "create_session_factory", lambda engine: object())
+    monkeypatch.setattr(
+        cli_module, "SqlAlchemyMinerNonceStore", lambda *a, **k: object()
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda app, **k: captured.update(app=app))
+
+    result = CliRunner().invoke(app, ["master", "proxy", "--config", str(config)])
+    assert result.exit_code == 0, result.output
+
+    built = cast(FastAPI, captured["app"])
+    paths = {getattr(route, "path", None) for route in built.routes}
+    assert "/v1/validators/register" in paths
+    assert "/v1/validators/heartbeat" in paths
+    assert "/v1/validators" in paths
+    assert "/v1/assignments/pull" in paths
+    assert "/v1/assignments/{assignment_id}/progress" in paths
+    assert "/v1/assignments/{assignment_id}/result" in paths
+    assert "/llm/deepseek/{path:path}" in paths
+    assert "/llm/openrouter/{path:path}" in paths
+
+    service = built.state.validator_coordination_service
+    assert isinstance(service, ValidatorCoordinationService)
+    assert built.state.assignment_coordination_service is not None
+    assert isinstance(built.state.llm_gateway_service, LLMGatewayService)
+
+    # The background crash-detection loop runs live when the app starts.
+    calls: list[int] = []
+
+    async def spy() -> list[str]:
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(service, "detect_offline_validators", spy)
+    with TestClient(built):
+        deadline = time.time() + 2.0
+        while not calls and time.time() < deadline:
+            time.sleep(0.05)
+    assert calls, "health loop did not run a crash-detection pass"
 
 
 def test_cli_master_run_admin_server_is_retired() -> None:

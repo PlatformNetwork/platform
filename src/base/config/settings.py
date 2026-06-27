@@ -36,6 +36,17 @@ class MasterSettings(BaseModel):
     upload_require_registered_hotkey: bool = True
     # ss58 hotkeys accepted without on-chain registration (QA/allowlist; empty in prod)
     upload_extra_registered_hotkeys: list[str] = Field(default_factory=list)
+    # Validator coordination plane (architecture.md sec 4). The proxy serves the
+    # hotkey-signed register/heartbeat/pull/progress/result routes, returns
+    # ``validator_heartbeat_interval_seconds`` to validators, marks a validator
+    # offline once its last heartbeat exceeds ``validator_heartbeat_timeout_seconds``,
+    # and runs the crash-detection loop every ``validator_health_interval_seconds``.
+    validator_heartbeat_interval_seconds: int = 60
+    validator_heartbeat_timeout_seconds: int = 180
+    validator_health_interval_seconds: float = 60.0
+    validator_signature_ttl_seconds: int = 300
+    validator_nonce_ttl_seconds: int = 86_400
+    assignment_lease_seconds: int = 900
 
 
 class ValidatorSettings(BaseModel):

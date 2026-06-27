@@ -13,6 +13,8 @@ from base.master.llm_gateway import (
     GatewayTokenExpired,
     GatewayTokenInvalid,
     GatewayTokenScopeError,
+    HttpLLMProvider,
+    LLMGatewayService,
     MockLLMProvider,
     ProviderConfig,
     ProviderRequest,
@@ -116,6 +118,45 @@ def test_mock_provider_is_deterministic_and_records_request() -> None:
     assert recorded.header("authorization") == "Bearer server-key"
     assert recorded.url == "https://api.deepseek.com/chat/completions"
     assert recorded.json_body()["model"] == "deepseek-v4-pro"
+
+
+def test_build_service_real_mode_requires_provider_keys() -> None:
+    with pytest.raises(ValueError, match="deepseek, openrouter"):
+        build_llm_gateway_service(
+            deepseek_api_key="",
+            openrouter_api_key="",
+            token_secret=SECRET,
+            provider_config=ProviderConfig(mode="real"),
+        )
+    with pytest.raises(ValueError, match="openrouter"):
+        build_llm_gateway_service(
+            deepseek_api_key="ds-key",
+            openrouter_api_key="",
+            token_secret=SECRET,
+            provider_config=ProviderConfig(mode="real"),
+        )
+
+
+def test_build_service_real_mode_succeeds_with_keys() -> None:
+    service = build_llm_gateway_service(
+        deepseek_api_key="ds-key",
+        openrouter_api_key="or-key",
+        token_secret=SECRET,
+        provider_config=ProviderConfig(mode="real"),
+    )
+    assert isinstance(service, LLMGatewayService)
+    assert isinstance(service.provider("deepseek"), HttpLLMProvider)
+
+
+def test_build_service_mock_mode_allows_empty_keys() -> None:
+    service = build_llm_gateway_service(
+        deepseek_api_key="",
+        openrouter_api_key="",
+        token_secret=SECRET,
+        provider_config=ProviderConfig(mode="mock"),
+    )
+    token = service.issue_token(validator_hotkey="v1", assignment_id="a1")
+    assert service.token_authority.verify(token).validator_hotkey == "v1"
 
 
 def test_build_service_injects_key_and_enforces_model() -> None:

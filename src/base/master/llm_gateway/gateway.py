@@ -294,9 +294,28 @@ def build_llm_gateway_service(
     usage_recorder: UsageRecorder | None = None,
     assignment_resolver: AssignmentLifecycleResolver | None = None,
 ) -> LLMGatewayService:
-    """Construct the gateway service from config (provider mode + secrets)."""
+    """Construct the gateway service from config (provider mode + secrets).
+
+    Fails fast when a non-``mock`` provider is selected but its API key is
+    missing, so the gateway never forwards a real provider call with an empty
+    ``Authorization`` header (architecture.md sec 5/11).
+    """
 
     config = provider_config or ProviderConfig()
+    if config.mode != "mock":
+        missing = [
+            name
+            for name, key in (
+                (DEEPSEEK_PROVIDER, deepseek_api_key),
+                (OPENROUTER_PROVIDER, openrouter_api_key),
+            )
+            if not key
+        ]
+        if missing:
+            raise ValueError(
+                f"llm gateway provider_mode={config.mode!r} requires a configured "
+                f"API key for: {', '.join(missing)}"
+            )
     return LLMGatewayService(
         providers=build_providers(config),
         api_keys={
