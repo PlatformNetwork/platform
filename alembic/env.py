@@ -25,7 +25,10 @@ from base.db.base import Base  # noqa: E402
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False so running a migration never silently
+    # disables loggers created before this call (fileConfig's default would set
+    # ``disabled=True`` on every pre-existing logger not named in alembic.ini).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
