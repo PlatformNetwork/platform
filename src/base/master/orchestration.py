@@ -11,8 +11,10 @@ The master is autonomous in production: a background driver periodically
    crashed/expired work is reclaimed and reassigned without any manual trigger,
    then
 3. folds permanently-failed (retry-exhausted, ``attempt_count == max_attempts``)
-   challenge work units on the challenge side so their evaluation jobs finalize
-   instead of hanging forever waiting for a result that will never come.
+   agent-challenge work units on the challenge side so their evaluation jobs
+   finalize instead of hanging forever waiting for a result that will never
+   come. The fold is a durable sweep over still-failed-but-unfolded units, so a
+   fold that fails during a challenge outage is retried on a later pass.
 
 The source of challenge pending work and the challenge-side fold are abstracted
 behind :class:`ChallengeWorkSource` / :class:`ChallengeFoldTrigger` so they can
@@ -103,7 +105,8 @@ class OrchestrationPassResult:
     #: prism: the submission's unit ensured present).
     bridged: dict[str, list[str]]
     reassignment: ReassignmentPassResult
-    #: work-unit ids of retry-exhausted agent-challenge units folded this pass.
+    #: work-unit ids of agent-challenge units folded this pass (newly failed, or
+    #: re-folded after a prior fold attempt failed).
     folded: list[str]
 
 
@@ -173,28 +176,30 @@ class MasterOrchestrationDriver:
             assignment_service=self._assignment_service,
             seed=self._seed,
         )
-        folded = await self._fold_failed(reassignment.failed)
+        folded = await self._fold_failed()
         return OrchestrationPassResult(
             bridged=bridged,
             reassignment=reassignment,
             folded=folded,
         )
 
-    async def _fold_failed(self, failed_work_unit_ids: Sequence[str]) -> list[str]:
-        """Fold each retry-exhausted agent-challenge unit on the challenge side.
+    async def _fold_failed(self) -> list[str]:
+        """Durably fold every still-failed, unfolded agent-challenge unit.
 
         A unit terminally ``failed`` after ``max_attempts`` never produces a
         validator-reported result, which would otherwise hang its EvaluationJob
-        forever. The fold records the failed task once so the job can finalize.
-        A failure to reach the challenge is logged and retried next pass (the
-        unit stays ``failed``; the fold is idempotent on the challenge side).
+        forever. Rather than fold only the units that flipped to ``failed`` in
+        the current pass, this sweeps ALL agent-challenge units currently in
+        ``failed`` that have not yet been folded and (re)attempts the fold. A
+        fold that fails (e.g. a sustained challenge outage past its in-call HTTP
+        retry budget) leaves the unit unmarked, so it is retried on the next
+        pass; a successful fold marks the unit folded so it is not folded again
+        (the fold is also idempotent on the challenge side).
         """
 
-        if not failed_work_unit_ids or self._fold_trigger is None:
+        if self._fold_trigger is None:
             return []
-        failed = await self._assignment_service.get_failed_work_units(
-            failed_work_unit_ids
-        )
+        failed = await self._assignment_service.get_unfolded_failed_work_units()
         folded: list[str] = []
         for unit in failed:
             if unit.challenge_slug != AGENT_CHALLENGE_SLUG:
@@ -221,6 +226,8 @@ class MasterOrchestrationDriver:
                 )
                 continue
             folded.append(unit.work_unit_id)
+        if folded:
+            await self._assignment_service.mark_work_units_folded(folded)
         return folded
 
 

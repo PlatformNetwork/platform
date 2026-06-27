@@ -12,6 +12,9 @@ sec 4). This module composes the existing building blocks into one pass:
    prism resume) or terminally fails the retry-exhausted ones.
 3. :meth:`AssignmentService.assign_pending` reassigns the reverted units to
    another eligible online validator (incrementing ``attempt_count``).
+
+The three steps run in a single atomic transaction so a partial failure rolls
+back cleanly rather than leaving inconsistent control-plane state.
 """
 
 from __future__ import annotations
@@ -40,14 +43,20 @@ async def run_reassignment_pass(
 ) -> ReassignmentPassResult:
     """Detect crashed validators, reclaim their work, and reassign it.
 
+    The three steps run in ONE atomic transaction (detect -> reclaim -> assign):
+    if any step fails the whole pass rolls back, so a partial failure never
+    leaves a validator marked offline with its work neither reclaimed nor
+    reassigned. Both services must be bound to the same control-plane database.
+
     Returns the hotkeys newly marked offline, the work units reverted to pending
     and the ones terminally failed (retries exhausted), plus the
     ``{work_unit_id: validator_hotkey}`` mapping assigned this pass.
     """
 
-    offline = await validator_service.detect_offline_validators()
-    reclaim = await assignment_service.reclaim_stale_assignments()
-    assigned = await assignment_service.assign_pending(seed=seed)
+    async with assignment_service.transaction() as session:
+        offline = await validator_service.detect_offline_validators(session=session)
+        reclaim = await assignment_service.reclaim_stale_assignments(session=session)
+        assigned = await assignment_service.assign_pending(seed=seed, session=session)
     return ReassignmentPassResult(
         offline=offline,
         reverted=reclaim.reverted,

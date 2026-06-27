@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from base.db.models import (
@@ -34,6 +35,11 @@ AGENT_CHALLENGE_SLUG = "agent-challenge"
 PRISM_SLUG = "prism"
 
 DEFAULT_MAX_ATTEMPTS = 3
+
+#: Payload marker set on a terminally-``failed`` work unit once it has been
+#: successfully folded back into its challenge EvaluationJob, so a durable
+#: re-fold sweep skips it (architecture.md sec 4, durable fold).
+FOLDED_PAYLOAD_KEY = "folded"
 
 #: Per-validator concurrency cap by required capability. prism (gpu) runs one
 #: work unit per validator at a time (concurrency 1); cpu work is unbounded.
@@ -223,7 +229,18 @@ class AssignmentService:
             )
         return work_unit_id
 
-    async def assign_pending(self, *, seed: int | None = None) -> dict[str, str]:
+    def transaction(self) -> AbstractAsyncContextManager[AsyncSession]:
+        """Open a single committed transaction over the control-plane DB.
+
+        Used to compose the full reassignment pass (detect -> reclaim -> assign)
+        into one atomic transaction instead of three separate ones.
+        """
+
+        return session_scope(self._session_factory)
+
+    async def assign_pending(
+        self, *, seed: int | None = None, session: AsyncSession | None = None
+    ) -> dict[str, str]:
         """Assign pending work units across eligible ONLINE validators.
 
         Distribution is balanced (least-loaded first) with seeded-random
@@ -232,95 +249,109 @@ class AssignmentService:
         ``gpu`` units only go to gpu validators; ``cpu`` units go to cpu
         validators (and to gpu validators when ``gpu_serves_cpu`` is set). A
         unit with no eligible validator is left ``pending``.
+
+        When ``session`` is provided the work runs inside the caller's
+        transaction (the caller commits); otherwise a fresh transaction is
+        opened and committed here.
         """
 
+        if session is not None:
+            return await self._assign_pending_in_session(session, seed=seed)
+        async with session_scope(self._session_factory) as own_session:
+            return await self._assign_pending_in_session(own_session, seed=seed)
+
+    async def _assign_pending_in_session(
+        self, session: AsyncSession, *, seed: int | None
+    ) -> dict[str, str]:
         rng = random.Random(seed)
         assigned: dict[str, str] = {}
-        async with session_scope(self._session_factory) as session:
-            online = list(
-                (
-                    await session.execute(
-                        select(Validator)
-                        .where(Validator.status == ValidatorStatus.ONLINE)
-                        .order_by(Validator.hotkey)
-                    )
+        online = list(
+            (
+                await session.execute(
+                    select(Validator)
+                    .where(Validator.status == ValidatorStatus.ONLINE)
+                    .order_by(Validator.hotkey)
                 )
-                .scalars()
-                .all()
             )
-            if not online:
-                return {}
+            .scalars()
+            .all()
+        )
+        if not online:
+            return {}
 
-            caps_by_hotkey = {v.hotkey: set(v.capabilities) for v in online}
-            hotkeys = [v.hotkey for v in online]
-            load = {hotkey: 0 for hotkey in hotkeys}
-            cap_load: dict[tuple[str, str], int] = {}
+        caps_by_hotkey = {v.hotkey: set(v.capabilities) for v in online}
+        hotkeys = [v.hotkey for v in online]
+        load = {hotkey: 0 for hotkey in hotkeys}
+        cap_load: dict[tuple[str, str], int] = {}
 
-            inflight = (
-                (
-                    await session.execute(
-                        select(WorkAssignment).where(
-                            WorkAssignment.status.in_(_ACTIVE_STATUSES),
-                            WorkAssignment.assigned_validator_hotkey.is_not(None),
-                        )
-                    )
+        inflight_counts = (
+            await session.execute(
+                select(
+                    WorkAssignment.assigned_validator_hotkey,
+                    WorkAssignment.required_capability,
+                    func.count(),
                 )
-                .scalars()
-                .all()
+                .where(
+                    WorkAssignment.status.in_(_ACTIVE_STATUSES),
+                    WorkAssignment.assigned_validator_hotkey.is_not(None),
+                )
+                .group_by(
+                    WorkAssignment.assigned_validator_hotkey,
+                    WorkAssignment.required_capability,
+                )
             )
-            for unit in inflight:
-                hotkey = unit.assigned_validator_hotkey
-                if hotkey is None:
-                    continue
-                if hotkey in load:
-                    load[hotkey] += 1
-                key = (hotkey, unit.required_capability)
-                cap_load[key] = cap_load.get(key, 0) + 1
+        ).all()
+        for hotkey, capability, count in inflight_counts:
+            if hotkey is None:
+                continue
+            if hotkey in load:
+                load[hotkey] += count
+            key = (hotkey, capability)
+            cap_load[key] = cap_load.get(key, 0) + count
 
-            pending = list(
-                (
-                    await session.execute(
-                        select(WorkAssignment)
-                        .where(WorkAssignment.status == WorkAssignmentStatus.PENDING)
-                        .order_by(
-                            WorkAssignment.created_at, WorkAssignment.work_unit_id
-                        )
-                    )
+        pending = list(
+            (
+                await session.execute(
+                    select(WorkAssignment)
+                    .where(WorkAssignment.status == WorkAssignmentStatus.PENDING)
+                    .order_by(WorkAssignment.created_at, WorkAssignment.work_unit_id)
                 )
-                .scalars()
-                .all()
             )
+            .scalars()
+            .all()
+        )
 
-            for unit in pending:
-                capability = unit.required_capability
-                limit = self._capability_concurrency.get(capability)
-                eligible = [
-                    hotkey
-                    for hotkey in hotkeys
-                    if self._capability_matches(capability, caps_by_hotkey[hotkey])
-                    and (limit is None or cap_load.get((hotkey, capability), 0) < limit)
-                ]
-                if not eligible:
-                    continue
+        for unit in pending:
+            capability = unit.required_capability
+            limit = self._capability_concurrency.get(capability)
+            eligible = [
+                hotkey
+                for hotkey in hotkeys
+                if self._capability_matches(capability, caps_by_hotkey[hotkey])
+                and (limit is None or cap_load.get((hotkey, capability), 0) < limit)
+            ]
+            if not eligible:
+                continue
 
-                min_load = min(load[hotkey] for hotkey in eligible)
-                candidates = sorted(
-                    hotkey for hotkey in eligible if load[hotkey] == min_load
-                )
-                chosen = rng.choice(candidates)
+            min_load = min(load[hotkey] for hotkey in eligible)
+            candidates = sorted(
+                hotkey for hotkey in eligible if load[hotkey] == min_load
+            )
+            chosen = rng.choice(candidates)
 
-                unit.assigned_validator_hotkey = chosen
-                unit.status = WorkAssignmentStatus.ASSIGNED
-                unit.attempt_count = (unit.attempt_count or 0) + 1
-                load[chosen] += 1
-                cap_load[(chosen, capability)] = (
-                    cap_load.get((chosen, capability), 0) + 1
-                )
-                assigned[unit.work_unit_id] = chosen
+            unit.assigned_validator_hotkey = chosen
+            unit.status = WorkAssignmentStatus.ASSIGNED
+            unit.attempt_count = (unit.attempt_count or 0) + 1
+            load[chosen] += 1
+            cap_load[(chosen, capability)] = cap_load.get((chosen, capability), 0) + 1
+            assigned[unit.work_unit_id] = chosen
 
+        await session.flush()
         return assigned
 
-    async def reclaim_stale_assignments(self) -> ReclaimOutcome:
+    async def reclaim_stale_assignments(
+        self, *, session: AsyncSession | None = None
+    ) -> ReclaimOutcome:
         """Revert in-flight work whose validator is offline or lease expired.
 
         A unit is reassignable when its assigned validator is offline/unknown OR
@@ -334,61 +365,70 @@ class AssignmentService:
         resume from the last public HF checkpoint. ``attempt_count`` is not
         touched here; the subsequent :meth:`assign_pending` increments it as part
         of the reassignment.
+
+        When ``session`` is provided the work runs inside the caller's
+        transaction; otherwise a fresh transaction is opened and committed here.
         """
 
+        if session is not None:
+            return await self._reclaim_in_session(session)
+        async with session_scope(self._session_factory) as own_session:
+            return await self._reclaim_in_session(own_session)
+
+    async def _reclaim_in_session(self, session: AsyncSession) -> ReclaimOutcome:
         now = self._now_fn()
         reverted: list[str] = []
         failed: list[str] = []
-        async with session_scope(self._session_factory) as session:
-            online = set(
-                (
-                    await session.execute(
-                        select(Validator.hotkey).where(
-                            Validator.status == ValidatorStatus.ONLINE
-                        )
+        online = set(
+            (
+                await session.execute(
+                    select(Validator.hotkey).where(
+                        Validator.status == ValidatorStatus.ONLINE
                     )
                 )
-                .scalars()
-                .all()
             )
+            .scalars()
+            .all()
+        )
 
-            inflight = (
-                (
-                    await session.execute(
-                        select(WorkAssignment).where(
-                            WorkAssignment.status.in_(_ACTIVE_STATUSES)
-                        )
+        inflight = (
+            (
+                await session.execute(
+                    select(WorkAssignment).where(
+                        WorkAssignment.status.in_(_ACTIVE_STATUSES)
                     )
                 )
-                .scalars()
-                .all()
             )
+            .scalars()
+            .all()
+        )
 
-            for unit in inflight:
-                hotkey = unit.assigned_validator_hotkey
-                validator_offline = hotkey is None or hotkey not in online
-                deadline = unit.deadline_at
-                if deadline is not None and deadline.tzinfo is None:
-                    deadline = deadline.replace(tzinfo=UTC)
-                deadline_passed = deadline is not None and deadline < now
-                if not (validator_offline or deadline_passed):
-                    continue
+        for unit in inflight:
+            hotkey = unit.assigned_validator_hotkey
+            validator_offline = hotkey is None or hotkey not in online
+            deadline = unit.deadline_at
+            if deadline is not None and deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            deadline_passed = deadline is not None and deadline < now
+            if not (validator_offline or deadline_passed):
+                continue
 
-                if (unit.attempt_count or 0) >= unit.max_attempts:
-                    unit.status = WorkAssignmentStatus.FAILED
-                    unit.last_progress_at = now
-                    failed.append(unit.work_unit_id)
-                    continue
+            if (unit.attempt_count or 0) >= unit.max_attempts:
+                unit.status = WorkAssignmentStatus.FAILED
+                unit.last_progress_at = now
+                failed.append(unit.work_unit_id)
+                continue
 
-                unit.status = WorkAssignmentStatus.PENDING
-                unit.assigned_validator_hotkey = None
-                unit.deadline_at = None
-                if unit.checkpoint_ref is not None:
-                    payload = dict(unit.payload or {})
-                    payload[RESUME_CHECKPOINT_PAYLOAD_KEY] = unit.checkpoint_ref
-                    unit.payload = payload
-                reverted.append(unit.work_unit_id)
+            unit.status = WorkAssignmentStatus.PENDING
+            unit.assigned_validator_hotkey = None
+            unit.deadline_at = None
+            if unit.checkpoint_ref is not None:
+                payload = dict(unit.payload or {})
+                payload[RESUME_CHECKPOINT_PAYLOAD_KEY] = unit.checkpoint_ref
+                unit.payload = payload
+            reverted.append(unit.work_unit_id)
 
+        await session.flush()
         return ReclaimOutcome(reverted=reverted, failed=failed)
 
     async def get_failed_work_units(
@@ -426,6 +466,70 @@ class AssignmentService:
                 )
                 for row in rows
             ]
+
+    async def get_unfolded_failed_work_units(
+        self, *, challenge_slug: str = AGENT_CHALLENGE_SLUG
+    ) -> list[FailedWorkUnit]:
+        """Return still-``failed`` units of ``challenge_slug`` not yet folded.
+
+        Backs the orchestration driver's durable re-fold sweep: every pass it
+        re-attempts to fold any terminally-``failed`` unit that has not been
+        marked folded (e.g. because a prior fold POST failed during a challenge
+        outage), so a permanently-failed unit's EvaluationJob never hangs
+        forever waiting for a result that will never come.
+        """
+
+        async with session_scope(self._session_factory) as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(WorkAssignment).where(
+                            WorkAssignment.challenge_slug == challenge_slug,
+                            WorkAssignment.status == WorkAssignmentStatus.FAILED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                FailedWorkUnit(
+                    challenge_slug=row.challenge_slug,
+                    work_unit_id=row.work_unit_id,
+                    payload=dict(row.payload or {}),
+                )
+                for row in rows
+                if not (row.payload or {}).get(FOLDED_PAYLOAD_KEY)
+            ]
+
+    async def mark_work_units_folded(self, work_unit_ids: Sequence[str]) -> None:
+        """Mark terminally-``failed`` units as folded so the sweep skips them.
+
+        Sets :data:`FOLDED_PAYLOAD_KEY` on each still-``failed`` unit; only units
+        currently in ``failed`` are touched so a since-recreated unit with the
+        same id is never marked.
+        """
+
+        ids = list(work_unit_ids)
+        if not ids:
+            return
+        async with session_scope(self._session_factory) as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(WorkAssignment).where(
+                            WorkAssignment.work_unit_id.in_(ids),
+                            WorkAssignment.status == WorkAssignmentStatus.FAILED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for row in rows:
+                payload = dict(row.payload or {})
+                payload[FOLDED_PAYLOAD_KEY] = True
+                row.payload = payload
 
     def _capability_matches(self, required: str, capabilities: set[str]) -> bool:
         return capability_matches(

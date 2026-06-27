@@ -32,6 +32,42 @@ _DEFAULT_HEARTBEAT_INTERVAL = 60
 
 
 @dataclass(frozen=True)
+class BackoffPolicy:
+    """Bounded exponential backoff for transient master/coordination failures.
+
+    The delay grows geometrically with the number of consecutive failures and is
+    capped at ``max_seconds`` so the agent retries a briefly-unavailable master
+    without either giving up or busy-looping (architecture.md sec 2.2).
+    """
+
+    initial_seconds: float = 1.0
+    max_seconds: float = 60.0
+    multiplier: float = 2.0
+
+    def delay(self, consecutive_failures: int) -> float:
+        """Backoff delay after ``consecutive_failures`` failures (>=1)."""
+
+        if consecutive_failures <= 0:
+            return 0.0
+        raw = self.initial_seconds * (self.multiplier ** (consecutive_failures - 1))
+        return min(self.max_seconds, max(0.0, raw))
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """Whether a coordination failure is worth retrying with backoff.
+
+    Transport errors (no status code) and ``429``/``5xx`` master responses are
+    transient; a ``4xx`` (e.g. ``403`` ineligible, ``404`` not registered,
+    ``401`` auth) is a permanent client error that should fail fast.
+    """
+
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        return True
+    return status_code == 429 or status_code >= 500
+
+
+@dataclass(frozen=True)
 class AgentCycleSummary:
     """Counts from one assignment-processing pass."""
 
@@ -55,6 +91,7 @@ class ValidatorAgent:
         heartbeat_interval_seconds: int | None = None,
         poll_interval_seconds: float = 5.0,
         last_seen_meta_factory: Callable[[], Mapping[str, Any]] | None = None,
+        backoff: BackoffPolicy | None = None,
     ) -> None:
         self._client = client
         self._executor = executor
@@ -65,6 +102,7 @@ class ValidatorAgent:
         self._configured_interval = heartbeat_interval_seconds
         self._poll_interval = poll_interval_seconds
         self._last_seen_meta_factory = last_seen_meta_factory
+        self._backoff = backoff or BackoffPolicy()
         self._registered_interval: int | None = None
 
     @property
@@ -77,16 +115,41 @@ class ValidatorAgent:
             return self._configured_interval
         return self._registered_interval or _DEFAULT_HEARTBEAT_INTERVAL
 
-    async def register(self) -> int:
-        """Register (idempotent upsert) and resolve the heartbeat interval."""
+    async def register(self, shutdown_event: asyncio.Event | None = None) -> int:
+        """Register (idempotent upsert) and resolve the heartbeat interval.
 
-        response = await self._client.register(
-            capabilities=self._capabilities,
-            version=self._version,
-            last_seen_meta=self._meta(),
-        )
-        self._registered_interval = response.heartbeat_interval_seconds
-        return self.heartbeat_interval
+        Transient master failures (transport errors / ``429``/``5xx``) are
+        retried with bounded exponential backoff so a briefly-unavailable master
+        at startup does not crash the agent; a permanent error (``4xx``, e.g.
+        ineligible hotkey) fails fast. A set ``shutdown_event`` aborts the retry
+        loop (re-raising the last error).
+        """
+
+        failures = 0
+        while True:
+            try:
+                response = await self._client.register(
+                    capabilities=self._capabilities,
+                    version=self._version,
+                    last_seen_meta=self._meta(),
+                )
+            except Exception as exc:
+                if not _is_transient_error(exc):
+                    raise
+                failures += 1
+                delay = self._backoff.delay(failures)
+                logger.warning(
+                    "validator agent register attempt %d failed (%s); "
+                    "retrying in %.1fs",
+                    failures,
+                    exc,
+                    delay,
+                )
+                if not await self._backoff_sleep(shutdown_event, delay):
+                    raise
+                continue
+            self._registered_interval = response.heartbeat_interval_seconds
+            return self.heartbeat_interval
 
     async def heartbeat_once(self) -> None:
         await self._client.heartbeat(last_seen_meta=self._meta())
@@ -109,24 +172,34 @@ class ValidatorAgent:
         )
 
     async def run_heartbeat_loop(self, shutdown_event: asyncio.Event) -> None:
+        failures = 0
         while not shutdown_event.is_set():
             try:
                 await self.heartbeat_once()
+                failures = 0
             except Exception:
+                failures += 1
                 logger.exception("validator agent heartbeat failed")
-            await self._sleep_until(shutdown_event, self.heartbeat_interval)
+            delay = (
+                self._backoff.delay(failures) if failures else self.heartbeat_interval
+            )
+            await self._sleep_until(shutdown_event, delay)
 
     async def run_assignment_loop(self, shutdown_event: asyncio.Event) -> None:
+        failures = 0
         while not shutdown_event.is_set():
             try:
                 await self.process_pending_assignments()
+                failures = 0
             except Exception:
+                failures += 1
                 logger.exception("validator agent assignment pass failed")
-            await self._sleep_until(shutdown_event, self._poll_interval)
+            delay = self._backoff.delay(failures) if failures else self._poll_interval
+            await self._sleep_until(shutdown_event, delay)
 
     async def run_forever(self, shutdown_event: asyncio.Event | None = None) -> None:
         shutdown_event = shutdown_event or asyncio.Event()
-        await self.register()
+        await self.register(shutdown_event)
         await asyncio.gather(
             self.run_heartbeat_loop(shutdown_event),
             self.run_assignment_loop(shutdown_event),
@@ -188,5 +261,27 @@ class ValidatorAgent:
         except TimeoutError:
             return
 
+    @staticmethod
+    async def _backoff_sleep(
+        shutdown_event: asyncio.Event | None, seconds: float
+    ) -> bool:
+        """Sleep ``seconds``; return ``False`` if shutdown fired during the wait."""
 
-__all__ = ["AgentCycleSummary", "ExecutionResult", "ValidatorAgent"]
+        if shutdown_event is None:
+            await asyncio.sleep(seconds)
+            return True
+        if shutdown_event.is_set():
+            return False
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=seconds)
+        except TimeoutError:
+            return True
+        return False
+
+
+__all__ = [
+    "AgentCycleSummary",
+    "BackoffPolicy",
+    "ExecutionResult",
+    "ValidatorAgent",
+]

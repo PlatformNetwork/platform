@@ -107,6 +107,54 @@ async def test_broker_executor_dispatches_run_spec_with_gateway_env(
     assert "DEEPSEEK_API_KEY" not in spec.env
 
 
+class _LeakingDockerExecutor:
+    """Fake broker executor whose container echoes the gateway token."""
+
+    last: _LeakingDockerExecutor | None = None
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        _LeakingDockerExecutor.last = self
+
+    def run(self, spec: Any, timeout_seconds: int) -> DockerRunResult:
+        token = spec.env["BASE_GATEWAY_TOKEN"]
+        return DockerRunResult(
+            container_name="c1",
+            stdout=f"using token {token} to call gateway",
+            stderr=f"error with auth header Bearer {token}",
+            returncode=0,
+        )
+
+
+async def test_broker_executor_redacts_gateway_token_from_captured_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(executor_module, "DockerExecutor", _LeakingDockerExecutor)
+    secret_token = "scoped-gateway-token-abc123"
+    assignment = _assignment({"run_spec": {"image": "img:1", "command": ["run"]}})
+    context = AssignmentContext(
+        assignment=assignment,
+        gateway_env={
+            "BASE_GATEWAY_TOKEN": secret_token,
+            "DEEPSEEK_BASE_URL": "http://master/llm/deepseek",
+        },
+        broker=BrokerConfig(broker_url="http://127.0.0.1:8082"),
+    )
+
+    async def _noop_progress(**_: Any) -> None:
+        return None
+
+    result = await BrokerAssignmentExecutor().execute(context, progress=_noop_progress)
+
+    # The container surfaced the token, but it is redacted from captured output.
+    assert secret_token not in result.payload["stdout"]
+    assert secret_token not in result.payload["stderr"]
+    assert "[REDACTED_GATEWAY_TOKEN]" in result.payload["stdout"]
+    assert "[REDACTED_GATEWAY_TOKEN]" in result.payload["stderr"]
+    # Non-secret content is preserved.
+    assert "to call gateway" in result.payload["stdout"]
+
+
 async def test_broker_executor_gpu_capability_requests_gpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -15,7 +15,7 @@ defensively.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -35,6 +35,10 @@ from base.schemas.assignment import AssignmentView
 GATEWAY_TOKEN_PAYLOAD_KEY = "gateway_token"
 #: Assignment-payload key carrying the generic Docker run descriptor.
 RUN_SPEC_PAYLOAD_KEY = "run_spec"
+
+#: Placeholder substituted for the scoped gateway token in captured container
+#: output so the short-lived token is never surfaced via stdout/stderr or logs.
+GATEWAY_TOKEN_REDACTION = "[REDACTED_GATEWAY_TOKEN]"
 
 #: Provider-key env vars that must never reach an eval container on a validator.
 _PROVIDER_KEY_ENV = frozenset(
@@ -142,16 +146,36 @@ class BrokerAssignmentExecutor:
         spec = _build_run_spec(context)
         executor = context.broker.docker_executor(context.assignment.challenge_slug)
         result = await asyncio.to_thread(executor.run, spec, self._run_timeout)
+        secrets = _gateway_secrets(context.gateway_env)
         return ExecutionResult(
             success=result.returncode == 0,
             payload={
                 "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": _redact_secrets(result.stdout, secrets),
+                "stderr": _redact_secrets(result.stderr, secrets),
                 "container_name": result.container_name,
                 "timed_out": result.timed_out,
             },
         )
+
+
+def _gateway_secrets(gateway_env: Mapping[str, str]) -> tuple[str, ...]:
+    """Collect the scoped gateway token from the gateway env for redaction."""
+
+    token = gateway_env.get(GATEWAY_TOKEN_ENV)
+    return (token,) if token else ()
+
+
+def _redact_secrets(text: str | None, secrets: Iterable[str]) -> str | None:
+    """Replace each secret occurrence in captured output with a placeholder."""
+
+    if not text:
+        return text
+    redacted = text
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, GATEWAY_TOKEN_REDACTION)
+    return redacted
 
 
 def _build_run_spec(context: AssignmentContext) -> DockerRunSpec:

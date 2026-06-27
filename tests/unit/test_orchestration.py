@@ -386,6 +386,59 @@ async def test_fold_trigger_failure_does_not_crash_pass() -> None:
         await engine.dispose()
 
 
+async def test_failed_fold_is_durably_retried_on_a_later_pass() -> None:
+    engine, factory = await _setup()
+    try:
+        service = AssignmentService(factory, now_fn=lambda: NOW, default_max_attempts=1)
+        validators = ValidatorCoordinationService(factory, now_fn=lambda: NOW)
+        await _add_validator(factory, "v1", ["cpu"])
+        source = FakeWorkSource(
+            works=[
+                ChallengePendingWork(
+                    challenge_slug="agent-challenge",
+                    submission_id="7",
+                    submission_ref="hk",
+                    task_ids=("t1",),
+                    job_id="job-abc",
+                )
+            ]
+        )
+        # The challenge is unreachable (fold POST fails) during the first attempt.
+        fold = FakeFoldTrigger(raises=True)
+        driver = MasterOrchestrationDriver(
+            assignment_service=service,
+            validator_service=validators,
+            work_source=source,
+            fold_trigger=fold,
+            seed=1,
+        )
+
+        # Pass 1: bridge + assign (attempt 1, max 1).
+        await driver.run_once()
+
+        # v1 crashes; pass 2 fails the unit, but the fold POST fails (outage).
+        await _set_status(factory, "v1", ValidatorStatus.OFFLINE)
+        second = await driver.run_once()
+        assert second.reassignment.failed == ["7:t1"]
+        assert second.folded == []  # fold attempted but the challenge was down
+        assert len(fold.calls) == 1
+
+        # The challenge recovers. A later pass durably re-folds the still-failed
+        # unit even though it did NOT newly fail this pass.
+        fold.raises = False
+        third = await driver.run_once()
+        assert third.reassignment.failed == []  # not newly failed this pass
+        assert third.folded == ["7:t1"]
+        assert len(fold.calls) == 2
+
+        # Once folded, the sweep does not fold it again.
+        fourth = await driver.run_once()
+        assert fourth.folded == []
+        assert len(fold.calls) == 2
+    finally:
+        await engine.dispose()
+
+
 async def test_prism_failed_unit_is_not_folded() -> None:
     engine, factory = await _setup()
     try:

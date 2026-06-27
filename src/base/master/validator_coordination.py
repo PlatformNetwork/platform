@@ -205,7 +205,9 @@ class ValidatorCoordinationService:
                 )
             return validator, now
 
-    async def detect_offline_validators(self) -> list[str]:
+    async def detect_offline_validators(
+        self, *, session: AsyncSession | None = None
+    ) -> list[str]:
         """Mark validators offline whose last heartbeat exceeded the timeout.
 
         Edge-triggered: only validators currently ``online`` are considered, so
@@ -213,39 +215,48 @@ class ValidatorCoordinationService:
         ``online``->``offline`` transition appends a single ``crash_detected``
         event. Returns the hotkeys that transitioned this pass so callers (e.g.
         assignment reassignment) can react to crashes.
+
+        When ``session`` is provided the detection runs inside the caller's
+        transaction (so the full reassignment pass can be one atomic
+        transaction); otherwise a fresh transaction is opened and committed here.
         """
 
         now = self._now_fn()
+        if session is not None:
+            return await self._detect_offline_in_session(session, now)
+        async with session_scope(self._session_factory) as own_session:
+            return await self._detect_offline_in_session(own_session, now)
+
+    async def _detect_offline_in_session(
+        self, session: AsyncSession, now: datetime
+    ) -> list[str]:
         timeout = timedelta(seconds=self.heartbeat_timeout_seconds)
         transitioned: list[str] = []
-        async with session_scope(self._session_factory) as session:
-            rows = (
-                (
-                    await session.execute(
-                        select(Validator).where(
-                            Validator.status == ValidatorStatus.ONLINE
-                        )
-                    )
+        rows = (
+            (
+                await session.execute(
+                    select(Validator).where(Validator.status == ValidatorStatus.ONLINE)
                 )
-                .scalars()
-                .all()
             )
-            for validator in rows:
-                last_heartbeat = validator.last_heartbeat_at
-                if last_heartbeat is None:
-                    continue
-                if last_heartbeat.tzinfo is None:
-                    last_heartbeat = last_heartbeat.replace(tzinfo=UTC)
-                if now - last_heartbeat > timeout:
-                    validator.status = ValidatorStatus.OFFLINE
-                    await self._add_event(
-                        session,
-                        validator.hotkey,
-                        ValidatorHealthEventType.CRASH_DETECTED,
-                        now,
-                        message="heartbeat timeout",
-                    )
-                    transitioned.append(validator.hotkey)
+            .scalars()
+            .all()
+        )
+        for validator in rows:
+            last_heartbeat = validator.last_heartbeat_at
+            if last_heartbeat is None:
+                continue
+            if last_heartbeat.tzinfo is None:
+                last_heartbeat = last_heartbeat.replace(tzinfo=UTC)
+            if now - last_heartbeat > timeout:
+                validator.status = ValidatorStatus.OFFLINE
+                await self._add_event(
+                    session,
+                    validator.hotkey,
+                    ValidatorHealthEventType.CRASH_DETECTED,
+                    now,
+                    message="heartbeat timeout",
+                )
+                transitioned.append(validator.hotkey)
         return transitioned
 
     async def list_validators(self) -> list[Validator]:

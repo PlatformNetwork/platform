@@ -22,7 +22,11 @@ from base.validator.agent.executor import (
     ExecutionResult,
     gateway_env_for_assignment,
 )
-from base.validator.agent.runtime import AgentCycleSummary, ValidatorAgent
+from base.validator.agent.runtime import (
+    AgentCycleSummary,
+    BackoffPolicy,
+    ValidatorAgent,
+)
 from base.validator.agent.signing import (
     KeypairRequestSigner,
     RequestSigner,
@@ -36,6 +40,7 @@ __all__ = [
     "AssignmentContext",
     "AssignmentExecutionError",
     "AssignmentExecutor",
+    "BackoffPolicy",
     "BrokerAssignmentExecutor",
     "BrokerConfig",
     "CoordinationClient",

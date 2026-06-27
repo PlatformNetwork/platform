@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from base.db import (
@@ -359,5 +360,62 @@ async def test_run_reassignment_pass_detects_crash_and_reassigns() -> None:
         assert all(r.status == WorkAssignmentStatus.ASSIGNED for r in rows)
         assert all(r.assigned_validator_hotkey == "v2" for r in rows)
         assert all(r.attempt_count == 2 for r in rows)
+    finally:
+        await engine.dispose()
+
+
+# The full pass (detect -> reclaim -> assign) is one atomic transaction.
+async def test_run_reassignment_pass_rolls_back_atomically_on_failure() -> None:
+    engine, factory = await _setup()
+    try:
+        assignment_service = AssignmentService(factory, now_fn=lambda: LATER)
+        validator_service = ValidatorCoordinationService(
+            factory, heartbeat_timeout_seconds=180, now_fn=lambda: LATER
+        )
+        # v1 is stale (heartbeat at NOW, evaluated at LATER) and holds running work.
+        await _add_validator(factory, "v1", ["cpu"], last_heartbeat_at=NOW)
+        await assignment_service.create_agent_challenge_work_units(
+            submission_id="sub-1", submission_ref="hk", task_ids=["a"]
+        )
+        await assignment_service.assign_pending(seed=1)
+        coordination = AssignmentCoordinationService(factory, now_fn=lambda: NOW)
+        await coordination.pull(hotkey="v1")  # assigned -> running
+
+        # The assign step blows up mid-pass; the whole transaction must roll back.
+        async def _boom(**_: object) -> dict[str, str]:
+            raise RuntimeError("assign failed")
+
+        assignment_service.assign_pending = _boom  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError):
+            await run_reassignment_pass(
+                validator_service=validator_service,
+                assignment_service=assignment_service,
+                seed=1,
+            )
+
+        # Detect's offline flip and reclaim's revert both rolled back.
+        async with factory() as session:
+            v1 = (
+                await session.execute(select(Validator).where(Validator.hotkey == "v1"))
+            ).scalar_one()
+            assert v1.status == ValidatorStatus.ONLINE
+            crash_events = (
+                (
+                    await session.execute(
+                        select(ValidatorHealthEvent).where(
+                            ValidatorHealthEvent.validator_hotkey == "v1",
+                            ValidatorHealthEvent.event
+                            == ValidatorHealthEventType.CRASH_DETECTED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert crash_events == []
+        row = await _one(factory)
+        assert row.status == WorkAssignmentStatus.RUNNING
+        assert row.assigned_validator_hotkey == "v1"
     finally:
         await engine.dispose()
