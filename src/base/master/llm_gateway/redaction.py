@@ -10,10 +10,41 @@ on the forward path cannot leak an injected key.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 #: Replacement written in place of any redacted secret substring.
 REDACTION_PLACEHOLDER = "[REDACTED]"
+
+#: Per-context (per-request) secrets, unioned with a filter's static secrets.
+#: Used for short-lived material (e.g. a scoped gateway token) so it is redacted
+#: while in scope without permanently growing any filter's secret set.
+_context_secrets: ContextVar[frozenset[str]] = ContextVar(
+    "llm_gateway_context_secrets", default=frozenset()
+)
+
+
+@contextmanager
+def redact_in_context(*secrets: str | None) -> Iterator[None]:
+    """Register ``secrets`` for redaction for the duration of the context.
+
+    Unlike :func:`install_secret_redaction`, these secrets are scoped to the
+    current execution context (and therefore the current request) and removed
+    on exit, so short-lived per-request material (e.g. a scoped gateway token)
+    is redacted from any log emitted by a :class:`SecretRedactingFilter` while
+    it is in scope, without permanently growing the filter's secret set.
+    """
+
+    cleaned = frozenset(secret for secret in secrets if secret)
+    if not cleaned:
+        yield
+        return
+    reset_token = _context_secrets.set(_context_secrets.get() | cleaned)
+    try:
+        yield
+    finally:
+        _context_secrets.reset(reset_token)
 
 
 def redact_secrets(text: str, secrets: Iterable[str]) -> str:
@@ -45,20 +76,21 @@ class SecretRedactingFilter(logging.Filter):
         self._secrets.update(secret for secret in secrets if secret)
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not self._secrets:
+        secrets = self._secrets | _context_secrets.get()
+        if not secrets:
             return True
         try:
             message = record.getMessage()
         except Exception:  # pragma: no cover - defensive: malformed log args
             message = str(record.msg)
-        record.msg = redact_secrets(message, self._secrets)
+        record.msg = redact_secrets(message, secrets)
         record.args = None
         if record.exc_info and record.exc_info != (None, None, None):
             formatted = logging.Formatter().formatException(record.exc_info)
-            record.exc_text = redact_secrets(formatted, self._secrets)
+            record.exc_text = redact_secrets(formatted, secrets)
             record.exc_info = None
         elif record.exc_text:
-            record.exc_text = redact_secrets(record.exc_text, self._secrets)
+            record.exc_text = redact_secrets(record.exc_text, secrets)
         return True
 
 

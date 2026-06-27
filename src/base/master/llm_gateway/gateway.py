@@ -27,7 +27,11 @@ from base.master.llm_gateway.providers import (
     ProviderResponse,
     build_providers,
 )
-from base.master.llm_gateway.redaction import install_secret_redaction, redact_secrets
+from base.master.llm_gateway.redaction import (
+    install_secret_redaction,
+    redact_in_context,
+    redact_secrets,
+)
 from base.master.llm_gateway.tokens import (
     GatewayTokenAuthority,
     GatewayTokenClaims,
@@ -56,6 +60,14 @@ GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 #: Optional cross-check headers declaring the scope a call is attributed to.
 GATEWAY_VALIDATOR_HEADER = "X-Gateway-Validator"
 GATEWAY_ASSIGNMENT_HEADER = "X-Gateway-Assignment"
+
+#: Controlled, non-leaking detail strings for surfaced upstream failures. Both
+#: the upstream-5xx and upstream-exception paths share ``UPSTREAM_ERROR_DETAIL``
+#: so a server-side failure looks identical to the caller regardless of how it
+#: arose (no upstream body/headers are ever relayed).
+UPSTREAM_ERROR_DETAIL = "upstream provider error"
+UPSTREAM_RATE_LIMITED_DETAIL = "upstream rate limited"
+UPSTREAM_REJECTED_DETAIL = "upstream rejected request"
 
 #: Consumption contract: eval runtimes point these env vars at the gateway and
 #: pass a scoped token; the master injects the real provider credential. The raw
@@ -379,6 +391,15 @@ def build_llm_gateway_router(*, service: LLMGatewayService) -> APIRouter:
 
     async def handle(provider: str, path: str, request: Request) -> Response:
         token = _extract_token(request.headers)
+        # Defensively register the per-request bearer token for redaction across
+        # the whole forward/log path: today headers are never logged, but if such
+        # logging is ever introduced the scoped token still cannot leak.
+        with redact_in_context(token):
+            return await _handle_call(provider, path, request, token)
+
+    async def _handle_call(
+        provider: str, path: str, request: Request, token: str | None
+    ) -> Response:
         try:
             call = service.authenticate(
                 provider=provider,
@@ -410,7 +431,7 @@ def build_llm_gateway_router(*, service: LLMGatewayService) -> APIRouter:
             return _error_response(exc.status_code, exc.detail)
         except Exception:
             logger.exception("llm gateway upstream forward failed")
-            return _error_response(502, "gateway upstream error")
+            return _error_response(502, UPSTREAM_ERROR_DETAIL)
 
         # An upstream error is surfaced as a controlled, non-leaking status; the
         # raw upstream body/headers are never relayed back to the caller.
@@ -454,14 +475,19 @@ def _error_response(status_code: int, detail: str) -> Response:
 def _surface_upstream_error(status_code: int) -> Response:
     """Map an upstream error status to a controlled, non-leaking response.
 
-    Rate limiting (429) is preserved so callers can back off; every other
-    upstream failure collapses to ``502`` so internal upstream details (and any
-    upstream auth header / body) are never relayed to the caller.
+    The upstream body and headers are never relayed; only a generic detail and a
+    controlled status are returned. Rate limiting (``429``) is preserved so
+    callers can back off. Any other caller-induced upstream ``4xx`` collapses to
+    a controlled ``400`` (so a bad request is distinguishable from a server-side
+    failure, improving debuggability without leaking secrets). Every ``5xx``
+    (and any non-4xx error) collapses to ``502``.
     """
 
     if status_code == 429:
-        return _error_response(429, "upstream rate limited")
-    return _error_response(502, "upstream provider error")
+        return _error_response(429, UPSTREAM_RATE_LIMITED_DETAIL)
+    if 400 <= status_code < 500:
+        return _error_response(400, UPSTREAM_REJECTED_DETAIL)
+    return _error_response(502, UPSTREAM_ERROR_DETAIL)
 
 
 __all__ = [
@@ -476,6 +502,9 @@ __all__ = [
     "OPENROUTER_BASE_URL",
     "OPENROUTER_BASE_URL_ENV",
     "OPENROUTER_PROVIDER",
+    "UPSTREAM_ERROR_DETAIL",
+    "UPSTREAM_RATE_LIMITED_DETAIL",
+    "UPSTREAM_REJECTED_DETAIL",
     "AuthenticatedCall",
     "GatewayAssignmentInactiveError",
     "GatewayError",

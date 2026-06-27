@@ -40,6 +40,7 @@ from base.master.llm_gateway.redaction import (
     REDACTION_PLACEHOLDER,
     SecretRedactingFilter,
     install_secret_redaction,
+    redact_in_context,
     redact_secrets,
 )
 from base.master.llm_gateway.tokens import (
@@ -105,5 +106,6 @@ __all__ = [
     "compose_provider_url",
     "install_secret_redaction",
     "parse_usage",
+    "redact_in_context",
     "redact_secrets",
 ]
