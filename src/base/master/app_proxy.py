@@ -33,6 +33,10 @@ from base.master.llm_gateway import (
     LLMGatewayService,
     build_llm_gateway_router,
 )
+from base.master.orchestration import (
+    MasterOrchestrationDriver,
+    build_master_orchestration_lifespan,
+)
 from base.master.registry import ChallengeNotFoundError
 from base.master.service import MasterWeightService
 from base.master.validator_coordination import (
@@ -278,6 +282,32 @@ async def _default_client_factory() -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
+Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
+
+
+def _combine_lifespans(*lifespans: Lifespan | None) -> Lifespan | None:
+    """Compose several FastAPI lifespans into one (entered in order).
+
+    ``None`` entries are ignored. Returns ``None`` when nothing is configured so
+    the app keeps its default (no-op) lifespan.
+    """
+
+    active = [lifespan for lifespan in lifespans if lifespan is not None]
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    @asynccontextmanager
+    async def combined(app: FastAPI) -> AsyncIterator[None]:
+        async with AsyncExitStack() as stack:
+            for lifespan in active:
+                await stack.enter_async_context(lifespan(app))
+            yield
+
+    return combined
+
+
 def create_proxy_app(
     *,
     registry: Any,
@@ -304,6 +334,8 @@ def create_proxy_app(
     validator_health_interval_seconds: float | None = None,
     assignment_coordination_service: AssignmentCoordinationService | None = None,
     llm_gateway_service: LLMGatewayService | None = None,
+    orchestration_driver: MasterOrchestrationDriver | None = None,
+    orchestration_interval_seconds: float | None = None,
 ) -> FastAPI:
     """Create the public proxy FastAPI app.
 
@@ -318,8 +350,13 @@ def create_proxy_app(
     app = FastAPI(
         title="BASE Challenge Proxy",
         version="1.0",
-        lifespan=build_validator_health_lifespan(
-            validator_service, validator_health_interval_seconds
+        lifespan=_combine_lifespans(
+            build_validator_health_lifespan(
+                validator_service, validator_health_interval_seconds
+            ),
+            build_master_orchestration_lifespan(
+                orchestration_driver, orchestration_interval_seconds
+            ),
         ),
     )
     challenge_registry = registry
@@ -599,6 +636,9 @@ def create_proxy_app(
     if llm_gateway_service is not None:
         app.include_router(build_llm_gateway_router(service=llm_gateway_service))
         app.state.llm_gateway_service = llm_gateway_service
+
+    if orchestration_driver is not None:
+        app.state.orchestration_driver = orchestration_driver
 
     app.state.challenge_registry = challenge_registry
     app.state.miner_upload_verifier = verifier

@@ -11,7 +11,7 @@ a unit with no eligible validator stays ``pending`` (it is never lost).
 from __future__ import annotations
 
 import random
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -58,6 +58,21 @@ class ReclaimOutcome:
 
     reverted: list[str]
     failed: list[str]
+
+
+@dataclass(frozen=True)
+class FailedWorkUnit:
+    """Detached descriptor of a terminally-``failed`` work unit.
+
+    Carries the challenge slug, work-unit id, and the unit's payload (e.g. the
+    agent-challenge ``job_id``/``task_id``) so the orchestration driver can fold
+    the permanently-failed unit on the challenge side without holding an ORM row
+    across a session boundary.
+    """
+
+    challenge_slug: str
+    work_unit_id: str
+    payload: dict[str, Any]
 
 
 def capability_matches(
@@ -375,6 +390,42 @@ class AssignmentService:
                 reverted.append(unit.work_unit_id)
 
         return ReclaimOutcome(reverted=reverted, failed=failed)
+
+    async def get_failed_work_units(
+        self, work_unit_ids: Sequence[str]
+    ) -> list[FailedWorkUnit]:
+        """Return detached descriptors for terminally-``failed`` work units.
+
+        Used by the orchestration driver to fold permanently-failed
+        (retry-exhausted) units on the challenge side. Only rows currently in
+        ``failed`` are returned, so a since-recreated/reassigned unit with the
+        same id is never mistaken for a failure.
+        """
+
+        ids = list(work_unit_ids)
+        if not ids:
+            return []
+        async with session_scope(self._session_factory) as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(WorkAssignment).where(
+                            WorkAssignment.work_unit_id.in_(ids),
+                            WorkAssignment.status == WorkAssignmentStatus.FAILED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                FailedWorkUnit(
+                    challenge_slug=row.challenge_slug,
+                    work_unit_id=row.work_unit_id,
+                    payload=dict(row.payload or {}),
+                )
+                for row in rows
+            ]
 
     def _capability_matches(self, required: str, capabilities: set[str]) -> bool:
         return capability_matches(

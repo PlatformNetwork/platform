@@ -21,11 +21,16 @@ from base.config import load_settings
 from base.config.policy import production_policy_enabled_for_settings
 from base.db.session import create_engine, create_session_factory
 from base.master.app_proxy import create_proxy_app
+from base.master.assignment import AssignmentService
 from base.master.assignment_coordination import (
     AssignmentCoordinationService,
     WorkAssignmentLifecycleResolver,
 )
 from base.master.challenge_client import ChallengeClient
+from base.master.challenge_work_source import (
+    HttpChallengeFoldTrigger,
+    HttpChallengeWorkSource,
+)
 from base.master.docker_broker import create_docker_broker_app
 from base.master.docker_orchestrator import (
     DEFAULT_SECRET_MOUNT_DIR,
@@ -40,6 +45,7 @@ from base.master.llm_gateway import (
     SqlAlchemyUsageRecorder,
     build_llm_gateway_service,
 )
+from base.master.orchestration import MasterOrchestrationDriver
 from base.master.registry import (
     ChallengeNotFoundError,
     DatabaseChallengeRegistry,
@@ -280,6 +286,38 @@ def _assignment_coordination_service(
     return AssignmentCoordinationService(
         session_factory,
         lease_seconds=settings.master.assignment_lease_seconds,
+    )
+
+
+def _master_orchestration_driver(
+    settings: Any,
+    session_factory: Any,
+    registry: Any,
+    validator_service: ValidatorCoordinationService,
+) -> MasterOrchestrationDriver:
+    """Build the live master orchestration driver (architecture.md sec 4).
+
+    Bridges each challenge's HTTP-exposed pending work units into
+    ``work_assignments``, runs the balanced assignment + full reassignment pass,
+    and folds retry-exhausted units back into their EvaluationJob via the
+    challenge fold route.
+    """
+
+    assignment_service = AssignmentService(session_factory)
+    return MasterOrchestrationDriver(
+        assignment_service=assignment_service,
+        validator_service=validator_service,
+        work_source=HttpChallengeWorkSource(
+            registry,
+            timeout_seconds=settings.master.challenge_timeout_seconds,
+            retries=settings.master.challenge_retries,
+        ),
+        fold_trigger=HttpChallengeFoldTrigger(
+            registry,
+            timeout_seconds=settings.master.challenge_timeout_seconds,
+            retries=settings.master.challenge_retries,
+        ),
+        seed=settings.master.orchestration_seed,
     )
 
 
@@ -654,6 +692,12 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
     )
     assignment_service = _assignment_coordination_service(settings, session_factory)
     llm_gateway_service = _llm_gateway_service(settings, session_factory)
+    # Live autonomy: the orchestration driver bridges challenge pending work into
+    # work_assignments, runs balanced assignment + the full reassignment pass,
+    # and folds retry-exhausted units, all on a Settings-driven interval.
+    orchestration_driver = _master_orchestration_driver(
+        settings, session_factory, registry, validator_service
+    )
     proxy = create_proxy_app(
         registry=registry,
         metagraph_cache=runtime.metagraph_cache,
@@ -679,6 +723,8 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
         ),
         assignment_coordination_service=assignment_service,
         llm_gateway_service=llm_gateway_service,
+        orchestration_driver=orchestration_driver,
+        orchestration_interval_seconds=(settings.master.orchestration_interval_seconds),
     )
     endpoint = f"{settings.master.proxy_host}:{settings.master.proxy_port}"
     typer.echo(f"Starting proxy API on {endpoint}")

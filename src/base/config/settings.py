@@ -47,6 +47,14 @@ class MasterSettings(BaseModel):
     validator_signature_ttl_seconds: int = 300
     validator_nonce_ttl_seconds: int = 86_400
     assignment_lease_seconds: int = 900
+    # Master orchestration driver (architecture.md sec 4): the live loop that
+    # bridges challenge pending work units into ``work_assignments``, runs the
+    # balanced ``assign_pending`` engine + the full reassignment pass, and folds
+    # retry-exhausted units on the challenge side. Runs every
+    # ``orchestration_interval_seconds`` (<=0 disables it). ``orchestration_seed``
+    # makes the balanced tie-breaking reproducible when set.
+    orchestration_interval_seconds: float = 30.0
+    orchestration_seed: int | None = None
 
 
 class ValidatorAgentSettings(BaseModel):
