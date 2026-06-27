@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Request, Response
 
+from base.master.llm_gateway.lifecycle import AssignmentLifecycleResolver
 from base.master.llm_gateway.providers import (
     DEEPSEEK_BASE_URL,
     OPENROUTER_BASE_URL,
@@ -26,6 +27,7 @@ from base.master.llm_gateway.providers import (
     ProviderResponse,
     build_providers,
 )
+from base.master.llm_gateway.redaction import install_secret_redaction, redact_secrets
 from base.master.llm_gateway.tokens import (
     GatewayTokenAuthority,
     GatewayTokenClaims,
@@ -33,6 +35,12 @@ from base.master.llm_gateway.tokens import (
     GatewayTokenExpired,
     GatewayTokenInvalid,
     GatewayTokenScopeError,
+)
+from base.master.llm_gateway.usage import (
+    NullUsageRecorder,
+    UsageRecord,
+    UsageRecorder,
+    parse_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +102,10 @@ class ModelNotAllowedError(GatewayError):
         super().__init__(400, "model not allowed for this provider")
 
 
+class GatewayAssignmentInactiveError(GatewayTokenError):
+    """Token's assignment is completed/failed/reassigned (maps to HTTP 403)."""
+
+
 @dataclass(frozen=True)
 class AuthenticatedCall:
     """A token-verified gateway call ready to forward."""
@@ -112,6 +124,8 @@ class LLMGatewayService:
         api_keys: Mapping[str, str],
         token_authority: GatewayTokenAuthority,
         enforced_models: Mapping[str, str] | None = None,
+        usage_recorder: UsageRecorder | None = None,
+        assignment_resolver: AssignmentLifecycleResolver | None = None,
     ) -> None:
         self._providers = dict(providers)
         self._api_keys = dict(api_keys)
@@ -119,10 +133,17 @@ class LLMGatewayService:
         self._enforced_models = dict(
             enforced_models or {DEEPSEEK_PROVIDER: DEEPSEEK_REQUIRED_MODEL}
         )
+        self._usage_recorder: UsageRecorder = usage_recorder or NullUsageRecorder()
+        self._assignment_resolver = assignment_resolver
+        # Guarantee the injected provider keys are scrubbed from any gateway log.
+        install_secret_redaction(self._api_keys.values(), logger=logger)
 
     @property
     def token_authority(self) -> GatewayTokenAuthority:
         return self._token_authority
+
+    def _redact(self, text: str) -> str:
+        return redact_secrets(text, self._api_keys.values())
 
     def provider(self, name: str) -> LLMProvider:
         try:
@@ -155,6 +176,55 @@ class LLMGatewayService:
             expected_assignment=expected_assignment,
         )
         return AuthenticatedCall(provider=provider, claims=claims)
+
+    async def ensure_assignment_active(self, claims: GatewayTokenClaims) -> None:
+        """Reject a token whose assignment is no longer active (VAL-LLM-023).
+
+        A no-op when no resolver is configured (the token is then bound only by
+        signature, expiry, and scope). Raises before any provider call so a
+        terminated/reassigned assignment never reaches an upstream provider.
+        """
+
+        if self._assignment_resolver is None:
+            return
+        active = await self._assignment_resolver.is_active(
+            validator_hotkey=claims.validator_hotkey,
+            assignment_id=claims.assignment_id,
+        )
+        if not active:
+            raise GatewayAssignmentInactiveError("assignment is no longer active")
+
+    async def record_usage(
+        self,
+        *,
+        claims: GatewayTokenClaims,
+        provider: str,
+        request_body: bytes,
+        response: ProviderResponse,
+    ) -> None:
+        """Meter a successful call, keyed by ``(validator, assignment)``.
+
+        Best-effort: a metering failure is logged (redacted) and never breaks
+        the proxied response. No secret material is recorded.
+        """
+
+        prompt_tokens, completion_tokens, total_tokens = parse_usage(response.body)
+        record = UsageRecord(
+            validator_hotkey=claims.validator_hotkey,
+            assignment_id=claims.assignment_id,
+            provider=provider,
+            model=_extract_model(request_body),
+            status_code=response.status_code,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+        try:
+            await self._usage_recorder.record(record)
+        except Exception as exc:
+            logger.error(
+                "llm gateway usage metering failed: %s", self._redact(str(exc))
+            )
 
     def _enforce_model(self, provider: str, body: bytes) -> None:
         required = self._enforced_models.get(provider)
@@ -221,6 +291,8 @@ def build_llm_gateway_service(
     token_secret: str,
     provider_config: ProviderConfig | None = None,
     token_ttl_seconds: int = 3_600,
+    usage_recorder: UsageRecorder | None = None,
+    assignment_resolver: AssignmentLifecycleResolver | None = None,
 ) -> LLMGatewayService:
     """Construct the gateway service from config (provider mode + secrets)."""
 
@@ -234,6 +306,8 @@ def build_llm_gateway_service(
         token_authority=GatewayTokenAuthority(
             token_secret, default_ttl_seconds=token_ttl_seconds
         ),
+        usage_recorder=usage_recorder,
+        assignment_resolver=assignment_resolver,
     )
 
 
@@ -287,12 +361,15 @@ def build_llm_gateway_router(*, service: LLMGatewayService) -> APIRouter:
     async def handle(provider: str, path: str, request: Request) -> Response:
         token = _extract_token(request.headers)
         try:
-            service.authenticate(
+            call = service.authenticate(
                 provider=provider,
                 token=token,
                 expected_validator=_header(request.headers, GATEWAY_VALIDATOR_HEADER),
                 expected_assignment=_header(request.headers, GATEWAY_ASSIGNMENT_HEADER),
             )
+            await service.ensure_assignment_active(call.claims)
+        except GatewayAssignmentInactiveError:
+            return _error_response(403, "gateway token assignment is not active")
         except GatewayTokenScopeError:
             return _error_response(403, "gateway token scope mismatch")
         except (GatewayTokenExpired, GatewayTokenInvalid):
@@ -316,6 +393,17 @@ def build_llm_gateway_router(*, service: LLMGatewayService) -> APIRouter:
             logger.exception("llm gateway upstream forward failed")
             return _error_response(502, "gateway upstream error")
 
+        # An upstream error is surfaced as a controlled, non-leaking status; the
+        # raw upstream body/headers are never relayed back to the caller.
+        if upstream.status_code >= 400:
+            return _surface_upstream_error(upstream.status_code)
+
+        await service.record_usage(
+            claims=call.claims,
+            provider=provider,
+            request_body=body,
+            response=upstream,
+        )
         return Response(
             content=upstream.body,
             status_code=upstream.status_code,
@@ -344,6 +432,19 @@ def _error_response(status_code: int, detail: str) -> Response:
     )
 
 
+def _surface_upstream_error(status_code: int) -> Response:
+    """Map an upstream error status to a controlled, non-leaking response.
+
+    Rate limiting (429) is preserved so callers can back off; every other
+    upstream failure collapses to ``502`` so internal upstream details (and any
+    upstream auth header / body) are never relayed to the caller.
+    """
+
+    if status_code == 429:
+        return _error_response(429, "upstream rate limited")
+    return _error_response(502, "upstream provider error")
+
+
 __all__ = [
     "DEEPSEEK_BASE_URL",
     "DEEPSEEK_BASE_URL_ENV",
@@ -357,6 +458,7 @@ __all__ = [
     "OPENROUTER_BASE_URL_ENV",
     "OPENROUTER_PROVIDER",
     "AuthenticatedCall",
+    "GatewayAssignmentInactiveError",
     "GatewayError",
     "LLMGatewayService",
     "ModelNotAllowedError",

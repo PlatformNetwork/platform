@@ -501,6 +501,48 @@ class ValidatorRequestNonce(Base):
     )
 
 
+class LlmUsageRecord(Base):
+    """Per-(validator, assignment) accounting for master LLM gateway calls.
+
+    Records provider/model/usage for a successful gateway call so usage can be
+    attributed to the validator and assignment that consumed it. Stores NO
+    secret material (no provider key, no gateway token).
+    """
+
+    __tablename__ = "llm_usage_records"
+    __table_args__ = (
+        Index(
+            "ix_llm_usage_records_validator_assignment",
+            "validator_hotkey",
+            "assignment_id",
+        ),
+        Index("ix_llm_usage_records_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    assignment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    total_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class MinerRequestNonce(Base):
     """Replay protection for signed miner uploads accepted by the proxy."""
 

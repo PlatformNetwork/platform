@@ -8,14 +8,20 @@ from base.master.llm_gateway.gateway import (
     GATEWAY_TOKEN_ENV,
     GATEWAY_TOKEN_HEADER,
     GATEWAY_VALIDATOR_HEADER,
+    OPENROUTER_BASE_URL_ENV,
     OPENROUTER_PROVIDER,
     AuthenticatedCall,
+    GatewayAssignmentInactiveError,
     GatewayError,
     LLMGatewayService,
     ModelNotAllowedError,
     UnknownProviderError,
     build_llm_gateway_router,
     build_llm_gateway_service,
+)
+from base.master.llm_gateway.lifecycle import (
+    AssignmentLifecycleResolver,
+    InMemoryAssignmentResolver,
 )
 from base.master.llm_gateway.providers import (
     DEEPSEEK_BASE_URL,
@@ -30,6 +36,12 @@ from base.master.llm_gateway.providers import (
     build_providers,
     compose_provider_url,
 )
+from base.master.llm_gateway.redaction import (
+    REDACTION_PLACEHOLDER,
+    SecretRedactingFilter,
+    install_secret_redaction,
+    redact_secrets,
+)
 from base.master.llm_gateway.tokens import (
     GatewayTokenAuthority,
     GatewayTokenClaims,
@@ -37,6 +49,14 @@ from base.master.llm_gateway.tokens import (
     GatewayTokenExpired,
     GatewayTokenInvalid,
     GatewayTokenScopeError,
+)
+from base.master.llm_gateway.usage import (
+    InMemoryUsageRecorder,
+    NullUsageRecorder,
+    SqlAlchemyUsageRecorder,
+    UsageRecord,
+    UsageRecorder,
+    parse_usage,
 )
 
 __all__ = [
@@ -49,8 +69,12 @@ __all__ = [
     "GATEWAY_TOKEN_HEADER",
     "GATEWAY_VALIDATOR_HEADER",
     "OPENROUTER_BASE_URL",
+    "OPENROUTER_BASE_URL_ENV",
     "OPENROUTER_PROVIDER",
+    "REDACTION_PLACEHOLDER",
+    "AssignmentLifecycleResolver",
     "AuthenticatedCall",
+    "GatewayAssignmentInactiveError",
     "GatewayError",
     "GatewayTokenAuthority",
     "GatewayTokenClaims",
@@ -59,17 +83,27 @@ __all__ = [
     "GatewayTokenInvalid",
     "GatewayTokenScopeError",
     "HttpLLMProvider",
+    "InMemoryAssignmentResolver",
+    "InMemoryUsageRecorder",
     "LLMGatewayService",
     "LLMProvider",
     "MockLLMProvider",
     "ModelNotAllowedError",
+    "NullUsageRecorder",
     "ProviderConfig",
     "ProviderRequest",
     "ProviderResponse",
     "RecordedProviderRequest",
+    "SecretRedactingFilter",
+    "SqlAlchemyUsageRecorder",
     "UnknownProviderError",
+    "UsageRecord",
+    "UsageRecorder",
     "build_llm_gateway_router",
     "build_llm_gateway_service",
     "build_providers",
     "compose_provider_url",
+    "install_secret_redaction",
+    "parse_usage",
+    "redact_secrets",
 ]

@@ -26,6 +26,7 @@ APPLICATION_TABLES = (
     "validator_request_nonces",
     "validator_health_events",
     "validators",
+    "llm_usage_records",
     "challenges",
 )
 ENV_VAR_MESSAGE = "BASE_TEST_DATABASE_URL or BASE_DATABASE__URL"
