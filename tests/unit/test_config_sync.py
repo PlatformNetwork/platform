@@ -276,9 +276,10 @@ def test_swarm_defaults_preserve_contract_and_exclude_self() -> None:
     assert CONFIG_SYNC_INTERVAL_SECONDS == 60.0
     assert DEFAULT_CONFIG_TARGET_PATH == "/etc/base/master.yaml"
     assert DEFAULT_ROLLOUT_SERVICES == (
-        "base-proxy",
+        "base-master-proxy",
         "base-broker",
     )
+    assert "base-proxy" not in DEFAULT_ROLLOUT_SERVICES
     assert "base-admin" not in DEFAULT_ROLLOUT_SERVICES
     assert "base-config-sync" not in DEFAULT_ROLLOUT_SERVICES
     source = ConfigSyncSource.default()

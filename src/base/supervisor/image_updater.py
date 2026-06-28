@@ -28,9 +28,12 @@ recipe parity but deliberately not consulted.
 
 Swarm service naming: the master-side first-party service names are not yet
 pinned by deployment (Task 24/27 territory). The defaults below
-(``base-proxy``/``base-broker``/``base-config-sync``, all
-tracking the master image) are the chosen convention; a service that does
-not exist on the daemon is a logged skip, so partial deployments are safe.
+(``base-master-proxy``/``base-broker``/``base-config-sync``, all
+tracking the master image) name the installer-created public proxy
+(``base-master-proxy``, per deploy/swarm/install-swarm.sh); production
+overrides these via ``build_scheduled_tasks``, so they are effectively a
+test/fallback default. A service that does not exist on the daemon is a
+logged skip, so partial deployments are safe.
 The single-port consolidation removed the separate ``base-admin``
 service (the admin/registry surface is served by the proxy), so it is no
 longer a rollout target.
@@ -75,7 +78,7 @@ class ImageUpdateTarget:
 
 
 DEFAULT_FIRST_PARTY_TARGETS: tuple[ImageUpdateTarget, ...] = (
-    ImageUpdateTarget(service="base-proxy", image=DEFAULT_MASTER_IMAGE),
+    ImageUpdateTarget(service="base-master-proxy", image=DEFAULT_MASTER_IMAGE),
     ImageUpdateTarget(service="base-broker", image=DEFAULT_MASTER_IMAGE),
     ImageUpdateTarget(service="base-config-sync", image=DEFAULT_MASTER_IMAGE),
 )

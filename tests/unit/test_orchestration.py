@@ -10,9 +10,11 @@ trigger. The challenge work source + fold trigger are mocked here.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from base.db import (
@@ -435,6 +437,66 @@ async def test_failed_fold_is_durably_retried_on_a_later_pass() -> None:
         fourth = await driver.run_once()
         assert fourth.folded == []
         assert len(fold.calls) == 2
+    finally:
+        await engine.dispose()
+
+
+async def test_run_once_skips_unfoldable_unit_and_stops_rewarning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    engine, factory = await _setup()
+    try:
+        service = AssignmentService(factory, now_fn=lambda: NOW, default_max_attempts=1)
+        validators = ValidatorCoordinationService(factory, now_fn=lambda: NOW)
+        await _add_validator(factory, "v1", ["cpu"])
+        # An agent-challenge unit bridged WITHOUT a job_id can never be folded
+        # (the challenge-side fold needs job_id + task_id).
+        source = FakeWorkSource(
+            works=[
+                ChallengePendingWork(
+                    challenge_slug="agent-challenge",
+                    submission_id="7",
+                    submission_ref="hk",
+                    task_ids=("t1",),
+                    job_id=None,
+                )
+            ]
+        )
+        fold = FakeFoldTrigger()
+        driver = MasterOrchestrationDriver(
+            assignment_service=service,
+            validator_service=validators,
+            work_source=source,
+            fold_trigger=fold,
+            seed=1,
+        )
+
+        # Pass 1: bridge + assign (attempt 1, max 1).
+        await driver.run_once()
+
+        # v1 crashes; pass 2 fails the unit -> the sweep finds it un-foldable.
+        await _set_status(factory, "v1", ValidatorStatus.OFFLINE)
+        with caplog.at_level(logging.WARNING, logger="base.master.orchestration"):
+            second = await driver.run_once()
+        assert second.reassignment.failed == ["7:t1"]
+        assert second.folded == []
+        # The un-foldable unit is never handed to the fold trigger.
+        assert fold.calls == []
+        # It is warned exactly once (on the pass that marks it fold-skipped).
+        warned = [r for r in caplog.records if "un-foldable" in r.getMessage()]
+        assert len(warned) == 1
+        # The unit stays terminally failed (not lost, not reopened).
+        row = (await _rows(factory))[0]
+        assert row.status == WorkAssignmentStatus.FAILED
+
+        # Later passes neither re-fetch nor re-warn the skipped unit.
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="base.master.orchestration"):
+            third = await driver.run_once()
+        assert third.folded == []
+        assert [r for r in caplog.records if "un-foldable" in r.getMessage()] == []
+        # The durable sweep no longer returns the skipped unit.
+        assert await service.get_unfolded_failed_work_units() == []
     finally:
         await engine.dispose()
 

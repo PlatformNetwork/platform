@@ -41,6 +41,13 @@ DEFAULT_MAX_ATTEMPTS = 3
 #: re-fold sweep skips it (architecture.md sec 4, durable fold).
 FOLDED_PAYLOAD_KEY = "folded"
 
+#: Payload marker set on a terminally-``failed`` work unit that can NEVER be
+#: folded because it permanently lacks the ``job_id``/``task_id`` needed for the
+#: challenge-side fold. The durable re-fold sweep skips it so an un-foldable unit
+#: is not re-fetched and re-warned on every pass (it is distinct from
+#: :data:`FOLDED_PAYLOAD_KEY`, which marks a unit that WAS folded).
+FOLD_SKIPPED_PAYLOAD_KEY = "fold_skipped"
+
 #: Per-validator concurrency cap by required capability. prism (gpu) runs one
 #: work unit per validator at a time (concurrency 1); cpu work is unbounded.
 DEFAULT_CAPABILITY_CONCURRENCY: dict[str, int] = {CAPABILITY_GPU: 1}
@@ -431,42 +438,6 @@ class AssignmentService:
         await session.flush()
         return ReclaimOutcome(reverted=reverted, failed=failed)
 
-    async def get_failed_work_units(
-        self, work_unit_ids: Sequence[str]
-    ) -> list[FailedWorkUnit]:
-        """Return detached descriptors for terminally-``failed`` work units.
-
-        Used by the orchestration driver to fold permanently-failed
-        (retry-exhausted) units on the challenge side. Only rows currently in
-        ``failed`` are returned, so a since-recreated/reassigned unit with the
-        same id is never mistaken for a failure.
-        """
-
-        ids = list(work_unit_ids)
-        if not ids:
-            return []
-        async with session_scope(self._session_factory) as session:
-            rows = (
-                (
-                    await session.execute(
-                        select(WorkAssignment).where(
-                            WorkAssignment.work_unit_id.in_(ids),
-                            WorkAssignment.status == WorkAssignmentStatus.FAILED,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            return [
-                FailedWorkUnit(
-                    challenge_slug=row.challenge_slug,
-                    work_unit_id=row.work_unit_id,
-                    payload=dict(row.payload or {}),
-                )
-                for row in rows
-            ]
-
     async def get_unfolded_failed_work_units(
         self, *, challenge_slug: str = AGENT_CHALLENGE_SLUG
     ) -> list[FailedWorkUnit]:
@@ -476,7 +447,9 @@ class AssignmentService:
         re-attempts to fold any terminally-``failed`` unit that has not been
         marked folded (e.g. because a prior fold POST failed during a challenge
         outage), so a permanently-failed unit's EvaluationJob never hangs
-        forever waiting for a result that will never come.
+        forever waiting for a result that will never come. Units flagged
+        :data:`FOLD_SKIPPED_PAYLOAD_KEY` (permanently un-foldable) are excluded
+        too so they are not re-fetched and re-warned every pass.
         """
 
         async with session_scope(self._session_factory) as session:
@@ -500,6 +473,7 @@ class AssignmentService:
                 )
                 for row in rows
                 if not (row.payload or {}).get(FOLDED_PAYLOAD_KEY)
+                and not (row.payload or {}).get(FOLD_SKIPPED_PAYLOAD_KEY)
             ]
 
     async def mark_work_units_folded(self, work_unit_ids: Sequence[str]) -> None:
@@ -510,6 +484,21 @@ class AssignmentService:
         same id is never marked.
         """
 
+        await self._set_failed_payload_flag(work_unit_ids, FOLDED_PAYLOAD_KEY)
+
+    async def mark_work_units_fold_skipped(self, work_unit_ids: Sequence[str]) -> None:
+        """Mark terminally-``failed`` units as permanently un-foldable.
+
+        Sets :data:`FOLD_SKIPPED_PAYLOAD_KEY` on each still-``failed`` unit so the
+        durable re-fold sweep no longer returns it (and no longer re-warns about
+        it) every pass; only units currently in ``failed`` are touched.
+        """
+
+        await self._set_failed_payload_flag(work_unit_ids, FOLD_SKIPPED_PAYLOAD_KEY)
+
+    async def _set_failed_payload_flag(
+        self, work_unit_ids: Sequence[str], key: str
+    ) -> None:
         ids = list(work_unit_ids)
         if not ids:
             return
@@ -528,7 +517,7 @@ class AssignmentService:
             )
             for row in rows:
                 payload = dict(row.payload or {})
-                payload[FOLDED_PAYLOAD_KEY] = True
+                payload[key] = True
                 row.payload = payload
 
     def _capability_matches(self, required: str, capabilities: set[str]) -> bool:

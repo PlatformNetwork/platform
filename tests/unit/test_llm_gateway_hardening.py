@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -96,21 +95,6 @@ def _make_client(service: LLMGatewayService) -> AsyncClient:
         llm_gateway_service=service,
     )
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
-
-
-async def _call(
-    *,
-    response_factory=None,
-) -> AsyncIterator[tuple[AsyncClient, GatewayTokenAuthority, InMemoryUsageRecorder]]:
-    service, _ds, authority, recorder, resolver = _build_service(
-        response_factory=response_factory
-    )
-    resolver.activate("v1", "a1")
-    client = _make_client(service)
-    try:
-        yield client, authority, recorder
-    finally:
-        await client.aclose()
 
 
 # Part 1: caller-induced upstream 4xx is surfaced as a controlled 400, distinct

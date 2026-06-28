@@ -194,13 +194,17 @@ class MasterOrchestrationDriver:
         fold that fails (e.g. a sustained challenge outage past its in-call HTTP
         retry budget) leaves the unit unmarked, so it is retried on the next
         pass; a successful fold marks the unit folded so it is not folded again
-        (the fold is also idempotent on the challenge side).
+        (the fold is also idempotent on the challenge side). A unit that can
+        NEVER be folded (permanently missing ``job_id``/``task_id``) is warned
+        once and marked fold-skipped, so it drops out of the sweep instead of
+        being re-fetched and re-warned every pass.
         """
 
         if self._fold_trigger is None:
             return []
         failed = await self._assignment_service.get_unfolded_failed_work_units()
         folded: list[str] = []
+        unfoldable: list[str] = []
         for unit in failed:
             if unit.challenge_slug != AGENT_CHALLENGE_SLUG:
                 continue
@@ -208,9 +212,11 @@ class MasterOrchestrationDriver:
             task_id = unit.payload.get(PAYLOAD_TASK_ID_KEY)
             if not job_id or not task_id:
                 logger.warning(
-                    "cannot fold failed work unit %s: missing job_id/task_id",
+                    "skipping un-foldable work unit %s: permanently missing "
+                    "job_id/task_id",
                     unit.work_unit_id,
                 )
+                unfoldable.append(unit.work_unit_id)
                 continue
             try:
                 await self._fold_trigger.fold(
@@ -228,6 +234,8 @@ class MasterOrchestrationDriver:
             folded.append(unit.work_unit_id)
         if folded:
             await self._assignment_service.mark_work_units_folded(folded)
+        if unfoldable:
+            await self._assignment_service.mark_work_units_fold_skipped(unfoldable)
         return folded
 
 

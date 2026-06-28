@@ -210,10 +210,11 @@ def test_builder_returns_wired_scheduled_task() -> None:
 def test_default_targets_cover_first_party_services() -> None:
     names = {target.service for target in DEFAULT_FIRST_PARTY_TARGETS}
     assert names == {
-        "base-proxy",
+        "base-master-proxy",
         "base-broker",
         "base-config-sync",
     }
+    assert "base-proxy" not in names
     assert "base-admin" not in names
     assert all(
         target.image == IMAGE and "@" not in target.image

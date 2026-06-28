@@ -104,10 +104,10 @@ def build_scheduled_tasks(
     # the non-service `base-config-sync`. The single-port consolidation also
     # dropped the separate `base-admin` service (proxy serves admin/registry).
     # The proxy target MUST match the installer-created service name
-    # `base-master-proxy` (deploy/swarm/install-swarm.sh); the stale `base-proxy`
-    # answered to no Swarm service so the digest pin silently skipped it.
-    # DEFAULT_FIRST_PARTY_TARGETS stays as-is for the regression tests; do not
-    # "simplify" back to the default.
+    # `base-master-proxy` (deploy/swarm/install-swarm.sh). The module-default
+    # DEFAULT_FIRST_PARTY_TARGETS now also names `base-master-proxy`, but this
+    # override is still required (canonical broker name + no config-sync), so do
+    # not "simplify" back to the default.
     tasks.append(
         build_image_updater_task(
             settings,
@@ -127,8 +127,9 @@ def build_scheduled_tasks(
     # Task 20 registration point (config-sync).
     # Task 28 #1: same canonical-broker call-site override; single-port
     # consolidation drops the removed `base-admin` rollout target. The proxy
-    # rollout target MUST match the installer-created `base-master-proxy`.
-    # DEFAULT_ROLLOUT_SERVICES stays as-is.
+    # rollout target MUST match the installer-created `base-master-proxy`. The
+    # module-default DEFAULT_ROLLOUT_SERVICES now also names it, but this
+    # override (canonical broker name) is still required.
     tasks.append(
         build_config_sync_task(
             settings,
