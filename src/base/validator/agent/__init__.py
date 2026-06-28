@@ -7,6 +7,10 @@ all LLM calls through the master gateway (holding no provider key).
 
 from __future__ import annotations
 
+from base.validator.agent.challenge_dispatch import (
+    DEFAULT_CHALLENGE_EXECUTOR_FACTORIES,
+    ChallengeDispatchExecutor,
+)
 from base.validator.agent.coordination_client import (
     CoordinationClient,
     CoordinationClientError,
@@ -36,6 +40,7 @@ from base.validator.agent.signing import (
 __all__ = [
     "GATEWAY_TOKEN_PAYLOAD_KEY",
     "RUN_SPEC_PAYLOAD_KEY",
+    "DEFAULT_CHALLENGE_EXECUTOR_FACTORIES",
     "AgentCycleSummary",
     "AssignmentContext",
     "AssignmentExecutionError",
@@ -43,6 +48,7 @@ __all__ = [
     "BackoffPolicy",
     "BrokerAssignmentExecutor",
     "BrokerConfig",
+    "ChallengeDispatchExecutor",
     "CoordinationClient",
     "CoordinationClientError",
     "ExecutionResult",

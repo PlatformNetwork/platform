@@ -77,6 +77,7 @@ from base.template_engine import (
 from base.validator.agent import (
     BrokerAssignmentExecutor,
     BrokerConfig,
+    ChallengeDispatchExecutor,
     CoordinationClient,
     KeypairRequestSigner,
     ValidatorAgent,
@@ -1060,8 +1061,10 @@ def _build_validator_agent(settings: Any) -> ValidatorAgent:
             [*settings.docker.broker_allowed_images, *agent_cfg.allowed_images]
         ),
     )
-    executor = BrokerAssignmentExecutor(
-        run_timeout_seconds=agent_cfg.run_timeout_seconds
+    executor = ChallengeDispatchExecutor(
+        generic=BrokerAssignmentExecutor(
+            run_timeout_seconds=agent_cfg.run_timeout_seconds
+        )
     )
     return ValidatorAgent(
         client=client,
