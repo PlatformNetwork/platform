@@ -1027,7 +1027,12 @@ docker:
     - agent_challenge_golden:/opt/agent-challenge/golden
 
 security:
-  admin_token_file: ${SECRET_MOUNT_DIR}/admin_token
+  # Swarm mounts the admin secret at the --secret target (admin_token) below in
+  # _deploy_master_service: `--secret source=base_admin_token,target=admin_token`
+  # -> /run/secrets/admin_token (NOT the ${SECRET_MOUNT_DIR}/"base/" subdir). The
+  # path MUST match that target verbatim or the master admin auth fails closed
+  # (GET /v1/validators -> 401), mirroring the working gateway token_secret_file.
+  admin_token_file: /run/secrets/admin_token
 
 # Master LLM gateway (architecture.md §5). The proxy ALWAYS builds the gateway;
 # provider_mode selects the deterministic mock provider (no egress) vs the real
