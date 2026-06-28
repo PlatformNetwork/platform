@@ -178,6 +178,19 @@ VOL_PRISM_PG="prism_pg"
 VOL_BASE_SECRETS="vol_base_secrets"
 SECRET_VOLUME_DIR="/var/lib/base/secrets"
 
+# Runtime uid the master image's proxy/admin run as (Dockerfile.master pins
+# `USER 1000:1000`). The master writes per-challenge token files
+# (<slug>_challenge_token / <slug>_docker_broker_token) into VOL_BASE_SECRETS when a
+# challenge is registered (registry._write_token / _write_broker_token via
+# POST /v1/admin/challenges). A FRESH docker volume root dir is owned root:root mode
+# 0755, so the NON-root master cannot create new files there and registration 500s
+# with PermissionError (discovered live; hot-fixed via `chown 1000:1000` of the
+# volume dir). _ensure_secret_volume_writable chowns the volume root to this uid
+# before the master starts so a fresh deploy can create the token files. Derived
+# from IMAGE_MASTER at runtime (so a rebuilt image with a different runtime user
+# stays correct — NOT blindly hardcoded), overridable via env, default 1000.
+MASTER_RUNTIME_UID="${MASTER_RUNTIME_UID:-}"
+
 # ---- Proxy submission-path config (canonicalizes the M1 live `docker service
 # update` fixes; see AGENTS.md "Proxy submission-path requirements"). All values
 # below are public (ss58 addresses / image refs), never secrets. ----
@@ -327,6 +340,29 @@ plan_secret_stdin() {
     printf '%s' "${!envvar}" | "$@"
   fi
   : "${label}"  # label is documentation only
+}
+
+# `_master_runtime_uid` resolves the uid the master image runs as, so ownership of
+# the shared secrets volume tracks the image instead of a blind constant. Order:
+#   1. explicit MASTER_RUNTIME_UID override (operator escape hatch);
+#   2. the image's own USER directive (docker image inspect .Config.User), which is
+#      "uid", "uid:gid", or "name[:group]" — take the uid when it is numeric;
+#   3. fall back to 1000 (the Dockerfile.master default) when the image is not
+#      locally available (e.g. dry-run before the image is pulled).
+# Read-only (inspect only); never runs a container, never mutates.
+_master_runtime_uid() {
+  if [[ -n "${MASTER_RUNTIME_UID}" ]]; then
+    printf '%s' "${MASTER_RUNTIME_UID}"
+    return 0
+  fi
+  local user_field uid
+  user_field="$(docker image inspect --format '{{.Config.User}}' "${IMAGE_MASTER}" 2>/dev/null || true)"
+  uid="${user_field%%:*}"
+  if [[ "${uid}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "${uid}"
+  else
+    printf '%s' "1000"
+  fi
 }
 
 # ============================================================================
@@ -927,6 +963,7 @@ deploy_master() {
   log "STEP 9/12 deploy_master"
   _render_master_config
   _ensure_master_config_secret
+  _ensure_secret_volume_writable  # chown vol_base_secrets root to the master runtime uid (else registration 500s)
   _seed_proxy_challenge_tokens  # proxy bearer-token files in the shared secrets volume
 
   # broker — challenge workload broker (frozen contract / Swarm backend).
@@ -1095,6 +1132,38 @@ _ensure_master_config_secret() {
   fi
 }
 
+# Make the shared base-secrets volume (VOL_BASE_SECRETS) WRITABLE by the master
+# runtime user BEFORE the master starts. The master proxy/admin (non-root, uid from
+# _master_runtime_uid) creates per-challenge token files directly in this volume when
+# a challenge is registered (registry._write_token / _write_broker_token ->
+# <secret_dir>/<slug>_challenge_token and <slug>_docker_broker_token). A FRESH docker
+# volume root dir is owned root:root mode 0755, so the non-root master CANNOT create
+# new files there: POST /v1/admin/challenges returns HTTP 500 (PermissionError),
+# registering the challenge in the DB with no/partial token files and breaking the
+# master->challenge + broker auth wiring (discovered live; hot-fixed via
+# `chown 1000:1000` of the volume dir). chown the volume ROOT DIR to the master
+# runtime uid so a fresh deploy can create the token files.
+#
+# This mirrors how the challenge /data volumes end up writable: their image dir
+# (e.g. agent-challenge `chown -R challenge:challenge /data`) is owned by the runtime
+# user, so a fresh volume mounted there INHERITS that ownership from the image. The
+# secrets volume gets no such inheritance — it is first mounted (by the token-seed
+# writer) at a path the writer image does NOT own, so its root stays root:root and
+# must be chowned explicitly. Runs BEFORE _seed_proxy_challenge_tokens so the dir is
+# owned correctly first. Idempotent (re-chown is a no-op). Uses a throwaway ROOT
+# container because only root can chown a root-owned dir.
+_ensure_secret_volume_writable() {
+  local uid
+  uid="$(_master_runtime_uid)"
+  log "  ensuring ${VOL_BASE_SECRETS} root dir is owned by master runtime uid ${uid}"
+  log "    (a fresh volume root is root:root 0755 -> the non-root master cannot create"
+  log "     per-challenge token files -> POST /v1/admin/challenges 500 PermissionError)"
+  plan docker run --rm \
+    --mount "type=volume,source=${VOL_BASE_SECRETS},destination=/secrets" \
+    "${IMAGE_POSTGRES}" \
+    chown "${uid}:${uid}" /secrets
+}
+
 # Seed the proxy's per-challenge bearer-token files into the shared secrets
 # volume. The proxy verifies a miner upload for slug <s> against the bearer token
 # it reads from ${SECRET_VOLUME_DIR}/<s>_challenge_token (registry.get_token);
@@ -1112,25 +1181,27 @@ _seed_proxy_challenge_tokens() {
 # _seed_challenge_token SLUG ENVVAR — write $ENVVAR into the secrets volume at
 # <slug>_challenge_token (mode 600, owner-only). Idempotent (overwrites in place).
 #
-# Ownership: the master image runs as uid 1000 (the proxy is uid 1000; only the
-# broker is --user root), so the proxy reads these files AS uid 1000. The
-# writer container runs as root (the default — required because a FRESH
-# vol_base_secrets volume root is owned root:root 0755, so a --user 1000:1000
-# writer could not create the file), then chowns the file to 1000:1000 keeping
+# Ownership: the master image runs as the runtime uid (_master_runtime_uid; the
+# proxy is non-root, only the broker is --user root), so the proxy reads these files
+# AS that uid. The writer container runs as root (the default — required because a
+# FRESH vol_base_secrets volume root is owned root:root 0755, so a --user <uid>
+# writer could not create the file), then chowns the file to that uid keeping
 # mode 600. A root-owned 600 file would be UNREADABLE by the proxy on a
 # fresh volume (-> 500 "Challenge token file is missing" / 401 "invalid bearer
-# token").
+# token"). The uid matches _ensure_secret_volume_writable's chown of the volume root.
 _seed_challenge_token() {
   local slug="$1" envvar="$2"
   if [[ -z "${!envvar:-}" ]]; then
     die "required token env var \$${envvar} is empty (proxy seed for slug '${slug}')"
   fi
   local target="${slug}_challenge_token"
+  local uid
+  uid="$(_master_runtime_uid)"
   plan_secret_stdin "proxy-token-${slug}" "${envvar}" -- \
     docker run --rm -i \
       --mount "type=volume,source=${VOL_BASE_SECRETS},destination=/secrets" \
       "${IMAGE_POSTGRES}" \
-      sh -c "umask 077 && cat > /secrets/${target} && chmod 600 /secrets/${target} && chown 1000:1000 /secrets/${target}"
+      sh -c "umask 077 && cat > /secrets/${target} && chmod 600 /secrets/${target} && chown ${uid}:${uid} /secrets/${target}"
 }
 
 # _deploy_master_service NAME SUBCOMMAND HOST_PORT CONTAINER_PORT
