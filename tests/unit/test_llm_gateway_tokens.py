@@ -173,7 +173,7 @@ def test_build_service_injects_key_and_enforces_model() -> None:
         service.forward(
             provider="openrouter",
             path="chat/completions",
-            body=json.dumps({"model": "gpt-4o"}).encode(),
+            body=json.dumps({"model": "anthropic/claude-opus-4.8"}).encode(),
             caller_headers={},
         )
     )

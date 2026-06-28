@@ -467,10 +467,10 @@ class ValidatorWorkExecutor:
 
     Dispatches by ``challenge_slug`` so a single validator handles whatever it is
     assigned: agent-challenge tasks (DeepSeek via gateway, per-task score) and
-    prism runs (mock CPU re-exec, gpt-4o review via gateway, mock HF checkpoint,
-    online-loss stream + trained_state). Every LLM call routes through the master
-    gateway with the per-assignment scoped token; the runtime holds no provider
-    key.
+    prism runs (mock CPU re-exec, anthropic/claude-opus-4.8 review via gateway,
+    mock HF checkpoint, online-loss stream + trained_state). Every LLM call routes
+    through the master gateway with the per-assignment scoped token; the runtime
+    holds no provider key.
     """
 
     def __init__(
@@ -532,7 +532,7 @@ class ValidatorWorkExecutor:
         gateway_status = await _call_gateway(
             self._transport,
             "/llm/openrouter/chat/completions",
-            "gpt-4o",
+            "anthropic/claude-opus-4.8",
             env.get("BASE_GATEWAY_TOKEN"),
         )
         payload = context.assignment.payload or {}

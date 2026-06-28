@@ -146,7 +146,7 @@ def _deepseek_body(model: str = "deepseek-v4-pro") -> dict[str, object]:
     return {"model": model, "messages": [{"role": "user", "content": "hi"}]}
 
 
-def _openrouter_body(model: str = "gpt-4o") -> dict[str, object]:
+def _openrouter_body(model: str = "anthropic/claude-opus-4.8") -> dict[str, object]:
     return {"model": model, "messages": [{"role": "user", "content": "review"}]}
 
 
@@ -253,7 +253,7 @@ async def test_openrouter_forwards_with_injected_key(harness: Harness) -> None:
     assert harness.openrouter.call_count == 1
     recorded = harness.openrouter.requests[0]
     assert recorded.header("Authorization") == f"Bearer {OPENROUTER_KEY}"
-    assert recorded.json_body()["model"] == "gpt-4o"
+    assert recorded.json_body()["model"] == "anthropic/claude-opus-4.8"
 
 
 # VAL-LLM-007
@@ -262,7 +262,7 @@ async def test_openrouter_forwards_with_injected_key(harness: Harness) -> None:
     [
         # agent-challenge analyzer review shape
         {
-            "model": "gpt-4o",
+            "model": "anthropic/claude-opus-4.8",
             "messages": [
                 {"role": "system", "content": "reviewer"},
                 {"role": "user", "content": "manifest"},
@@ -272,7 +272,7 @@ async def test_openrouter_forwards_with_injected_key(harness: Harness) -> None:
         },
         # prism llm_review shape
         {
-            "model": "gpt-4o",
+            "model": "anthropic/claude-opus-4.8",
             "messages": [{"role": "user", "content": "prism review"}],
             "tools": [{"type": "function", "function": {"name": "SubmitVerdict"}}],
             "tool_choice": {"type": "function", "function": {"name": "SubmitVerdict"}},
@@ -291,7 +291,7 @@ async def test_openrouter_serves_both_review_consumers(
     assert response.status_code == 200
     recorded = harness.openrouter.requests[-1]
     assert recorded.header("Authorization") == f"Bearer {OPENROUTER_KEY}"
-    assert recorded.json_body()["model"] == "gpt-4o"
+    assert recorded.json_body()["model"] == "anthropic/claude-opus-4.8"
 
 
 # VAL-LLM-008
