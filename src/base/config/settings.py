@@ -7,6 +7,19 @@ from pydantic import BaseModel, Field, model_validator
 from base.config.policy import validate_settings_policy
 
 
+class MockMetagraphNode(BaseModel):
+    """A single static metagraph entry for the no-chain ``mock_metagraph`` seam.
+
+    Mirrors the on-chain fields the eligibility auth depends on so a configured
+    validator hotkey can be made eligible WITHOUT a live Subtensor.
+    """
+
+    hotkey: str
+    uid: int | None = None
+    validator_permit: bool = False
+    stake: float = 0.0
+
+
 class NetworkSettings(BaseModel):
     name: str = "base"
     netuid: int = 100
@@ -15,6 +28,13 @@ class NetworkSettings(BaseModel):
     wallet_hotkey: str = "default"
     wallet_path: str | None = None
     master_uid: int = 0
+    # Config-driven static metagraph (architecture.md G1). When non-empty the
+    # bittensor runtime factory seeds ``MetagraphCache`` from this set and does
+    # NOT construct a live Subtensor, so the listed validator hotkeys are
+    # eligible with no chain. Empty default = OFF (production-safe, inert): the
+    # live-metagraph path is unchanged. Miners stay submit-eligible via
+    # ``master.upload_extra_registered_hotkeys`` independent of this set.
+    mock_metagraph: list[MockMetagraphNode] = Field(default_factory=list)
 
 
 class MasterSettings(BaseModel):

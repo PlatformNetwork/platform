@@ -10,6 +10,9 @@ class MetagraphCache:
     netuid: int
     ttl_seconds: int = 300
     subtensor: Any | None = None
+    #: A static (config-seeded) snapshot never refreshes from a subtensor; used
+    #: by the no-chain ``mock_metagraph`` seam so ``get()`` never reaches a chain.
+    static: bool = False
     _hotkey_to_uid: dict[str, int] = field(default_factory=dict)
     _validator_permits: dict[str, bool] = field(default_factory=dict)
     _stakes: dict[str, float] = field(default_factory=dict)
@@ -20,6 +23,8 @@ class MetagraphCache:
         return dict(self._hotkey_to_uid)
 
     def expired(self) -> bool:
+        if self.static:
+            return False
         return time.time() - self._updated_at > self.ttl_seconds
 
     def update_from_hotkeys(self, hotkeys: list[str]) -> dict[str, int]:
@@ -29,6 +34,7 @@ class MetagraphCache:
         self,
         hotkeys: list[str],
         *,
+        uids: list[int] | None = None,
         validator_permits: list[bool] | None = None,
         stakes: list[float] | None = None,
     ) -> dict[str, int]:
@@ -36,20 +42,29 @@ class MetagraphCache:
 
         ``validator_permits`` and ``stakes`` are positional per-uid sequences
         aligned with ``hotkeys``; missing entries default to ``False``/``0.0``.
+        ``uids`` optionally assigns an explicit per-hotkey uid (aligned with
+        ``hotkeys``); when omitted uids default to the enumeration order.
         """
 
-        self._hotkey_to_uid = {hotkey: uid for uid, hotkey in enumerate(hotkeys)}
+        if uids is None:
+            self._hotkey_to_uid = {hotkey: uid for uid, hotkey in enumerate(hotkeys)}
+        else:
+            self._hotkey_to_uid = {
+                hotkey: int(uids[index])
+                for index, hotkey in enumerate(hotkeys)
+                if index < len(uids)
+            }
         permits = list(validator_permits or [])
         stake_values = list(stakes or [])
         self._validator_permits = {
-            hotkey: bool(permits[uid])
-            for uid, hotkey in enumerate(hotkeys)
-            if uid < len(permits)
+            hotkey: bool(permits[index])
+            for index, hotkey in enumerate(hotkeys)
+            if index < len(permits)
         }
         self._stakes = {
-            hotkey: float(stake_values[uid])
-            for uid, hotkey in enumerate(hotkeys)
-            if uid < len(stake_values)
+            hotkey: float(stake_values[index])
+            for index, hotkey in enumerate(hotkeys)
+            if index < len(stake_values)
         }
         self._updated_at = time.time()
         return self.hotkey_to_uid
@@ -66,6 +81,8 @@ class MetagraphCache:
         )
 
     def get(self, *, force: bool = False) -> dict[str, int]:
+        if self.static:
+            return self.hotkey_to_uid
         if force or self.expired():
             return self.refresh()
         return self.hotkey_to_uid

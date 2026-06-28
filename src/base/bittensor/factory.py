@@ -54,7 +54,40 @@ def create_validator_keypair(settings: Settings) -> Any:
     return _create_wallet(settings).hotkey
 
 
+def _seed_mock_metagraph_cache(settings: Settings) -> MetagraphCache | None:
+    """Seed a static ``MetagraphCache`` from ``network.mock_metagraph``.
+
+    Returns ``None`` (the seam is OFF) when no static nodes are configured, so
+    the live-metagraph path is unchanged. When configured the cache is marked
+    ``static`` and carries no subtensor, so eligibility is served entirely from
+    the configured set without ever constructing a live Subtensor.
+    """
+
+    nodes = settings.network.mock_metagraph
+    if not nodes:
+        return None
+    cache = MetagraphCache(
+        netuid=settings.network.netuid,
+        ttl_seconds=settings.master.metagraph_cache_ttl_seconds,
+        subtensor=None,
+        static=True,
+    )
+    cache.update_from_metagraph(
+        [node.hotkey for node in nodes],
+        uids=[
+            node.uid if node.uid is not None else index
+            for index, node in enumerate(nodes)
+        ],
+        validator_permits=[node.validator_permit for node in nodes],
+        stakes=[node.stake for node in nodes],
+    )
+    return cache
+
+
 def create_bittensor_runtime(settings: Settings) -> BittensorRuntime:
+    mock_cache = _seed_mock_metagraph_cache(settings)
+    if mock_cache is not None:
+        return BittensorRuntime(metagraph_cache=mock_cache)
     subtensor = _create_subtensor(settings)
     return BittensorRuntime(
         metagraph_cache=MetagraphCache(

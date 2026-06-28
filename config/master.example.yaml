@@ -6,6 +6,15 @@ network:
   wallet_hotkey: default
   wallet_path: null
   master_uid: 0
+  # Config-driven static metagraph (architecture.md G1). DEFAULT OFF: leave
+  # empty/unset for the live-chain path. When set, the bittensor runtime factory
+  # seeds the metagraph cache from this set and never constructs a live
+  # Subtensor, so the listed validator hotkeys are eligible with NO chain.
+  # mock_metagraph:
+  #   - hotkey: <validator_ss58>
+  #     uid: 1
+  #     validator_permit: true
+  #     stake: 1000.0
 
 master:
   registry_url: https://chain.joinbase.ai
