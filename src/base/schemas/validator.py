@@ -71,3 +71,40 @@ class ValidatorSubscriptionResponse(BaseModel):
 
     validator: ValidatorView
     subscriptions: list[str] = Field(default_factory=list)
+
+
+class PublicIdentityView(BaseModel):
+    """Render-safe resolved identity (display name + logo URL).
+
+    Used for both a validator's resolved identity and the top-level subnet
+    identity. A self-declared identity is UNTRUSTED; consumers MUST sanitize it
+    on render and never execute the logo URL.
+    """
+
+    display_name: str | None = None
+    logo_url: str | None = None
+
+
+class PublicValidatorView(BaseModel):
+    """Safe, anonymous-facing view of a validator for the open directory API.
+
+    Exposes ONLY fields safe for public consumption. It deliberately omits raw
+    ``last_seen_meta``, tokens, and any other secret; it is NOT the privileged
+    admin :class:`ValidatorView`.
+    """
+
+    hotkey: str
+    uid: int | None = None
+    status: str
+    online: bool
+    capabilities: list[str] = Field(default_factory=list)
+    subscriptions: list[str] = Field(default_factory=list)
+    last_heartbeat_at: datetime | None = None
+    identity: PublicIdentityView | None = None
+
+
+class PublicValidatorsResponse(BaseModel):
+    """Response for the open ``GET /v1/validators/public`` directory API."""
+
+    validators: list[PublicValidatorView] = Field(default_factory=list)
+    subnet: PublicIdentityView | None = None

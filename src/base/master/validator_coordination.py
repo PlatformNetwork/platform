@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from base.bittensor.identity_cache import ValidatorIdentityResolver
 from base.db.models import (
     DEFAULT_VALIDATOR_VERSION,
     Validator,
@@ -30,6 +31,8 @@ from base.db.models import (
 )
 from base.db.session import session_scope
 from base.schemas.validator import (
+    PublicIdentityView,
+    PublicValidatorView,
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
     ValidatorListResponse,
@@ -375,6 +378,51 @@ def validator_to_view(validator: Validator) -> ValidatorView:
         registered_at=validator.registered_at,
         last_heartbeat_at=validator.last_heartbeat_at,
         last_seen_meta=dict(validator.last_seen_meta),
+    )
+
+
+def validator_validates_challenge(validator: Validator, slug: str) -> bool:
+    """Whether ``validator`` validates ``slug``.
+
+    A validator validates a challenge when it explicitly subscribed to that slug
+    OR when it is unrestricted (an empty/absent subscription set == ALL
+    challenges, mirroring the assignment filter and preserving back-compat).
+    """
+
+    subscriptions = validator.subscriptions
+    return not subscriptions or slug in subscriptions
+
+
+def public_validator_to_view(
+    validator: Validator,
+    resolver: ValidatorIdentityResolver | None = None,
+) -> PublicValidatorView:
+    """Convert a validator row to the safe, anonymous-facing directory view.
+
+    Exposes ONLY safe fields and NEVER the raw ``last_seen_meta``, tokens, or any
+    secret. When ``resolver`` is provided, the validator's display identity is
+    resolved (on-chain, else the self-declared fallback) and only its
+    ``display_name``/``logo_url`` are surfaced.
+    """
+
+    status_value = ValidatorStatus(validator.status)
+    identity_view: PublicIdentityView | None = None
+    if resolver is not None:
+        resolved = resolver.resolve(validator.hotkey, validator.last_seen_meta)
+        if resolved is not None and not resolved.is_empty:
+            identity_view = PublicIdentityView(
+                display_name=resolved.display_name,
+                logo_url=resolved.logo_url,
+            )
+    return PublicValidatorView(
+        hotkey=validator.hotkey,
+        uid=validator.uid,
+        status=status_value.value,
+        online=status_value == ValidatorStatus.ONLINE,
+        capabilities=list(validator.capabilities),
+        subscriptions=list(validator.subscriptions),
+        last_heartbeat_at=validator.last_heartbeat_at,
+        identity=identity_view,
     )
 
 

@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, status
 from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
+from base.bittensor.identity_cache import ValidatorIdentityResolver
 from base.bittensor.metagraph_cache import MetagraphCache
 from base.master.admin.auth import (
     TokenProvider,
@@ -336,6 +337,7 @@ def create_proxy_app(
     llm_gateway_service: LLMGatewayService | None = None,
     orchestration_driver: MasterOrchestrationDriver | None = None,
     orchestration_interval_seconds: float | None = None,
+    identity_resolver: ValidatorIdentityResolver | None = None,
 ) -> FastAPI:
     """Create the public proxy FastAPI app.
 
@@ -610,6 +612,8 @@ def create_proxy_app(
                 admin_token_provider=admin_token_provider,
                 enforce_production_policy=enforce_production_policy,
                 include_health=False,
+                validator_service=validator_service,
+                identity_resolver=identity_resolver,
             )
         )
         app.state.runtime_controller = runtime_controller

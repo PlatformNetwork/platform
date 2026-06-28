@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import base.cli_app.main as cli_module
+from base.bittensor.identity_cache import ValidatorIdentityResolver
 from base.bittensor.metagraph_cache import MetagraphCache
 from base.bittensor.validator_loop import run_epoch_loop
 from base.bittensor.weight_setter import WeightSetter
@@ -498,7 +499,7 @@ def test_cli_master_proxy_builds_single_port_app_with_admin_deps(
         def get(self) -> dict[str, int]:
             return {}
 
-    runtime = SimpleNamespace(metagraph_cache=Cache())
+    runtime = SimpleNamespace(metagraph_cache=Cache(), identity_cache=None)
     orchestrator = object()
     weight_service = object()
     registry = object()
@@ -584,7 +585,7 @@ def test_cli_master_proxy_wires_coordination_plane_and_gateway(
         def get(self) -> dict[str, int]:
             return {}
 
-    runtime = SimpleNamespace(metagraph_cache=Cache())
+    runtime = SimpleNamespace(metagraph_cache=Cache(), identity_cache=None)
     session_factory = object()
 
     def fake_create_proxy_app(**kwargs: object) -> object:
@@ -639,6 +640,8 @@ def test_cli_master_proxy_wires_coordination_plane_and_gateway(
     )
     assert proxy_kwargs["validator_health_interval_seconds"] == 7.5
 
+    assert isinstance(proxy_kwargs["identity_resolver"], ValidatorIdentityResolver)
+
     gateway = proxy_kwargs["llm_gateway_service"]
     assert isinstance(gateway, LLMGatewayService)
     # Real resolver + recorder bound to the master DB session factory.
@@ -673,7 +676,7 @@ def test_cli_built_proxy_app_serves_coordination_and_runs_health_loop(
 
     cache = MetagraphCache(netuid=21, ttl_seconds=300)
     cache.update_from_metagraph([], validator_permits=[], stakes=[])
-    runtime = SimpleNamespace(metagraph_cache=cache)
+    runtime = SimpleNamespace(metagraph_cache=cache, identity_cache=None)
 
     import uvicorn
 
@@ -709,6 +712,7 @@ def test_cli_built_proxy_app_serves_coordination_and_runs_health_loop(
     assert "/v1/validators/register" in paths
     assert "/v1/validators/heartbeat" in paths
     assert "/v1/validators" in paths
+    assert "/v1/validators/public" in paths
     assert "/v1/assignments/pull" in paths
     assert "/v1/assignments/{assignment_id}/progress" in paths
     assert "/v1/assignments/{assignment_id}/result" in paths

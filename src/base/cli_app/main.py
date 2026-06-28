@@ -18,6 +18,7 @@ from base.bittensor.factory import (
 from base.bittensor.identity_cache import (
     IDENTITY_DISPLAY_NAME_KEY,
     IDENTITY_LOGO_URL_KEY,
+    ValidatorIdentityResolver,
 )
 from base.bittensor.metagraph_cache import MetagraphCache
 from base.bittensor.validator_loop import run_epoch_loop
@@ -755,6 +756,7 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
         llm_gateway_service=llm_gateway_service,
         orchestration_driver=orchestration_driver,
         orchestration_interval_seconds=(settings.master.orchestration_interval_seconds),
+        identity_resolver=ValidatorIdentityResolver(cache=runtime.identity_cache),
     )
     endpoint = f"{settings.master.proxy_host}:{settings.master.proxy_port}"
     typer.echo(f"Starting proxy API on {endpoint}")

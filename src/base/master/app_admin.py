@@ -20,6 +20,7 @@ from fastapi import (
 )
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from base.bittensor.identity_cache import ValidatorIdentityResolver
 from base.config.policy import (
     ProductionPolicyError,
     validate_image_reference,
@@ -56,6 +57,8 @@ from base.master.validator_coordination import (
     ValidatorCoordinationService,
     build_validator_coordination_router,
     build_validator_health_lifespan,
+    public_validator_to_view,
+    validator_validates_challenge,
 )
 from base.schemas.challenge import (
     ChallengeAdminView,
@@ -65,6 +68,10 @@ from base.schemas.challenge import (
     ChallengeUpdate,
     RegistryResponse,
     RuntimeOperationResponse,
+)
+from base.schemas.validator import (
+    PublicIdentityView,
+    PublicValidatorsResponse,
 )
 from base.schemas.weights import MasterWeightsResponse
 from base.security.validator_auth import (
@@ -93,15 +100,22 @@ def build_admin_router(
     admin_token_provider: TokenProvider = load_admin_token_from_environment,
     enforce_production_policy: bool = False,
     include_health: bool = True,
+    validator_service: ValidatorCoordinationService | None = None,
+    identity_resolver: ValidatorIdentityResolver | None = None,
 ) -> APIRouter:
     """Build the admin/registry routes as a reusable ``APIRouter``.
 
     The public reads (``/v1/registry``, ``/v1/weights/latest``,
-    ``/v1/challenges/dashboard.svg`` and, when ``include_health`` is set,
-    ``GET /health``) stay open; every management/write/runtime-control route is
-    gated by ``require_admin``. Pass ``include_health=False`` when including this
-    router into an app that already serves ``GET /health`` (the proxy) so the
-    duplicate registration is deduped.
+    ``/v1/validators/public``, ``/v1/challenges/dashboard.svg`` and, when
+    ``include_health`` is set, ``GET /health``) stay open; every
+    management/write/runtime-control route is gated by ``require_admin``. Pass
+    ``include_health=False`` when including this router into an app that already
+    serves ``GET /health`` (the proxy) so the duplicate registration is deduped.
+
+    ``validator_service`` (when provided) backs the open validator directory read
+    ``GET /v1/validators/public``; ``identity_resolver`` (when provided) resolves
+    each validator's display identity plus the top-level subnet identity for that
+    route.
     """
 
     router = APIRouter()
@@ -150,6 +164,44 @@ def build_admin_router(
     @router.get("/v1/registry", response_model=RegistryResponse)
     async def get_registry() -> RegistryResponse:
         return await registry_response()
+
+    @router.get("/v1/validators/public", response_model=PublicValidatorsResponse)
+    async def get_public_validators(
+        challenge: str | None = None,
+    ) -> PublicValidatorsResponse:
+        """Open (no-token) read of the validator directory (safe fields only).
+
+        Returns every registered validator with only safe fields plus the
+        resolved per-validator and top-level subnet identity. ``?challenge=``
+        narrows the list to validators that validate that slug (explicitly
+        subscribed, or unrestricted); an unknown slug is handled gracefully
+        (only unrestricted validators match). NEVER exposes raw
+        ``last_seen_meta``, tokens, or secrets.
+        """
+
+        if validator_service is None:
+            return PublicValidatorsResponse()
+        validators = await validator_service.list_validators()
+        if challenge is not None:
+            validators = [
+                row
+                for row in validators
+                if validator_validates_challenge(row, challenge)
+            ]
+        subnet: PublicIdentityView | None = None
+        if identity_resolver is not None:
+            resolved = identity_resolver.subnet_identity()
+            if resolved is not None and not resolved.is_empty:
+                subnet = PublicIdentityView(
+                    display_name=resolved.display_name,
+                    logo_url=resolved.logo_url,
+                )
+        return PublicValidatorsResponse(
+            validators=[
+                public_validator_to_view(row, identity_resolver) for row in validators
+            ],
+            subnet=subnet,
+        )
 
     @router.get("/v1/weights/latest", response_model=MasterWeightsResponse)
     async def get_latest_weights() -> MasterWeightsResponse:
@@ -362,6 +414,7 @@ def create_admin_app(
     validator_health_interval_seconds: float | None = None,
     assignment_coordination_service: AssignmentCoordinationService | None = None,
     llm_gateway_service: LLMGatewayService | None = None,
+    identity_resolver: ValidatorIdentityResolver | None = None,
 ) -> FastAPI:
     """Create the private admin/registry FastAPI app.
 
@@ -388,6 +441,8 @@ def create_admin_app(
             admin_token_provider=admin_token_provider,
             enforce_production_policy=enforce_production_policy,
             include_health=True,
+            validator_service=validator_service,
+            identity_resolver=identity_resolver,
         )
     )
     if validator_service is not None and validator_verifier is not None:
