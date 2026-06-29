@@ -198,16 +198,18 @@ MASTER_RUNTIME_UID="${MASTER_RUNTIME_UID:-}"
 # Upload allowlist: ss58 hotkeys the proxy MinerUploadVerifier accepts WITHOUT
 # on-chain registration (settings.master.upload_extra_registered_hotkeys, env
 # BASE_MASTER__UPLOAD_EXTRA_REGISTERED_HOTKEYS). A non-allowlisted hotkey ->
-# 401 "unknown hotkey". Parameterizable. Default = the live miner (//AcE2EMiner)
-# + owner (//Owner) PLUS two SPARE validator hotkeys (//AcValidator1/2) kept free
-# of the agent-challenge 1-submission-per-hotkey-per-3h rate limit for the M1
-# user-testing validator (derived ss58 recorded in library/user-testing.md).
+# 401 "unknown hotkey". Parameterizable. Default = the 4 OPERATIONAL hotkeys only:
+# the live miner (//AcE2EMiner) + owner (//Owner) PLUS two SPARE validator hotkeys
+# (//AcValidator1/2) kept free of the agent-challenge 1-submission-per-hotkey-per-3h
+# rate limit for the user-testing validator (derived ss58 recorded in
+# library/user-testing.md).
 #
-# LAST ENTRY (5Grwva...HGKutQY) = the well-known //Alice dev keypair, added ONLY
-# to exercise the end-to-end prism submission path before launch. MUST-REVIEW-
-# BEFORE-T27: remove //Alice from this allowlist before mainnet launch — it is a
-# publicly-known test key and must never be miner-registrable in production.
-UPLOAD_EXTRA_REGISTERED_HOTKEYS="${UPLOAD_EXTRA_REGISTERED_HOTKEYS:-[\"5EWKzomnbVvLKWjHeVqm2BMqMzmckKMiufR11qFXahaUfenR\",\"5FTyuyEQQZs8tCcPTUFqotkm2SYfDnpefn9FitRgmTHnFDBD\",\"5GGboHkKougeE8PqGRbNM32AEwRU7Dsv4MXATm2zukQJ8wrU\",\"5FJAjL6d31QDSfvcZPKkde9ftTLAPu7J5Mo86je5XbziRXSB\",\"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY\"]}"
+# The well-known //Alice dev keypair (5Grwva...HGKutQY) is DELIBERATELY ABSENT from
+# this default: it is a publicly-known seed, so allowlisting it would let anyone
+# holding the public //Alice key submit as a registered hotkey on mainnet. Any test
+# key (//Alice included) now requires EXPLICIT operator opt-in via the env override
+# below; it is never miner-registrable by default.
+UPLOAD_EXTRA_REGISTERED_HOTKEYS="${UPLOAD_EXTRA_REGISTERED_HOTKEYS:-[\"5EWKzomnbVvLKWjHeVqm2BMqMzmckKMiufR11qFXahaUfenR\",\"5FTyuyEQQZs8tCcPTUFqotkm2SYfDnpefn9FitRgmTHnFDBD\",\"5GGboHkKougeE8PqGRbNM32AEwRU7Dsv4MXATm2zukQJ8wrU\",\"5FJAjL6d31QDSfvcZPKkde9ftTLAPu7J5Mo86je5XbziRXSB\"]}"
 
 # ---- Mock/static metagraph (architecture.md G1; NO-CHAIN decentralized deploy).
 # `base master proxy` UNCONDITIONALLY builds the bittensor runtime; on a no-chain
