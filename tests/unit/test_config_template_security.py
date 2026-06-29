@@ -250,22 +250,36 @@ def _run_installer_dry_run(tmp_path: Path) -> subprocess.CompletedProcess[str]:
 def _extract_rendered_master_config(stdout: str) -> str:
     """Reconstruct the dry-run-rendered master config YAML from installer stdout.
 
-    The dry-run prints the staged config via ``sed 's/^/      /'`` (a 6-space
-    indent, NOT through ``log()``), right after the marker line. Collect the
-    contiguous 6-space-prefixed block and strip that prefix back off.
+    The dry-run prints the staged config indented under a marker line. Rather than
+    assume a fixed indent width, detect the indent from the first config line and
+    collect the contiguous indented block, stripping that indent back off. This
+    survives a change to the installer's presentation (e.g. the ``sed`` prefix
+    width) as long as the marker and an indented block remain.
     """
     lines = stdout.splitlines()
-    start = next(
-        i
-        for i, line in enumerate(lines)
-        if "master config that WOULD be written to" in line
+    try:
+        start = next(
+            i
+            for i, line in enumerate(lines)
+            if "master config that WOULD be written to" in line
+        )
+    except StopIteration as exc:  # pragma: no cover - guards a presentation change
+        raise AssertionError(
+            "installer dry-run did not print the rendered master config marker"
+        ) from exc
+
+    block = lines[start + 1 :]
+    indent = next(
+        (len(line) - len(line.lstrip(" ")) for line in block if line.strip()),
+        0,
     )
+    prefix = " " * indent
     body: list[str] = []
-    for line in lines[start + 1 :]:
-        if line.startswith("      "):
-            body.append(line[6:])
-        elif line.strip() == "":
+    for line in block:
+        if line.strip() == "":
             body.append("")
+        elif line.startswith(prefix):
+            body.append(line[indent:])
         else:
             break
     return "\n".join(body)
@@ -312,22 +326,34 @@ def test_rendered_master_config_is_production_and_passes_policy(
 
 def test_installer_default_image_refs_are_tag_and_digest_pinned() -> None:
     """Production image-reference policy form: each rendered IMAGE_* default
-    carries BOTH a tag and an ``@sha256:`` digest (validate_image_reference)."""
+    carries BOTH a tag and an ``@sha256:`` digest (validate_image_reference).
+
+    Covers the prism GPU evaluator (``IMAGE_PRISM_EVALUATOR``) too: it is pinned
+    into the rendered prism challenge service (``PRISM_BASE_EVAL_IMAGE``) and must
+    satisfy the same production image-reference policy as the other images.
+    """
     from base.config.policy import validate_image_reference
 
     text = SWARM_INSTALLER.read_text(encoding="utf-8")
     image_defaults: dict[str, str] = {}
     for line in text.splitlines():
         stripped = line.strip()
-        for var in ("IMAGE_MASTER", "IMAGE_AGENT_CHALLENGE", "IMAGE_PRISM"):
+        for var in (
+            "IMAGE_MASTER",
+            "IMAGE_AGENT_CHALLENGE",
+            "IMAGE_PRISM_EVALUATOR",
+            "IMAGE_PRISM",
+        ):
             prefix = f'{var}="${{{var}:-'
             if stripped.startswith(prefix):
                 image_defaults[var] = stripped[len(prefix) :].rstrip('}"')
+                break
 
     assert set(image_defaults) == {
         "IMAGE_MASTER",
         "IMAGE_AGENT_CHALLENGE",
         "IMAGE_PRISM",
+        "IMAGE_PRISM_EVALUATOR",
     }
     for var, ref in image_defaults.items():
         assert ":" in ref.split("@")[0].rsplit("/", 1)[-1], f"{var} missing tag: {ref}"
