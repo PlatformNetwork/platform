@@ -24,6 +24,7 @@ from base.bittensor.metagraph_cache import MetagraphCache
 from base.bittensor.validator_loop import run_epoch_loop
 from base.config import load_settings
 from base.config.policy import production_policy_enabled_for_settings
+from base.config.settings import Settings
 from base.db.session import create_engine, create_session_factory
 from base.master.app_proxy import create_proxy_app
 from base.master.assignment import AssignmentService
@@ -111,7 +112,7 @@ app.add_typer(registry_app, name="registry")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _configure_observability(settings: Any) -> None:
+def _configure_observability(settings: Settings) -> None:
     """Configure logging then wire Sentry + OTEL from settings-derived args.
 
     Every CLI entrypoint that sets up logging calls this so observability is
