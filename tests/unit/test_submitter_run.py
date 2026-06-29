@@ -81,3 +81,39 @@ async def test_submit_once_logs_success_on_accepted_response(
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("weights submitted on-chain" in message for message in messages)
+
+
+def test_main_initializes_sentry_and_otel(monkeypatch: pytest.MonkeyPatch) -> None:
+    from base.config.settings import Settings
+
+    module = _load_run_submitter()
+    settings = Settings()
+    settings.observability.sentry_dsn = "https://public@sentry.example/3"
+    settings.observability.otel_service_name = "base-submitter"
+    settings.observability.otel_endpoint = "http://otel-collector:4317"
+
+    sentry_calls: list[tuple[str | None, str | None]] = []
+    otel_calls: list[tuple[str, str | None]] = []
+
+    monkeypatch.setattr(
+        module, "_parse_args", lambda: SimpleNamespace(config="submitter.yaml")
+    )
+    monkeypatch.setattr(module, "load_settings", lambda config: settings)
+    monkeypatch.setattr(module, "configure_logging", lambda json_logs: None)
+    monkeypatch.setattr(
+        module,
+        "init_sentry",
+        lambda dsn, environment=None: sentry_calls.append((dsn, environment)),
+    )
+    monkeypatch.setattr(
+        module,
+        "init_otel",
+        lambda service_name, endpoint=None: otel_calls.append((service_name, endpoint)),
+    )
+    monkeypatch.setattr(module, "_run", lambda settings: None)
+    monkeypatch.setattr(module.asyncio, "run", lambda coro: None)
+
+    module.main()
+
+    assert sentry_calls == [("https://public@sentry.example/3", "development")]
+    assert otel_calls == [("base-submitter", "http://otel-collector:4317")]

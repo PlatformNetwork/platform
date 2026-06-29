@@ -62,6 +62,8 @@ from base.master.service import (
 )
 from base.master.validator_coordination import ValidatorCoordinationService
 from base.observability.logging import configure_logging
+from base.observability.otel import init_otel
+from base.observability.sentry import init_sentry
 from base.schemas.challenge import (
     ChallengeCreate,
     ChallengeStatus,
@@ -107,6 +109,21 @@ app.add_typer(challenge_app, name="challenge")
 app.add_typer(db_app, name="db")
 app.add_typer(registry_app, name="registry")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _configure_observability(settings: Any) -> None:
+    """Configure logging then wire Sentry + OTEL from settings-derived args.
+
+    Every CLI entrypoint that sets up logging calls this so observability is
+    initialized uniformly. ``init_sentry``/``init_otel`` are no-op safe when
+    unconfigured (no DSN / no OTLP endpoint), so a default deploy stays inert.
+    """
+    configure_logging(settings.observability.log_json)
+    init_sentry(settings.observability.sentry_dsn, environment=settings.environment)
+    init_otel(
+        settings.observability.otel_service_name,
+        settings.observability.otel_endpoint,
+    )
 
 
 def _admin_token(config: Path) -> str:
@@ -689,7 +706,7 @@ async def seed_prism_challenges(
 @master_app.command("proxy")
 def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))):
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     import uvicorn
 
     _run_startup_migrations(settings)
@@ -766,7 +783,7 @@ def master_proxy(config: Path = typer.Option(Path("config/master.example.yaml"))
 @master_app.command("broker")
 def master_broker(config: Path = typer.Option(Path("config/master.example.yaml"))):
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     import uvicorn
 
     _run_startup_migrations(settings)
@@ -817,7 +834,7 @@ def master_broker(config: Path = typer.Option(Path("config/master.example.yaml")
 def master_supervisor(config: Path = typer.Option(Path("config/master.example.yaml"))):
     """Run the Swarm control-plane supervisor (systemd Type=notify)."""
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     from base.supervisor import build_supervisor
 
     supervisor = build_supervisor(settings)
@@ -986,7 +1003,7 @@ def master_weights(
     ),
 ):
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     _run_startup_migrations(settings)
     registry = _master_registry(settings)
     runtime = create_bittensor_runtime(settings)
@@ -1027,7 +1044,7 @@ async def _run_validator_runtime(
 @validator_app.command("run")
 def validator_run(config: Path = typer.Option(Path("config/validator.example.yaml"))):
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     runtime = create_bittensor_submit_runtime(settings)
     runner = NormalValidatorRunner(
         registry_client=RegistryClient(settings.validator.registry_url),
@@ -1113,7 +1130,7 @@ def validator_agent(
     """
 
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     agent = _build_validator_agent(settings)
     typer.echo(f"Starting validator agent for hotkey {agent.hotkey}")
     asyncio.run(agent.run_forever())
@@ -1139,7 +1156,7 @@ def validator_subscribe(
     """
 
     settings = load_settings(config)
-    configure_logging(settings.observability.log_json)
+    _configure_observability(settings)
     slugs = [slug.strip() for slug in challenges.split(",") if slug.strip()]
     client = _build_coordination_client(settings)
     response = asyncio.run(client.subscribe(slugs))

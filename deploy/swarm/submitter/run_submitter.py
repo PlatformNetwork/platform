@@ -47,6 +47,8 @@ from base.bittensor.weight_setter import (
 )
 from base.config import Settings, load_settings
 from base.observability.logging import configure_logging
+from base.observability.otel import init_otel
+from base.observability.sentry import init_sentry
 from base.validator.normal_runner import NormalValidatorRunner
 from base.validator.weights_client import WeightsClient
 
@@ -216,6 +218,11 @@ def main() -> None:
     args = _parse_args()
     settings = load_settings(args.config)
     configure_logging(settings.observability.log_json)
+    init_sentry(settings.observability.sentry_dsn, environment=settings.environment)
+    init_otel(
+        settings.observability.otel_service_name,
+        settings.observability.otel_endpoint,
+    )
     asyncio.run(_run(settings))
 
 

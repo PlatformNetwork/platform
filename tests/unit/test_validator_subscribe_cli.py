@@ -199,7 +199,15 @@ def _patch_cli(monkeypatch: pytest.MonkeyPatch) -> RecordingClient:
     monkeypatch.setattr(
         cli_main,
         "load_settings",
-        lambda config: SimpleNamespace(observability=SimpleNamespace(log_json=False)),
+        lambda config: SimpleNamespace(
+            environment="development",
+            observability=SimpleNamespace(
+                log_json=False,
+                sentry_dsn=None,
+                otel_service_name="base",
+                otel_endpoint=None,
+            ),
+        ),
     )
     monkeypatch.setattr(cli_main, "configure_logging", lambda *a, **k: None)
     client = RecordingClient()

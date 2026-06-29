@@ -227,6 +227,11 @@ class ObservabilitySettings(BaseModel):
     log_json: bool = True
     sentry_dsn: str | None = None
     otel_service_name: str = "base"
+    #: OTLP span exporter target (e.g. an OpenTelemetry collector gRPC endpoint
+    #: like ``http://otel-collector:4317``). When set, ``init_otel`` attaches a
+    #: ``BatchSpanProcessor(OTLPSpanExporter(...))`` to the tracer provider; when
+    #: None the provider has no export path (inert, behaviour-preserving).
+    otel_endpoint: str | None = None
     # Task 16: lightweight, config-driven webhook alerting (NO Prometheus/
     # Grafana). All endpoints default to None so a default deploy makes ZERO
     # network calls — the alert hook is a structured-log-only no-op until a
