@@ -12,6 +12,91 @@ itself is driven by the `base master worker` CLI plus
 > `install-worker.sh` and `install-swarm.sh` both **default to dry-run** and
 > change nothing until `--apply` is passed.
 
+## Mainnet deploy prerequisites (secrets, GHCR, placement)
+
+Before a mainnet `install-swarm.sh --apply`, the operator must provide every
+required secret in the environment and choose a placement flag. The installer
+**hard-fails** (`_ensure_secret` → `die`) the moment a required secret env var is
+unset/empty, so a missing secret is caught at `create_secrets` (STEP 6) and never
+silently tolerated. Secret VALUES travel via stdin only — they are never placed on
+argv and never printed (the plan log shows the env var NAME only).
+
+> Out of scope for this runbook: the actual secret **values** and the GPU
+> **FineWeb-Edu dataset staging** (the `prism_fineweb_edu_{train,val}` volumes) are
+> operator-lane / user-provided. This section documents WHICH secrets are needed
+> and HOW placement must be chosen, not the values themselves.
+
+### Required secrets (14) — installer hard-fails if any is unset
+
+Each is created as the named Docker secret from the listed env var
+(`docker secret create <name> -` fed on stdin):
+
+| Docker secret | Env var | Purpose |
+|---------------|---------|---------|
+| `base_admin_token` | `BASE_ADMIN_TOKEN` | master admin API token (`admin_token_file`; gates `GET /v1/validators`). |
+| `base_master_database_url` | `MASTER_DATABASE_URL` | master control-plane Postgres URL (with password). |
+| `base_master_pg_password` | `MASTER_PG_PASSWORD` | `base-master-postgres` password. |
+| `base_agent_challenge_challenge_token` | `AGENT_CHALLENGE_CHALLENGE_TOKEN` | agent-challenge bearer/challenge token. |
+| `base_agent_challenge_docker_broker_token` | `AGENT_CHALLENGE_DOCKER_BROKER_TOKEN` | agent-challenge ↔ broker token. |
+| `base_agent_challenge_submission_env_encryption_key` | `AGENT_CHALLENGE_SUBMISSION_ENV_KEY` | agent-challenge `submission_env_encryption_key`. |
+| `base_agent_challenge_database_url` | `AGENT_CHALLENGE_DATABASE_URL` | agent-challenge Postgres URL. |
+| `base_agent_challenge_pg_password` | `AGENT_CHALLENGE_PG_PASSWORD` | `challenge-agent-challenge-postgres` password. |
+| `base_prism_challenge_token` | `PRISM_CHALLENGE_TOKEN` | prism bearer/challenge token. |
+| `base_prism_docker_broker_token` | `PRISM_DOCKER_BROKER_TOKEN` | prism ↔ broker token. |
+| `base_prism_database_url` | `PRISM_DATABASE_URL` | prism Postgres URL. |
+| `base_prism_pg_password` | `PRISM_PG_PASSWORD` | `challenge-prism-postgres` password. |
+| `base_openrouter_api_key` | `OPENROUTER_API_KEY` | OpenRouter key (master gateway + prism LLM-review gate). |
+| `base_gateway_token_secret` | `GATEWAY_TOKEN` | **MANDATORY** gateway HMAC token-signing secret. `base master proxy` always builds the LLM gateway and `GatewayTokenAuthority` rejects an empty secret, so the proxy **fails fast at startup** without it. |
+
+### Conditional secret (1)
+
+| Docker secret | Env var | When required |
+|---------------|---------|---------------|
+| `base_gateway_deepseek_api_key` | `DEEPSEEK_API_KEY` | Required **only** when `GATEWAY_PROVIDER_MODE=real` (the default). The gateway injects this server-side so validators/eval runtimes hold no provider key. With `GATEWAY_PROVIDER_MODE=mock` the deterministic mock provider is used and this secret is not required. |
+
+### Optional secrets (2) — never hard-fail
+
+These use `_ensure_optional_secret`: an unset env var logs `optional secret … skipped`
+and continues (no error).
+
+| Docker secret | Env var | Effect when absent |
+|---------------|---------|--------------------|
+| `base_gateway_token` | `CENTRAL_GATEWAY_TOKEN` | Scoped gateway token for the central review gates (agent-challenge analyzer + prism `llm_review`). Absent → the central gates fall back to the direct OpenRouter key (no-gateway fallback). |
+| `base_hf_token` | `HF_TOKEN` | HuggingFace token for the prism HF checkpoint publisher (`HF_TOKEN_FILE`). Absent → the publisher runs token-less (fine for the public FineWeb-Edu repo). |
+
+### GHCR credentials path
+
+Private `ghcr.io/baseintelligence/*` images require a registry login. Supply
+`GHCR_USER` + `GHCR_TOKEN` in the environment (checked in `preflight`, STEP 1);
+the token is fed to `docker login ghcr.io --password-stdin` (never argv/logged) at
+`ghcr_login` (STEP 1b). That writes `/root/.docker/config.json`
+(`SUPERVISOR_DOCKER_CONFIG_PATH`), which the broker (bind-mounted read-only at
+`/root/.docker`, `--with-registry-auth`) and the base-supervisor image-updaters
+reuse to resolve/pull the private digests. No separate registry secret object is
+created.
+
+### Single-node placement requirement (MUST pass a flag)
+
+On a **single-node** swarm (one manager, no workers) the master-orchestrated
+challenge services inherit the default placement constraint
+`node.role==worker` (`swarm_backend.py::DEFAULT_PLACEMENT_CONSTRAINT`). A
+single-node swarm has **no** worker node, so that constraint matches nothing and
+every challenge task sits **Pending forever**. With no placement flag the
+installer's STEP 4 leaves this default in place and warns about it.
+
+To schedule challenges on the sole manager you **must** pass at least one of:
+
+- **`--static-challenges`** — the installer creates the challenge services
+  directly (api + worker for both agent-challenge and prism), pinned
+  `node.role==manager` instead of the stranding `node.role==worker`, so they land
+  on the manager and share their per-node `/data` volume.
+- **`--single-node-placement`** — the non-default placement override seam (see the
+  REVIEW block in `single_node_placement_fix()`); use it when challenges are
+  master-orchestrated rather than statically created.
+
+A multi-node swarm (a real GPU/CPU worker joined) needs neither flag: the default
+`node.role==worker` constraint matches a real worker.
+
 ## Topology
 
 A cluster is one **manager** plus one or more **workers**:
