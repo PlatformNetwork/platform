@@ -28,7 +28,7 @@ from pathlib import Path
 
 import yaml
 
-from base.config.settings import Settings
+from base.config.settings import Settings, SupervisorSettings
 from base.supervisor.tasks import build_scheduled_tasks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +36,8 @@ MASTER_YAML = ROOT / "deploy" / "swarm" / "master.yaml"
 INSTALL_SWARM = ROOT / "deploy" / "swarm" / "install-swarm.sh"
 
 POSTGRES_DEFAULT_PORT = 5432
+# The live topology + installer publish the public proxy on this port.
+PROXY_PORT_PRODUCTION = 18080
 
 
 def _installer_text() -> str:
@@ -97,6 +99,26 @@ def _installer_master_proxy_service() -> str:
         _installer_text(),
     )
     assert match is not None, "could not find the master proxy service create call"
+    return match.group(1)
+
+
+def _installer_master_proxy_port_default() -> int:
+    """Default published proxy port the installer renders into the master config."""
+
+    match = re.search(
+        r'MASTER_PROXY_PORT="\$\{MASTER_PROXY_PORT:-(\d+)\}"', _installer_text()
+    )
+    assert match is not None, "could not resolve MASTER_PROXY_PORT default"
+    return int(match.group(1))
+
+
+def _installer_advertise_addr_default() -> str:
+    """Default advertise host the installer renders into gateway.public_base_url."""
+
+    match = re.search(
+        r'ADVERTISE_ADDR="\$\{ADVERTISE_ADDR:-([^}"]+)\}"', _installer_text()
+    )
+    assert match is not None, "could not resolve ADVERTISE_ADDR default"
     return match.group(1)
 
 
@@ -215,3 +237,62 @@ def test_supervisor_autoupdate_targets_are_all_installer_created_services() -> N
 
     assert targets["image_updater"] <= installer_services
     assert targets["config_sync"] <= installer_services
+
+
+# ---------------------------------------------------------------------------
+# Autonomous auto-update (m6, VAL-CODE-AUTO-002): the canonical master.yaml MUST
+# carry a supervisor block (so a config-sync tick does not drop self-update) and
+# production-correct proxy_port / public_base_url (so config-sync's force-roll
+# does not clobber the live deploy onto a wrong port/URL).
+# ---------------------------------------------------------------------------
+
+
+def test_master_yaml_proxy_port_is_production_correct_and_matches_installer() -> None:
+    cfg = _master_yaml()
+    proxy_port = int(cfg["master"]["proxy_port"])
+
+    # config-sync force-rolls base-master-proxy on any digest change, so a stale
+    # port here would roll the live proxy onto the wrong published port.
+    assert proxy_port == PROXY_PORT_PRODUCTION
+    assert proxy_port == _installer_master_proxy_port_default()
+
+
+def test_master_yaml_gateway_public_base_url_matches_installer_render() -> None:
+    cfg = _master_yaml()
+    host, port = _host_port_from_url(cfg["gateway"]["public_base_url"])
+
+    # Installer renders public_base_url as http://${ADVERTISE_ADDR}:${MASTER_PROXY_PORT};
+    # the canonical file must agree so config-sync does not clobber it, and the
+    # advertised port must equal the port the proxy actually binds to.
+    assert host == _installer_advertise_addr_default()
+    assert port == _installer_master_proxy_port_default()
+    assert port == int(cfg["master"]["proxy_port"])
+
+
+def test_master_yaml_carries_supervisor_block_for_self_update() -> None:
+    cfg = _master_yaml()
+    supervisor = cfg.get("supervisor")
+    assert isinstance(supervisor, dict), "canonical master.yaml is missing supervisor:"
+
+    # config-sync overwrites /etc/base/master.yaml from this file, so the block
+    # must keep self-update ENABLED (not reset to the default-OFF state) and wired
+    # to the CI-published manifest, with a registry for credentialed digests.
+    assert supervisor["self_update_enabled"] is True
+    manifest_url = supervisor["self_update_manifest_url"]
+    assert isinstance(manifest_url, str) and manifest_url
+    assert manifest_url.endswith("self-update-manifest.json")
+    assert supervisor["registry"]
+
+
+def test_master_yaml_supervisor_block_loads_into_supervisor_settings() -> None:
+    # The block must round-trip through the model the supervisor parses, so a
+    # config-sync write is consumable when the supervisor restarts.
+    cfg = _master_yaml()
+    supervisor = SupervisorSettings.model_validate(cfg["supervisor"])
+
+    assert supervisor.self_update_enabled is True
+    assert (
+        supervisor.self_update_manifest_url
+        == cfg["supervisor"]["self_update_manifest_url"]
+    )
+    assert supervisor.registry == cfg["supervisor"]["registry"]

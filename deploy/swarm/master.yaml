@@ -14,7 +14,11 @@ network:
 master:
   registry_url: https://chain.joinbase.ai
   proxy_host: 0.0.0.0
-  proxy_port: 8081
+  # Production-correct published proxy port (matches the installer's
+  # MASTER_PROXY_PORT default + gateway.public_base_url below). config-sync
+  # force-rolls base-master-proxy on any digest change, so a stale value here
+  # would clobber the live deploy onto the wrong port.
+  proxy_port: 18080
   epoch_interval_seconds: 360
   metagraph_cache_ttl_seconds: 300
   registry_state_file: /var/lib/base/registry.json
@@ -79,3 +83,19 @@ observability:
   log_json: true
   sentry_dsn: null
   otel_service_name: base-master
+
+# Control-plane supervisor (deploy/swarm/base-supervisor.service; architecture.md
+# sec 9 / research G-A2/G-A3). This block MUST live in the canonical config so a
+# config-sync tick (which overwrites /etc/base/master.yaml from this file) does
+# NOT drop self-update back to its default-OFF state on a supervisor restart.
+# The image-updater (service digest-pin roll) is always on regardless; keeping
+# self_update_enabled here keeps the `base` CODE self-update task registered,
+# wired to the manifest the platform CI publishes/overwrites on every merge to
+# main (a monotonic {"version","source_url"} JSON on the dedicated `release`
+# branch). registry_docker_config_path is where the image-updaters decode the
+# manager's GHCR credentials for PRIVATE ghcr.io/baseintelligence/* digests.
+supervisor:
+  registry: ghcr.io
+  registry_docker_config_path: /root/.docker/config.json
+  self_update_enabled: true
+  self_update_manifest_url: https://raw.githubusercontent.com/BaseIntelligence/base/release/self-update-manifest.json

@@ -1035,9 +1035,7 @@ class SwarmChallengeOrchestrator:
     def ensure_network(self) -> None:
         """Create the encrypted overlay challenge network if missing."""
 
-        self._ensure_overlay_network(
-            self.network_name, internal=self.internal_network
-        )
+        self._ensure_overlay_network(self.network_name, internal=self.internal_network)
 
     def _ensure_overlay_network(self, name: str, *, internal: bool) -> None:
         """Create an encrypted overlay network by name if it does not exist."""

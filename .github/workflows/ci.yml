@@ -199,6 +199,51 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
 
+  publish-self-update-manifest:
+    # On every merge to main, AFTER the images publish, overwrite the base
+    # self-update manifest at a STABLE url (raw file on the dedicated `release`
+    # branch). The base-supervisor http_manifest_detector polls this JSON and
+    # advances the on-disk `base` release whenever `version` changes (architecture
+    # sec 9 / research G-A2). `version` is MONOTONIC + filesystem-safe and
+    # `source_url` is the codeload tarball for this exact ref.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - docker-publish
+      - postgres-orm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish self-update manifest to the release branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # MONOTONIC, filesystem-safe version: the strictly-increasing GitHub
+          # run number (advances on every merge to main) plus the merged commit
+          # sha for traceability. No "/", never "." / ".." -> accepted by
+          # AvailableRelease.__post_init__ (src/base/supervisor/self_update.py).
+          version="r${{ github.run_number }}-sha-${{ github.sha }}"
+          # Codeload tarball for THIS ref; tarball_stager strips the single
+          # top-level dir then runs `uv sync` on the staged release.
+          source_url="https://codeload.github.com/${{ github.repository }}/tar.gz/${{ github.sha }}"
+          work="$(mktemp -d)"
+          printf '{\n  "version": "%s",\n  "source_url": "%s"\n}\n' \
+            "${version}" "${source_url}" > "${work}/self-update-manifest.json"
+          echo "publishing self-update manifest version=${version}"
+          cat "${work}/self-update-manifest.json"
+          cd "${work}"
+          git init -q
+          git checkout -q -b release
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add self-update-manifest.json
+          git commit -q -m "self-update manifest ${version}"
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            release
+
+
   github-release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:

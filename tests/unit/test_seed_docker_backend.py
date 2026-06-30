@@ -215,9 +215,9 @@ def test_log_stream_host_matches_agent_challenge_service_name() -> None:
 
     constant_host = urlsplit(cli_module.AGENT_CHALLENGE_INTERNAL_BASE_URL).hostname
     assert constant_host == service_name
-    assert constant_host == urlsplit(
-        default_internal_base_url("agent-challenge")
-    ).hostname
+    assert (
+        constant_host == urlsplit(default_internal_base_url("agent-challenge")).hostname
+    )
 
     registry = ChallengeRegistry()
     registry.create(_agent_challenge_create())

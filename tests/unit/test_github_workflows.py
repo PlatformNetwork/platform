@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from base.supervisor.self_update import AvailableRelease
+
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -14,6 +16,10 @@ def _workflow() -> dict:
 
 def _step_uses(job: dict) -> set[str]:
     return {step.get("uses", "") for step in job["steps"] if "uses" in step}
+
+
+def _job_run_text(job: dict) -> str:
+    return "\n".join(step.get("run", "") for step in job["steps"])
 
 
 def test_ci_workflow_runs_postgres_orm_integration_gate() -> None:
@@ -192,6 +198,54 @@ def test_ci_workflow_creates_github_releases_after_tag_image_publish() -> None:
     assert "docs/versioning.md" in release_body
 
 
+def test_ci_workflow_publishes_self_update_manifest_on_main() -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+
+    assert "publish-self-update-manifest" in jobs
+    job = jobs["publish-self-update-manifest"]
+
+    # Runs ONLY on a push to main, and ONLY after the images publish.
+    assert "github.event_name == 'push'" in job["if"]
+    assert "refs/heads/main" in job["if"]
+    assert "docker-publish" in job["needs"]
+
+    # Needs write access to push the manifest to the release branch.
+    assert job["permissions"]["contents"] == "write"
+
+    scripts = _job_run_text(job)
+
+    # MONOTONIC version: the strictly-increasing run number advances on every
+    # merge to main; the commit sha makes the version unique + traceable.
+    assert "github.run_number" in scripts
+    assert "github.sha" in scripts
+
+    # source_url is the codeload tarball for that exact ref.
+    assert "codeload.github.com" in scripts
+    assert "tar.gz" in scripts
+
+    # A {version, source_url} JSON manifest ...
+    assert "self-update-manifest.json" in scripts
+    assert '"version"' in scripts
+    assert '"source_url"' in scripts
+
+    # ... published/overwritten at a STABLE url on the dedicated release branch.
+    assert "release" in scripts
+
+
+def test_self_update_manifest_version_is_filesystem_safe() -> None:
+    # Mirror the version string the CI step emits (run_number + sha) and prove
+    # AvailableRelease.__post_init__ accepts it (no "/", never "." / "..") so the
+    # supervisor can stage it as releases/<version>.
+    version = "r1234-sha-0123456789abcdef0123456789abcdef01234567"
+    release = AvailableRelease(
+        version=version, source_url="https://codeload.github.com/x/y/tar.gz/abc"
+    )
+    assert release.version == version
+    assert "/" not in release.version
+    assert release.version not in {".", ".."}
+
+
 def test_ci_workflow_publish_and_release_jobs_need_postgres_orm() -> None:
     workflow = _workflow()
     release_path_jobs = {
@@ -200,6 +254,10 @@ def test_ci_workflow_publish_and_release_jobs_need_postgres_orm() -> None:
         if "publish" in name or "release" in name
     }
 
-    assert set(release_path_jobs) == {"docker-publish", "github-release"}
+    assert set(release_path_jobs) == {
+        "docker-publish",
+        "github-release",
+        "publish-self-update-manifest",
+    }
     for job in release_path_jobs.values():
         assert "postgres-orm" in job["needs"]
