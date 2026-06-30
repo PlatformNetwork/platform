@@ -41,10 +41,9 @@ from base.supervisor.image_ref import (
     load_registry_credentials,
 )
 from base.supervisor.image_updater import (
-    DEFAULT_MASTER_IMAGE,
     DigestResolver,
-    ImageUpdateTarget,
     build_image_updater_task,
+    resolve_image_update_targets,
 )
 from base.supervisor.reaper import build_reaper_task
 from base.supervisor.scheduler import ScheduledTask
@@ -138,28 +137,18 @@ def build_scheduled_tasks(
     tasks.append(build_reaper_task(settings, health_gate=gate))
     # ------------------------------------------------------------------
     # Task 18 registration point (image-updater):
-    # Task 28 #1: call-site override targets the broker by its CANONICAL name
-    # `base-docker-broker` (the settings.docker.broker_url host) and drops
-    # the non-service `base-config-sync`. The single-port consolidation also
-    # dropped the separate `base-admin` service (proxy serves admin/registry).
-    # The proxy target MUST match the installer-created service name
-    # `base-master-proxy` (deploy/swarm/install-swarm.sh). The module-default
-    # DEFAULT_FIRST_PARTY_TARGETS is now realigned to the SAME installer-created
-    # names (base-master-proxy + base-docker-broker), so this explicit override is
-    # belt-and-suspenders; keep it so the production targets never silently drift.
+    # Targets are SETTINGS-DRIVEN (G-A5): resolve_image_update_targets defaults to
+    # the installer-created master services (base-master-proxy + base-docker-broker)
+    # when supervisor.image_updater_targets is unset, so the production targets
+    # never silently drift, and appends a validator-agent target tracking the
+    # mutable validator runtime image when supervisor.validator_agent_target_enabled
+    # is set (so a validator NODE running the agent as a swarm service auto-rolls).
     tasks.append(
         build_image_updater_task(
             settings,
             health_gate=gate,
             resolver=digest_resolver,
-            targets=(
-                ImageUpdateTarget(
-                    service="base-master-proxy", image=DEFAULT_MASTER_IMAGE
-                ),
-                ImageUpdateTarget(
-                    service="base-docker-broker", image=DEFAULT_MASTER_IMAGE
-                ),
-            ),
+            targets=resolve_image_update_targets(settings),
         )
     )
     # Task 19 registration point (challenge-image-updater).

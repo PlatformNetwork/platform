@@ -83,6 +83,40 @@ DEFAULT_FIRST_PARTY_TARGETS: tuple[ImageUpdateTarget, ...] = (
 )
 
 
+def resolve_image_update_targets(settings: Settings) -> tuple[ImageUpdateTarget, ...]:
+    """Resolve the effective image-updater targets from supervisor settings.
+
+    Settings-driven (G-A5): ``supervisor.image_updater_targets`` overrides the
+    target list when set; when unset (``None``) the built-in
+    :data:`DEFAULT_FIRST_PARTY_TARGETS` (the two master services) are used, so a
+    deploy that never configures targets keeps its prior behaviour (back-compat).
+
+    When ``supervisor.validator_agent_target_enabled`` is True a validator-agent
+    target tracking the mutable validator runtime image is appended (skipped if
+    the same service name is already present), so a validator NODE running the
+    agent as a swarm service auto-rolls on a new digest.
+    """
+    sup = settings.supervisor
+    if sup.image_updater_targets is not None:
+        targets = tuple(
+            ImageUpdateTarget(service=t.service, image=t.image)
+            for t in sup.image_updater_targets
+        )
+    else:
+        targets = DEFAULT_FIRST_PARTY_TARGETS
+    if sup.validator_agent_target_enabled and not any(
+        t.service == sup.validator_agent_service for t in targets
+    ):
+        targets = (
+            *targets,
+            ImageUpdateTarget(
+                service=sup.validator_agent_service,
+                image=sup.validator_agent_image,
+            ),
+        )
+    return targets
+
+
 def _has_explicit_tag(image: str) -> bool:
     """True when the raw image string carries an explicit tag.
 

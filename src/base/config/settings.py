@@ -251,6 +251,27 @@ class ObservabilitySettings(BaseModel):
     health_probe_interval_seconds: float = 60.0
 
 
+#: Default Swarm service name + mutable image for a validator-agent updater
+#: target. The validator agent runs the ``base validator agent`` CMD from the
+#: ``base-validator-runtime`` image (docker/Dockerfile.validator-runtime), so a
+#: validator NODE running it as a swarm service auto-rolls on a new digest.
+DEFAULT_VALIDATOR_AGENT_SERVICE = "base-validator-agent"
+DEFAULT_VALIDATOR_RUNTIME_IMAGE = (
+    "ghcr.io/baseintelligence/base-validator-runtime:latest"
+)
+
+
+class ImageUpdateTargetSetting(BaseModel):
+    """One image-updater target: a Swarm service tracking a mutable image.
+
+    ``image`` must carry an explicit tag (the updater rejects untagged images
+    under the production pin policy) and must NOT already be digest-pinned.
+    """
+
+    service: str
+    image: str
+
+
 class SupervisorSettings(BaseModel):
     """Control-plane supervisor wiring (image-updater auth + self-update).
 
@@ -281,6 +302,19 @@ class SupervisorSettings(BaseModel):
     #: registered at all (explicit-disable, no silent no-op).
     self_update_enabled: bool = False
     self_update_manifest_url: str | None = None
+    #: Image-updater targets (each a Swarm service tracking a mutable tagged
+    #: image). ``None`` (the default) means "use the built-in master defaults"
+    #: (``base-master-proxy`` + ``base-docker-broker``), preserving prior
+    #: behaviour. Set an explicit list to drive the targets from config — e.g. an
+    #: empty list on a validator NODE that watches only its agent via
+    #: ``validator_agent_target_enabled`` below.
+    image_updater_targets: list[ImageUpdateTargetSetting] | None = None
+    #: When True, append a validator-agent target tracking the mutable validator
+    #: runtime image so a validator agent running as a swarm service auto-rolls on
+    #: a new digest. Default OFF (master nodes do not run the agent).
+    validator_agent_target_enabled: bool = False
+    validator_agent_service: str = DEFAULT_VALIDATOR_AGENT_SERVICE
+    validator_agent_image: str = DEFAULT_VALIDATOR_RUNTIME_IMAGE
 
 
 class Settings(BaseModel):
