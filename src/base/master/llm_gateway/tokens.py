@@ -18,6 +18,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 
+#: A standard token scoped to a single ``(validator_hotkey, assignment_id)``
+#: work assignment. Its activity is bound to the live assignment lifecycle.
+ASSIGNMENT_KIND = "assignment"
+#: A non-assignment-scoped token for the central safety gates (agent-challenge +
+#: prism LLM review). It carries a principal/label instead of a live assignment,
+#: so the gateway treats it as active by valid signature + unexpired ``exp``
+#: alone (no assignment-lifecycle resolution).
+CENTRAL_GATE_KIND = "central-gate"
+
+#: The token kinds the gateway recognizes; any other ``k`` claim is invalid.
+_KNOWN_KINDS = frozenset({ASSIGNMENT_KIND, CENTRAL_GATE_KIND})
+
 
 class GatewayTokenError(ValueError):
     """Base class for gateway-token verification failures."""
@@ -42,6 +54,7 @@ class GatewayTokenClaims:
     validator_hotkey: str
     assignment_id: str
     expires_at: int
+    kind: str = ASSIGNMENT_KIND
 
 
 def _b64encode(raw: bytes) -> str:
@@ -94,6 +107,35 @@ class GatewayTokenAuthority:
         )
         return f"{payload_b64}.{self._sign(payload_b64)}"
 
+    def issue_central_gate(
+        self,
+        *,
+        principal: str,
+        label: str,
+        ttl_seconds: int | None = None,
+    ) -> str:
+        """Mint a non-assignment-scoped ``central-gate`` token.
+
+        The token carries a ``k`` claim marking it as :data:`CENTRAL_GATE_KIND`
+        and reuses the ``v``/``a`` slots for the principal (e.g. ``central-gate``)
+        and label (e.g. the challenge slug), so no new claim columns are needed.
+        Unlike :meth:`issue`, it is NOT bound to a live work assignment: the
+        gateway treats it as active by valid signature + unexpired ``exp`` alone.
+        """
+
+        ttl = self.default_ttl_seconds if ttl_seconds is None else ttl_seconds
+        expires_at = int(self._now_fn()) + int(ttl)
+        payload = {
+            "k": CENTRAL_GATE_KIND,
+            "v": principal,
+            "a": label,
+            "exp": expires_at,
+        }
+        payload_b64 = _b64encode(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        return f"{payload_b64}.{self._sign(payload_b64)}"
+
     def verify(
         self,
         token: str | None,
@@ -134,6 +176,10 @@ class GatewayTokenAuthority:
         ):
             raise GatewayTokenInvalid("incomplete gateway token claims")
 
+        kind = payload.get("k", ASSIGNMENT_KIND)
+        if kind not in _KNOWN_KINDS:
+            raise GatewayTokenInvalid("unknown gateway token kind")
+
         if int(self._now_fn()) >= expires_at:
             raise GatewayTokenExpired("gateway token expired")
 
@@ -146,4 +192,5 @@ class GatewayTokenAuthority:
             validator_hotkey=validator_hotkey,
             assignment_id=assignment_id,
             expires_at=expires_at,
+            kind=kind,
         )

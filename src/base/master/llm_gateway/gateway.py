@@ -33,6 +33,7 @@ from base.master.llm_gateway.redaction import (
     redact_secrets,
 )
 from base.master.llm_gateway.tokens import (
+    CENTRAL_GATE_KIND,
     GatewayTokenAuthority,
     GatewayTokenClaims,
     GatewayTokenError,
@@ -195,8 +196,14 @@ class LLMGatewayService:
         A no-op when no resolver is configured (the token is then bound only by
         signature, expiry, and scope). Raises before any provider call so a
         terminated/reassigned assignment never reaches an upstream provider.
+
+        A ``central-gate`` token has no live work assignment, so it is treated as
+        active by valid signature + unexpired ``exp`` alone (the verification that
+        produced ``claims`` already enforced both), bypassing the resolver.
         """
 
+        if claims.kind == CENTRAL_GATE_KIND:
+            return
         if self._assignment_resolver is None:
             return
         active = await self._assignment_resolver.is_active(
@@ -292,6 +299,19 @@ class LLMGatewayService:
         return self._token_authority.issue(
             validator_hotkey=validator_hotkey,
             assignment_id=assignment_id,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def issue_central_gate_token(
+        self,
+        *,
+        principal: str,
+        label: str,
+        ttl_seconds: int | None = None,
+    ) -> str:
+        return self._token_authority.issue_central_gate(
+            principal=principal,
+            label=label,
             ttl_seconds=ttl_seconds,
         )
 

@@ -442,15 +442,17 @@ Required environment (values NEVER hardcoded; supplied at runtime):
   MASTER_DATABASE_URL                        master control-plane DB URL.
   AGENT_CHALLENGE_DATABASE_URL               agent-challenge DB URL.
   PRISM_DATABASE_URL                         prism DB URL.
+  CENTRAL_GATEWAY_TOKEN                      Scoped central-gate LLM-gateway token
+                                             (base_gateway_token, mounted at
+                                             /run/secrets/base_gateway_token) for the CENTRAL
+                                             review gates (agent-challenge analyzer + prism
+                                             llm_review). REQUIRED: --static-challenges routes
+                                             both central gates through the master gateway (the
+                                             sole LLM path; no direct provider key on the
+                                             challenge services). Mint via
+                                             `base master mint-central-gate-token`.
 
 Optional environment:
-  CENTRAL_GATEWAY_TOKEN                      Scoped LLM-gateway token (base_gateway_token,
-                                             mounted at /run/secrets/base_gateway_token) for
-                                             the CENTRAL review gates (agent-challenge analyzer
-                                             + prism llm_review). When set, --static-challenges
-                                             routes both central gates through the master gateway
-                                             (no direct provider key on the challenge services).
-                                             Absent => the direct OpenRouter key no-gateway fallback.
   HF_TOKEN                                   HuggingFace token for the prism HF
                                              checkpoint publisher (base_hf_token,
                                              mounted via HF_TOKEN_FILE). Absent => skipped.
@@ -780,16 +782,18 @@ create_secrets() {
     _ensure_secret "base_gateway_deepseek_api_key"        DEEPSEEK_API_KEY
   fi
 
-  # Scoped gateway token for the CENTRAL review gates (agent-challenge analyzer
-  # LLM review + prism llm_review gpt-4o). The challenge services authenticate to
-  # the master LLM gateway with THIS scoped token instead of a direct provider
-  # key, so no OpenRouter key reaches the challenge services (architecture.md
-  # §5/§11). OPTIONAL: when $CENTRAL_GATEWAY_TOKEN is unset the central gates fall
-  # back to the direct OpenRouter key (the no-gateway fallback). Mounted at
+  # Scoped central-gate token for the CENTRAL review gates (agent-challenge
+  # analyzer LLM review + prism llm_review gpt-4o). The challenge services
+  # authenticate to the master LLM gateway with THIS scoped token instead of a
+  # direct provider key, so NO OpenRouter key reaches the challenge services
+  # (architecture.md §5/§11). REQUIRED: the master gateway is now the sole LLM
+  # path for these gates (no direct-key fallback), so an unset $CENTRAL_GATEWAY_TOKEN
+  # hard-fails like the other required secrets. Mounted at
   # /run/secrets/base_gateway_token on the prism + agent-challenge challenge
   # services (the path both consumers read by default). The operator mints the
-  # scoped token out-of-band with the gateway HMAC secret (base_gateway_token_secret).
-  _ensure_optional_secret "base_gateway_token"            CENTRAL_GATEWAY_TOKEN
+  # scoped token out-of-band with `base master mint-central-gate-token` (signed by
+  # the gateway HMAC secret base_gateway_token_secret).
+  _ensure_secret "base_gateway_token"                     CENTRAL_GATEWAY_TOKEN
 
   # hf_token is OPTIONAL: FineWeb-Edu is a public dataset, so the one-time prep
   # download usually needs no credential. When a token IS supplied (private
@@ -1395,22 +1399,17 @@ deploy_challenges() {
 
   warn "creating challenge services DIRECTLY (--static-challenges); agent-challenge api+worker pinned to node.role==manager for /data co-location"
 
-  # CENTRAL LLM review-gate routing (architecture.md §5/§7/§11). When
-  # $CENTRAL_GATEWAY_TOKEN is provisioned (base_gateway_token secret), the
-  # agent-challenge analyzer LLM review and the prism llm_review gpt-4o gate route
-  # through the MASTER LLM gateway with that scoped token: the gateway injects the
-  # provider key server-side, so NO direct OpenRouter key is mounted on the
-  # challenge services. The consumer base URL is derived from the same
-  # GATEWAY_PUBLIC_BASE_URL the proxy advertises (agent-challenge reads the gateway
-  # ROOT and appends /llm/openrouter itself; prism reads the full /llm/openrouter
-  # route). Absent => the direct OpenRouter key is the no-gateway fallback.
-  local central_gateway_enabled=false
-  [[ -n "${CENTRAL_GATEWAY_TOKEN:-}" ]] && central_gateway_enabled=true
-  if [[ "${central_gateway_enabled}" == "true" ]]; then
-    log "  central gates -> master LLM gateway (${GATEWAY_PUBLIC_BASE_URL}); base_gateway_token mounted, no direct provider key on challenge services"
-  else
-    log "  central gates -> direct OpenRouter key (no-gateway fallback; \$CENTRAL_GATEWAY_TOKEN unset)"
-  fi
+  # CENTRAL LLM review-gate routing (architecture.md §5/§7/§11). The master LLM
+  # gateway is the SOLE LLM path for the central safety gates: the agent-challenge
+  # analyzer LLM review and the prism llm_review gpt-4o gate ALWAYS route through
+  # the MASTER LLM gateway with the scoped central-gate token (the REQUIRED
+  # base_gateway_token secret, minted via `base master mint-central-gate-token`).
+  # The gateway injects the provider key server-side, so NO direct OpenRouter key
+  # is mounted on the challenge services. The consumer base URL is derived from
+  # the same GATEWAY_PUBLIC_BASE_URL the proxy advertises (agent-challenge reads
+  # the gateway ROOT and appends /llm/openrouter itself; prism reads the full
+  # /llm/openrouter route).
+  log "  central gates -> master LLM gateway (${GATEWAY_PUBLIC_BASE_URL}); base_gateway_token mounted, no direct provider key on challenge services"
 
   # own_runner eval image allowlist + runner image, applied to BOTH the
   # agent-challenge api and the worker so the broker DooD job is permitted to run
@@ -1423,20 +1422,14 @@ deploy_challenges() {
     "CHALLENGE_VALIDATOR_ROLE=master"
     "CHALLENGE_DATABASE_URL_FILE=${SECRET_MOUNT_DIR}/database_url"
   )
-  # Central AST+LLM gate review routing. Gateway mode: point the analyzer at the
-  # master gateway ROOT (it appends /llm/openrouter) + read the scoped token from
-  # /run/secrets/base_gateway_token. Fallback: the direct OpenRouter key file +
-  # the base_openrouter_api_key secret mounted at ${SECRET_MOUNT_DIR}/openrouter_api_key.
+  # Central AST+LLM gate review routing. Point the analyzer at the master gateway
+  # ROOT (it appends /llm/openrouter) + read the scoped central-gate token from
+  # /run/secrets/base_gateway_token. NO direct OpenRouter key on the service.
   local -a ac_gate_secret_specs=()
-  if [[ "${central_gateway_enabled}" == "true" ]]; then
-    ac_eval_env+=(
-      "CHALLENGE_LLM_GATEWAY_BASE_URL=${GATEWAY_PUBLIC_BASE_URL}"
-      "CHALLENGE_LLM_GATEWAY_TOKEN_FILE=/run/secrets/base_gateway_token"
-    )
-  else
-    ac_eval_env+=("CHALLENGE_OPENROUTER_API_KEY_FILE=${SECRET_MOUNT_DIR}/openrouter_api_key")
-    ac_gate_secret_specs+=("base_openrouter_api_key:openrouter_api_key")
-  fi
+  ac_eval_env+=(
+    "CHALLENGE_LLM_GATEWAY_BASE_URL=${GATEWAY_PUBLIC_BASE_URL}"
+    "CHALLENGE_LLM_GATEWAY_TOKEN_FILE=/run/secrets/base_gateway_token"
+  )
 
   # agent-challenge primary API service (container port 8000). Overlay-internal —
   # reached over the overlay by the proxy/master; no host publish.
@@ -1444,9 +1437,7 @@ deploy_challenges() {
   # per-node base_agent_challenge_pg /data volume (see CHALLENGE_EXTRA_CONSTRAINTS declaration).
   CHALLENGE_EXTRA_CONSTRAINTS=("node.role==manager")
   CHALLENGE_ENV=("${ac_eval_env[@]}")
-  if [[ "${central_gateway_enabled}" == "true" ]]; then
-    CHALLENGE_EXTRA_SECRETS=("source=base_gateway_token,target=base_gateway_token")
-  fi
+  CHALLENGE_EXTRA_SECRETS=("source=base_gateway_token,target=base_gateway_token")
   _deploy_challenge_service \
     "challenge-agent-challenge" "${IMAGE_AGENT_CHALLENGE}" "${AGENT_CHALLENGE_PORT}" \
     "base_agent_challenge_pg" \
@@ -1473,9 +1464,7 @@ deploy_challenges() {
     "CHALLENGE_ARTIFACT_ROOT=/data"
   )
   CHALLENGE_CMD=("agent-challenge-worker" "--poll-interval" "5")
-  if [[ "${central_gateway_enabled}" == "true" ]]; then
-    CHALLENGE_EXTRA_SECRETS=("source=base_gateway_token,target=base_gateway_token")
-  fi
+  CHALLENGE_EXTRA_SECRETS=("source=base_gateway_token,target=base_gateway_token")
   _deploy_challenge_service \
     "challenge-agent-challenge-worker" "${IMAGE_AGENT_CHALLENGE}" "${AGENT_CHALLENGE_PORT}" \
     "base_agent_challenge_pg" \
@@ -1516,10 +1505,15 @@ deploy_challenges() {
     "PRISM_BASE_EVAL_GPU_COUNT=1"
     "PRISM_DATABASE_URL=sqlite+aiosqlite:////data/prism.sqlite3"
     # OpenRouter LLM HARD GATE — ENABLED (architecture.md section 7; M5). The strong-model
-    # review of both miner scripts is a hard gate that can REJECT before any GPU work. The key
-    # is the mounted openrouter_api_key secret (challenge service ONLY, never the eval
-    # container); model openai/gpt-4o + base https://openrouter.ai/api/v1 are config defaults.
+    # review of both miner scripts is a hard gate that can REJECT before any GPU work. The
+    # provider key is injected server-side by the master LLM gateway (the gate routes through
+    # PRISM_LLM_GATEWAY_URL below with the scoped central-gate token); model openai/gpt-4o is a
+    # config default.
     "PRISM_LLM_REVIEW_ENABLED=true"
+    # Raise the review completion budget above the 512 default: the gate forces a structured
+    # tool call whose arguments the 512 default truncates (production fix). 4096 fits the full
+    # forced-tool response.
+    "PRISM_LLM_REVIEW_MAX_TOKENS=4096"
     # Host-side held-out delta + converged anti-memorization gap (m3-heldout-delta /
     # m4-heldout-live-budget-tuning / m4-anticheat-memorization-heldout): the SECRET val split
     # and the non-secret TRAIN split must both be readable by the manager-pinned prism SCORER
@@ -1539,13 +1533,14 @@ deploy_challenges() {
     "PRISM_BASE_EVAL_HELDOUT_VAL_BYTE_BUDGET=65536"
     "PRISM_BASE_EVAL_HELDOUT_TIMEOUT_SECONDS=600"
   )
-  # Route the prism llm_review gpt-4o gate through the master OpenRouter gateway when
-  # a scoped token is provisioned. PRISM_LLM_GATEWAY_URL is the FULL gateway route
-  # (prism uses it directly as the chat base_url); the scoped token comes from the
-  # base_gateway_token secret mounted above. Absent => direct OpenRouter key fallback.
-  if [[ "${central_gateway_enabled}" == "true" ]]; then
-    prism_env+=("PRISM_LLM_GATEWAY_URL=${GATEWAY_PUBLIC_BASE_URL}/llm/openrouter")
-  fi
+  # Route the prism llm_review gpt-4o gate through the master OpenRouter gateway.
+  # PRISM_LLM_GATEWAY_URL is the FULL gateway route (prism uses it directly as the
+  # chat base_url); BASE_GATEWAY_TOKEN_FILE points at the scoped central-gate token
+  # mounted from the base_gateway_token secret below. NO direct OpenRouter key.
+  prism_env+=(
+    "PRISM_LLM_GATEWAY_URL=${GATEWAY_PUBLIC_BASE_URL}/llm/openrouter"
+    "BASE_GATEWAY_TOKEN_FILE=/run/secrets/base_gateway_token"
+  )
   # Host-side SCORER read-only mounts on the manager (NOT the eval container): the SECRET
   # held-out val split (matches PRISM_BASE_EVAL_VAL_DATA_DIR) and the non-secret TRAIN split
   # used ONLY for the converged-memorization-gap reference (matches PRISM_BASE_EVAL_TRAIN_DATA_DIR).
@@ -1556,22 +1551,12 @@ deploy_challenges() {
     "type=volume,source=prism_fineweb_edu_val,destination=/secret/val,readonly=true"
     "type=volume,source=prism_fineweb_edu_train,destination=/secret/train,readonly=true"
   )
-  # CENTRAL llm_review (gpt-4o) routing. Gateway mode ($CENTRAL_GATEWAY_TOKEN set):
-  # mount the scoped base_gateway_token at /run/secrets/base_gateway_token (the
-  # PrismSettings.llm_gateway_token_file default) — paired with the
-  # PRISM_LLM_GATEWAY_URL set on prism_env above — so the gate routes through the
-  # master OpenRouter gateway — NO direct provider key on the challenge services. Fallback (no gateway): mount the
-  # OpenRouter key at the EXACT target prism reads (/run/secrets/openrouter_api_key —
-  # config.py openrouter_api_key_file default), NOT the ${SECRET_MOUNT_DIR}/"base/"
-  # subdir the positional SECRET_SPECs use. Passed verbatim via CHALLENGE_EXTRA_SECRETS
-  # so the `base/` prefix is NOT applied. The fallback matches the LIVE stack (which
-  # mounts the pre-existing base_or_key_real at the same target).
+  # CENTRAL llm_review (gpt-4o) routing. Mount the scoped central-gate token at
+  # /run/secrets/base_gateway_token (the BASE_GATEWAY_TOKEN_FILE set on prism_env
+  # above) — paired with PRISM_LLM_GATEWAY_URL — so the gate routes through the
+  # master OpenRouter gateway. NO direct provider key on the challenge services.
   local -a prism_extra_secrets=()
-  if [[ "${central_gateway_enabled}" == "true" ]]; then
-    prism_extra_secrets+=("source=base_gateway_token,target=base_gateway_token")
-  else
-    prism_extra_secrets+=("source=base_openrouter_api_key,target=openrouter_api_key")
-  fi
+  prism_extra_secrets+=("source=base_gateway_token,target=base_gateway_token")
   # HuggingFace checkpoint-publisher token (architecture.md §7): the prism HF
   # publisher reads it from /run/secrets/hf_token (PrismSettings.hf_token_file
   # default; HF_TOKEN_FILE). OPTIONAL — base_hf_token is only created when

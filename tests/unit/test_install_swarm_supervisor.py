@@ -42,6 +42,7 @@ REQUIRED_SECRET_ENV = {
     "PRISM_PG_PASSWORD": "x",
     "OPENROUTER_API_KEY": "x",
     "GATEWAY_TOKEN": "x",
+    "CENTRAL_GATEWAY_TOKEN": "x",
     "DEEPSEEK_API_KEY": "x",
 }
 

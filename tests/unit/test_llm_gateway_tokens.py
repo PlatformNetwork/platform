@@ -8,6 +8,8 @@ import json
 import pytest
 
 from base.master.llm_gateway import (
+    ASSIGNMENT_KIND,
+    CENTRAL_GATE_KIND,
     DEEPSEEK_BASE_URL,
     GatewayTokenAuthority,
     GatewayTokenExpired,
@@ -24,6 +26,53 @@ from base.master.llm_gateway import (
 )
 
 SECRET = "unit-secret"
+
+
+def test_issue_then_verify_defaults_to_assignment_kind() -> None:
+    authority = GatewayTokenAuthority(SECRET, now_fn=lambda: 1000.0)
+    token = authority.issue(validator_hotkey="v1", assignment_id="a1", ttl_seconds=60)
+    assert authority.verify(token).kind == ASSIGNMENT_KIND
+
+
+def test_issue_central_gate_round_trips_kind_and_slots() -> None:
+    authority = GatewayTokenAuthority(SECRET, now_fn=lambda: 1000.0)
+    token = authority.issue_central_gate(
+        principal="central-gate", label="agent-challenge", ttl_seconds=60
+    )
+    claims = authority.verify(token)
+    assert claims.kind == CENTRAL_GATE_KIND
+    # The principal/label reuse the v/a slots (no new claim columns).
+    assert claims.validator_hotkey == "central-gate"
+    assert claims.assignment_id == "agent-challenge"
+    assert claims.expires_at == 1060
+
+
+def test_central_gate_default_ttl_used_when_unset() -> None:
+    authority = GatewayTokenAuthority(
+        SECRET, now_fn=lambda: 1000.0, default_ttl_seconds=42
+    )
+    token = authority.issue_central_gate(principal="central-gate", label="prism")
+    assert authority.verify(token).expires_at == 1042
+
+
+def test_unknown_kind_is_rejected_as_invalid() -> None:
+    authority = GatewayTokenAuthority(SECRET, now_fn=lambda: 1000.0)
+    # Forge a payload carrying an unknown ``k`` claim, signed with the real secret
+    # so only the kind check can reject it.
+    import base64
+    import json as _json
+
+    payload = {"k": "rogue", "v": "v1", "a": "a1", "exp": 2000}
+    payload_b64 = (
+        base64.urlsafe_b64encode(
+            _json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
+    signature = authority._sign(payload_b64)
+    with pytest.raises(GatewayTokenInvalid):
+        authority.verify(f"{payload_b64}.{signature}")
 
 
 class Clock:

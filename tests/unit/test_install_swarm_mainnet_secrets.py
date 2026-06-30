@@ -2,14 +2,16 @@
 
 Encodes the pre-mainnet hardening contract for ``install-swarm.sh``:
 
-1. Every one of the 14 REQUIRED secret env vars HARD-FAILS the installer
+1. Every one of the 15 REQUIRED secret env vars HARD-FAILS the installer
    (``_ensure_secret`` → ``die``) when unset, so a missing secret is caught at
    ``create_secrets`` (STEP 6) and never silently tolerated.
 2. The 1 CONDITIONAL secret (``DEEPSEEK_API_KEY``) hard-fails only when
    ``GATEWAY_PROVIDER_MODE=real`` (the default) and is tolerated/skipped under
    ``mock``.
-3. The 2 OPTIONAL secrets (``CENTRAL_GATEWAY_TOKEN``, ``HF_TOKEN``) never
-   hard-fail — an unset value is logged-and-skipped (``_ensure_optional_secret``).
+3. The 1 OPTIONAL secret (``HF_TOKEN``) never hard-fails — an unset value is
+   logged-and-skipped (``_ensure_optional_secret``). ``CENTRAL_GATEWAY_TOKEN`` is
+   now REQUIRED: the master gateway is the sole LLM path for the central gates
+   (no direct-key fallback), so its scoped token must be provisioned.
 4. The GHCR credentials hard-fail in ``preflight`` when unset.
 5. Single-node placement behavior: the DEFAULT (no flags) master-orchestrated
    path EMITS the stranding ``node.role==worker`` default constraint (challenges
@@ -40,7 +42,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SWARM_INSTALLER = ROOT / "deploy" / "swarm" / "install-swarm.sh"
 SWARM_README = ROOT / "deploy" / "swarm" / "README.md"
 
-# The 14 REQUIRED secrets: env var -> the docker secret name _ensure_secret makes.
+# The 15 REQUIRED secrets: env var -> the docker secret name _ensure_secret makes.
 # A missing/empty env var is a HARD error (die) — we never invent secret material.
 REQUIRED_SECRETS: dict[str, str] = {
     "BASE_ADMIN_TOKEN": "base_admin_token",
@@ -59,14 +61,14 @@ REQUIRED_SECRETS: dict[str, str] = {
     "PRISM_PG_PASSWORD": "base_prism_pg_password",
     "OPENROUTER_API_KEY": "base_openrouter_api_key",
     "GATEWAY_TOKEN": "base_gateway_token_secret",
+    "CENTRAL_GATEWAY_TOKEN": "base_gateway_token",
 }
 
 # The 1 CONDITIONAL secret (required only when GATEWAY_PROVIDER_MODE=real).
 CONDITIONAL_SECRET = ("DEEPSEEK_API_KEY", "base_gateway_deepseek_api_key")
 
-# The 2 OPTIONAL secrets (never hard-fail; logged-and-skipped when unset).
+# The 1 OPTIONAL secret (never hard-fails; logged-and-skipped when unset).
 OPTIONAL_SECRETS: dict[str, str] = {
-    "CENTRAL_GATEWAY_TOKEN": "base_gateway_token",
     "HF_TOKEN": "base_hf_token",
 }
 
@@ -90,6 +92,7 @@ REQUIRED_SECRET_ENV: dict[str, str] = {
     "PRISM_PG_PASSWORD": "x",
     "OPENROUTER_API_KEY": "x",
     "GATEWAY_TOKEN": "x",
+    "CENTRAL_GATEWAY_TOKEN": "x",
     "DEEPSEEK_API_KEY": "x",
 }
 
@@ -192,13 +195,15 @@ def test_required_secret_hard_fails_when_unset(envvar: str, tmp_path: Path) -> N
     # _ensure_secret's die message names the missing env var (value never printed).
     assert f"required secret env var ${envvar} is empty" in result.stderr
     # No docker secret was created for it (the die precedes the plan_secret_stdin).
+    # The trailing ``-`` (the create reads the value from stdin) disambiguates
+    # ``base_gateway_token`` from the ``base_gateway_token_secret`` planned earlier.
     secret_name = REQUIRED_SECRETS[envvar]
-    assert f"docker secret create {secret_name}" not in result.stdout
+    assert f"docker secret create {secret_name} -" not in result.stdout
 
 
 def test_all_required_secrets_present_reaches_full_plan(tmp_path: Path) -> None:
     # Sanity: with every required secret present the dry-run completes and plans
-    # all 14 secret creates (proves the per-var drop above is what triggers death).
+    # all 15 secret creates (proves the per-var drop above is what triggers death).
     result = _run(tmp_path, "--static-challenges")
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     for secret_name in REQUIRED_SECRETS.values():
@@ -247,8 +252,8 @@ def test_deepseek_not_required_when_provider_mode_mock(tmp_path: Path) -> None:
 
 
 def test_optional_secrets_skip_silently_when_unset(tmp_path: Path) -> None:
-    # CENTRAL_GATEWAY_TOKEN / HF_TOKEN are absent from REQUIRED_SECRET_ENV, so a
-    # plain run already exercises the optional-skip path.
+    # HF_TOKEN is absent from REQUIRED_SECRET_ENV, so a plain run already
+    # exercises the optional-skip path.
     result = _run(tmp_path, "--static-challenges")
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     for envvar, secret_name in OPTIONAL_SECRETS.items():
@@ -262,7 +267,7 @@ def test_optional_secrets_render_when_set(tmp_path: Path) -> None:
     result = _run(
         tmp_path,
         "--static-challenges",
-        extra_env={"CENTRAL_GATEWAY_TOKEN": "scoped", "HF_TOKEN": "hf"},
+        extra_env={"HF_TOKEN": "hf"},
     )
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     for secret_name in OPTIONAL_SECRETS.values():

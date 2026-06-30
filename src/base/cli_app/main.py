@@ -47,6 +47,7 @@ from base.master.docker_orchestrator import (
     worker_command_from_metadata,
 )
 from base.master.llm_gateway import (
+    GatewayTokenAuthority,
     LLMGatewayService,
     ProviderConfig,
     SqlAlchemyUsageRecorder,
@@ -923,6 +924,36 @@ def worker_rm(
 def worker_inspect(node: str):
     """Inspect a Swarm node (``docker node inspect``)."""
     _docker_cli(["node", "inspect", node])
+
+
+@master_app.command("mint-central-gate-token")
+def master_mint_central_gate_token(
+    config: Path = typer.Option(Path("config/master.example.yaml")),
+    principal: str = typer.Option("central-gate", "--principal"),
+    label: str = typer.Option(..., "--label"),
+    ttl_seconds: int = typer.Option(31_536_000, "--ttl-seconds"),
+) -> None:
+    """Mint a non-assignment-scoped ``central-gate`` gateway token.
+
+    The token authorizes the central safety gates (agent-challenge analyzer LLM
+    review + prism ``llm_review`` gate) to call the master LLM gateway WITHOUT a
+    live work assignment; the gateway records usage under
+    ``(validator_hotkey=principal, assignment_id=label)``. It is signed with the
+    configured gateway token secret (``gateway.token_secret`` /
+    ``token_secret_file``, e.g. ``/run/secrets/gateway_token_secret``). ONLY the
+    token string is printed to stdout (no logging) so it can be piped straight
+    into the ``base_gateway_token`` docker secret.
+    """
+    settings = load_settings(config)
+    secret = read_secret(
+        settings.gateway.token_secret, settings.gateway.token_secret_file
+    )
+    authority = GatewayTokenAuthority(secret)
+    typer.echo(
+        authority.issue_central_gate(
+            principal=principal, label=label, ttl_seconds=ttl_seconds
+        )
+    )
 
 
 @master_app.command("refresh-challenge-images")

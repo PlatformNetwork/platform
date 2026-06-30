@@ -44,6 +44,8 @@ from base.master.llm_gateway.redaction import (
     redact_secrets,
 )
 from base.master.llm_gateway.tokens import (
+    ASSIGNMENT_KIND,
+    CENTRAL_GATE_KIND,
     GatewayTokenAuthority,
     GatewayTokenClaims,
     GatewayTokenError,
@@ -73,6 +75,8 @@ __all__ = [
     "OPENROUTER_BASE_URL_ENV",
     "OPENROUTER_PROVIDER",
     "REDACTION_PLACEHOLDER",
+    "ASSIGNMENT_KIND",
+    "CENTRAL_GATE_KIND",
     "AssignmentLifecycleResolver",
     "AuthenticatedCall",
     "GatewayAssignmentInactiveError",

@@ -26,7 +26,7 @@ argv and never printed (the plan log shows the env var NAME only).
 > operator-lane / user-provided. This section documents WHICH secrets are needed
 > and HOW placement must be chosen, not the values themselves.
 
-### Required secrets (14) — installer hard-fails if any is unset
+### Required secrets (15) — installer hard-fails if any is unset
 
 Each is created as the named Docker secret from the listed env var
 (`docker secret create <name> -` fed on stdin):
@@ -47,6 +47,7 @@ Each is created as the named Docker secret from the listed env var
 | `base_prism_pg_password` | `PRISM_PG_PASSWORD` | `challenge-prism-postgres` password. |
 | `base_openrouter_api_key` | `OPENROUTER_API_KEY` | OpenRouter key (master gateway + prism LLM-review gate). |
 | `base_gateway_token_secret` | `GATEWAY_TOKEN` | **MANDATORY** gateway HMAC token-signing secret. `base master proxy` always builds the LLM gateway and `GatewayTokenAuthority` rejects an empty secret, so the proxy **fails fast at startup** without it. |
+| `base_gateway_token` | `CENTRAL_GATEWAY_TOKEN` | Scoped **central-gate** token for the central review gates (agent-challenge analyzer + prism `llm_review`). The master LLM gateway is the **sole LLM path** for these gates (no direct-key fallback), so it mounts at `/run/secrets/base_gateway_token` and an unset value hard-fails. Mint with `base master mint-central-gate-token --label <slug>`. |
 
 ### Conditional secret (1)
 
@@ -54,14 +55,13 @@ Each is created as the named Docker secret from the listed env var
 |---------------|---------|---------------|
 | `base_gateway_deepseek_api_key` | `DEEPSEEK_API_KEY` | Required **only** when `GATEWAY_PROVIDER_MODE=real` (the default). The gateway injects this server-side so validators/eval runtimes hold no provider key. With `GATEWAY_PROVIDER_MODE=mock` the deterministic mock provider is used and this secret is not required. |
 
-### Optional secrets (2) — never hard-fail
+### Optional secrets (1) — never hard-fail
 
 These use `_ensure_optional_secret`: an unset env var logs `optional secret … skipped`
 and continues (no error).
 
 | Docker secret | Env var | Effect when absent |
 |---------------|---------|--------------------|
-| `base_gateway_token` | `CENTRAL_GATEWAY_TOKEN` | Scoped gateway token for the central review gates (agent-challenge analyzer + prism `llm_review`). Absent → the central gates fall back to the direct OpenRouter key (no-gateway fallback). |
 | `base_hf_token` | `HF_TOKEN` | HuggingFace token for the prism HF checkpoint publisher (`HF_TOKEN_FILE`). Absent → the publisher runs token-less (fine for the public FineWeb-Edu repo). |
 
 ### GHCR credentials path
