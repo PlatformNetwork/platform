@@ -5,20 +5,26 @@
 network:
   name: base
   netuid: 100
-  chain_endpoint: null
+  # Live master runs on finney mainnet. config-sync overwrites
+  # /etc/base/master.yaml from this file, so this MUST equal the live value
+  # (a null/empty here would clobber the running master's chain endpoint).
+  chain_endpoint: finney
   wallet_name: default
   wallet_hotkey: default
   wallet_path: null
   master_uid: 0
+  # Static mock-metagraph seam (architecture.md G1), OFF in production ([] keeps
+  # the live-metagraph path). Explicit here to match the live config exactly.
+  mock_metagraph: []
 
 master:
   registry_url: https://chain.joinbase.ai
   proxy_host: 0.0.0.0
-  # Production-correct published proxy port (matches the installer's
-  # MASTER_PROXY_PORT default + gateway.public_base_url below). config-sync
-  # force-rolls base-master-proxy on any digest change, so a stale value here
-  # would clobber the live deploy onto the wrong port.
-  proxy_port: 18080
+  # Production-correct published proxy port (matches the live deploy + the
+  # installer's MASTER_PROXY_PORT default + gateway.public_base_url below).
+  # config-sync force-rolls base-master-proxy on any digest change, so a stale
+  # value here would clobber the live deploy onto the wrong port.
+  proxy_port: 19080
   epoch_interval_seconds: 360
   metagraph_cache_ttl_seconds: 300
   registry_state_file: /var/lib/base/registry.json
@@ -74,7 +80,7 @@ security:
 # gateway tokens; the proxy fails fast at startup if it is absent.
 gateway:
   provider_mode: real
-  public_base_url: http://51.83.112.164:18080
+  public_base_url: http://88.216.198.199:19080
   token_secret_file: /run/secrets/gateway_token_secret
   deepseek_api_key_file: /run/secrets/deepseek_api_key
   openrouter_api_key_file: /run/secrets/openrouter_api_key

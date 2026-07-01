@@ -36,8 +36,18 @@ MASTER_YAML = ROOT / "deploy" / "swarm" / "master.yaml"
 INSTALL_SWARM = ROOT / "deploy" / "swarm" / "install-swarm.sh"
 
 POSTGRES_DEFAULT_PORT = 5432
-# The live topology + installer publish the public proxy on this port.
-PROXY_PORT_PRODUCTION = 18080
+# The live topology + installer publish the public proxy on this port. The live
+# master runs on 19080 (the old 18080/51.83.112.164 deploy is decommissioned);
+# config-sync overwrites /etc/base/master.yaml from the canonical file, so a
+# stale value here would roll the live proxy onto the wrong port on the next sync.
+PROXY_PORT_PRODUCTION = 19080
+# Live production host advertised in gateway.public_base_url (88.216.198.199; the
+# old 51.83.112.164 host is decommissioned) and the live chain network.
+ADVERTISE_ADDR_PRODUCTION = "88.216.198.199"
+CHAIN_ENDPOINT_PRODUCTION = "finney"
+# Values that MUST NOT reappear in the canonical config: they would break the
+# live master on a config-sync (old port / decommissioned host).
+STALE_TOKENS = ("18080", "51.83.112.164")
 
 
 def _installer_text() -> str:
@@ -296,3 +306,63 @@ def test_master_yaml_supervisor_block_loads_into_supervisor_settings() -> None:
         == cfg["supervisor"]["self_update_manifest_url"]
     )
     assert supervisor.registry == cfg["supervisor"]["registry"]
+
+
+# ---------------------------------------------------------------------------
+# Live-rollout readiness (m9, VAL-CODE-CFG-001): config-sync OVERWRITES
+# /etc/base/master.yaml from this canonical file and force-rolls
+# base-master-proxy, so the canonical file MUST equal the live working config
+# (a sync must be a functional no-op). This guards the exact live values and
+# fails if any decommissioned host/port or a null chain endpoint reappears.
+# ---------------------------------------------------------------------------
+
+
+def test_master_yaml_equals_live_production_config() -> None:
+    cfg = _master_yaml()
+
+    # master + gateway published proxy endpoint (live 88.216.198.199:19080).
+    assert int(cfg["master"]["proxy_port"]) == PROXY_PORT_PRODUCTION
+    assert (
+        cfg["gateway"]["public_base_url"]
+        == f"http://{ADVERTISE_ADDR_PRODUCTION}:{PROXY_PORT_PRODUCTION}"
+    )
+
+    # network: live master runs on finney with the mock-metagraph seam OFF.
+    assert cfg["network"]["chain_endpoint"] == CHAIN_ENDPOINT_PRODUCTION
+    assert cfg["network"]["chain_endpoint"] is not None
+    assert cfg["network"]["mock_metagraph"] == []
+
+    # gateway: real providers, keys injected server-side from secret files.
+    gateway = cfg["gateway"]
+    assert gateway["provider_mode"] == "real"
+    assert gateway["token_secret_file"] == "/run/secrets/gateway_token_secret"
+    assert gateway["deepseek_api_key_file"] == "/run/secrets/deepseek_api_key"
+    assert gateway["openrouter_api_key_file"] == "/run/secrets/openrouter_api_key"
+
+    # broker allowlist matches the live (broad, namespaced) allowlist.
+    assert cfg["docker"]["broker_allowed_images"] == ["ghcr.io/baseintelligence/"]
+
+    # database.url stays the env-overridden placeholder (live overrides via
+    # BASE_DATABASE__URL); host must be the master postgres service.
+    db_host, _ = _host_port_from_url(cfg["database"]["url"])
+    assert db_host == _installer_master_postgres_service()
+
+    # supervisor self-update stays ENABLED + wired to the published manifest.
+    supervisor = cfg["supervisor"]
+    assert supervisor["self_update_enabled"] is True
+    assert (
+        supervisor["self_update_manifest_url"]
+        == "https://raw.githubusercontent.com/BaseIntelligence/base/release/self-update-manifest.json"
+    )
+    assert supervisor["registry"] == "ghcr.io"
+    assert supervisor["registry_docker_config_path"] == "/root/.docker/config.json"
+
+    # Live runs WITHOUT environment=production; flipping it via config-sync would
+    # activate policy guards that reject the broad broker allowlist (out of scope).
+    assert "environment" not in cfg
+
+
+def test_master_yaml_has_no_stale_decommissioned_host_or_port() -> None:
+    raw = MASTER_YAML.read_text(encoding="utf-8")
+    for token in STALE_TOKENS:
+        assert token not in raw, f"stale value {token!r} must not appear in master.yaml"

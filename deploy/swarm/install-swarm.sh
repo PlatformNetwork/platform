@@ -57,8 +57,9 @@ set -euo pipefail
 # Configuration (overridable via flags / environment). NO secrets here.
 # ============================================================================
 
-# Validator node Swarm advertise address (default = the live validator IP).
-ADVERTISE_ADDR="${ADVERTISE_ADDR:-51.83.112.164}"
+# Swarm advertise address (default = the live production host 88.216.198.199;
+# the old 51.83.112.164 host is decommissioned).
+ADVERTISE_ADDR="${ADVERTISE_ADDR:-88.216.198.199}"
 
 # Postgres dump + baseline directory produced by the cutover backup step.
 BACKUP_DIR="${BACKUP_DIR:-/root/cutover-backups/LATEST}"
@@ -130,12 +131,12 @@ SECRET_MOUNT_DIR="/run/secrets/base"
 # host port, the in-container listen port, and the overlay broker_url stay
 # mutually consistent.
 #   broker : base master broker  -> docker.broker_*        (8082)
-#   proxy  : base master proxy   -> proxy_host:proxy_port  (18080)
+#   proxy  : base master proxy   -> proxy_host:proxy_port  (19080)
 # SINGLE PUBLIC API: the proxy also serves the admin/registry surface
-# (/v1/registry, /v1/weights/latest, /health) on :18080, so there is no separate
+# (/v1/registry, /v1/weights/latest, /health) on :19080, so there is no separate
 # admin service/port (the former base-master-admin on 18900 is removed).
 MASTER_BROKER_PORT="${MASTER_BROKER_PORT:-8082}"
-MASTER_PROXY_PORT="${MASTER_PROXY_PORT:-18080}"
+MASTER_PROXY_PORT="${MASTER_PROXY_PORT:-19080}"
 
 # Placement constraint for the proxy (the single public API also serving the
 # admin/registry surface). For the NO-CHAIN decentralized deploy the proxy seeds
@@ -481,7 +482,7 @@ Bring-up mode:
                           in --backup-dir are REQUIRED and restored (default).
 
 Configuration:
-  --advertise-addr IP     Swarm advertise address (default: 51.83.112.164).
+  --advertise-addr IP     Swarm advertise address (default: 88.216.198.199).
   --backup-dir DIR        pg_dump + baseline dir (default: /root/cutover-backups/LATEST).
   --master-config PATH    Rendered master config path (default: /etc/base/master.yaml).
   -h, --help              Show this help.
@@ -536,7 +537,7 @@ Optional environment:
   MASTER_PROXY_CONSTRAINT                    Placement constraint for the proxy (default:
                                              node.role==manager for the no-chain deploy;
                                              set empty to drop the pin).
-  MASTER_PROXY_PORT / MASTER_BROKER_PORT     Published host ports for the proxy (18080) and
+  MASTER_PROXY_PORT / MASTER_BROKER_PORT     Published host ports for the proxy (19080) and
                                              broker (8082); flow into both the --publish and
                                              the rendered master config (proxy_port/broker_*).
   SUPERVISOR_REGISTRY                        Registry the supervisor image-updaters
@@ -1065,7 +1066,7 @@ _verify_rowcounts() {
 #
 #    Service name <-> command <-> port:
 #      base-docker-broker : `base master broker` : 8082 (docker.broker_*)
-#      base-master-proxy  : `base master proxy`  : 18080 (proxy_host:proxy_port)
+#      base-master-proxy  : `base master proxy`  : 19080 (proxy_host:proxy_port)
 #    The proxy is the SINGLE public API: it serves /v1/registry, /v1/weights/latest,
 #    /health, the admin/management routes (token-gated), the signed upload bridge,
 #    and the /challenges/* passthrough, AND it runs the orchestrator that creates
@@ -1350,7 +1351,7 @@ _deploy_master_service() {
   #     broker/proxy read per-challenge tokens from here. The PROXY needs
   #     it to load each challenge's bearer token when verifying miner uploads (else
   #     500 "Challenge token file is missing"). Seeded by _seed_proxy_challenge_tokens.
-  #   * --update-order stop-first: these are FIXED host-port services (8082/18080,
+  #   * --update-order stop-first: these are FIXED host-port services (8082/19080,
   #     mode=host); the default start-first ordering causes a transient port collision
   #     (EADDRINUSE) on update. stop-first releases the port before the new task binds.
   local -a extra=(
@@ -1422,7 +1423,7 @@ _deploy_master_service() {
     # metagraph (network.mock_metagraph rendered above) and builds NO live
     # Subtensor, so it runs on the MANAGER (the control-plane / hotkey node),
     # matching the broker's intrinsic node.role==manager pin and the fixed
-    # mode=host port (18080). This REPLACES the old hard node.role==worker pin,
+    # mode=host port (19080). This REPLACES the old hard node.role==worker pin,
     # which existed only because the live chain was reachable from a worker; with
     # the mock metagraph there is no chain. Configurable via MASTER_PROXY_CONSTRAINT
     # (set empty to drop the pin). Do NOT --constraint-add on an already-pinned live
