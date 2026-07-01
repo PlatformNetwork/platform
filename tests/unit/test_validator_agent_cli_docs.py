@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from typer.testing import CliRunner
 
-from base.cli_app.main import _build_validator_agent, app
+from base.cli_app.main import (
+    _build_validator_agent,
+    _build_validator_weight_submitter,
+    _run_validator_agent_runtime,
+    app,
+)
 from base.config.settings import Settings, ValidatorAgentSettings
+from base.validator.weight_submitter import ValidatorWeightSubmitter
 
 ROOT = Path(__file__).resolve().parents[2]
 OPERATIONS_DOC = ROOT / "docs" / "operations" / "validator.md"
@@ -89,6 +97,47 @@ def test_build_validator_agent_omits_identity_when_unset(
 
     assert "display_name" not in meta
     assert "logo_url" not in meta
+
+
+def test_build_validator_weight_submitter_is_gated_off_by_default() -> None:
+    # Default settings: submit_on_chain_enabled=False -> the per-validator
+    # submitter is a no-op (and never builds a live submit runtime / Subtensor).
+    submitter = _build_validator_weight_submitter(Settings())
+    assert isinstance(submitter, ValidatorWeightSubmitter)
+    assert submitter.submit_enabled is False
+
+
+def test_build_validator_weight_submitter_enabled_when_gate_on() -> None:
+    settings = Settings()
+    settings.validator.submit_on_chain_enabled = True
+    submitter = _build_validator_weight_submitter(settings)
+    assert submitter.submit_enabled is True
+
+
+async def test_run_validator_agent_runtime_runs_own_submit_loop() -> None:
+    # The validator runtime runs the agent loop AND this node's OWN weight-submit
+    # loop concurrently; the submit loop is cancelled when the agent loop exits.
+    submit_calls: list[int] = []
+
+    class _FakeSubmitter:
+        async def run_once(self) -> None:
+            submit_calls.append(1)
+
+    class _FakeAgent:
+        async def run_forever(self) -> None:
+            for _ in range(200):
+                if submit_calls:
+                    return
+                await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(
+        _run_validator_agent_runtime(
+            cast(Any, _FakeAgent()), cast(Any, _FakeSubmitter()), 0
+        ),
+        timeout=5,
+    )
+
+    assert submit_calls  # the per-validator submit loop ran alongside the agent
 
 
 def test_operations_doc_documents_validator_agent() -> None:

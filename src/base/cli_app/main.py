@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -97,6 +98,7 @@ from base.validator.agent import (
 )
 from base.validator.normal_runner import NormalValidatorRunner
 from base.validator.registry_client import RegistryClient
+from base.validator.weight_submitter import ValidatorWeightSubmitter
 from base.validator.weights_client import WeightsClient
 
 app = typer.Typer(help="BASE multi-challenge subnet CLI")
@@ -1176,22 +1178,82 @@ def _build_validator_agent(settings: Any) -> ValidatorAgent:
     )
 
 
+def _build_validator_weight_submitter(settings: Any) -> ValidatorWeightSubmitter:
+    """Wire this validator's OWN on-chain weight submitter (architecture.md 9.3).
+
+    The submitter fetches the master-aggregated vector from ``/v1/weights/latest``
+    and commits it under THIS node's hotkey (its own ``WeightSetter``), gated by
+    ``validator.submit_on_chain_enabled`` (default off). It never aggregates its
+    own vector. The ``WeightSetter`` is built lazily so a gate-off validator never
+    constructs a live ``Subtensor``.
+    """
+
+    return ValidatorWeightSubmitter(
+        submit_enabled=settings.validator.submit_on_chain_enabled,
+        netuid=settings.network.netuid,
+        weights_client=WeightsClient(
+            settings.validator.resolved_weights_url,
+            timeout_seconds=settings.validator.weights_timeout_seconds,
+            retries=settings.validator.weights_retries,
+        ),
+        weight_setter_factory=lambda: (
+            create_bittensor_submit_runtime(settings).weight_setter
+        ),
+        weights_freshness_seconds=settings.validator.weights_freshness_seconds,
+    )
+
+
+async def _run_validator_agent_runtime(
+    agent: ValidatorAgent,
+    submitter: ValidatorWeightSubmitter,
+    weights_interval_seconds: int,
+) -> None:
+    """Run the agent loop and this node's OWN weight-submit loop concurrently.
+
+    The submit loop runs alongside the agent so every validator node that runs
+    ``base validator agent`` also submits its OWN on-chain weights (a no-op while
+    the gate is off). Submit failures never crash the agent (``run_epoch_loop``
+    swallows tick errors); when the agent loop exits the submit loop is cancelled.
+    """
+
+    async def submit_weights() -> None:
+        await submitter.run_once()
+
+    submit_task = asyncio.create_task(
+        run_epoch_loop(weights_interval_seconds, submit_weights)
+    )
+    try:
+        await agent.run_forever()
+    finally:
+        submit_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await submit_task
+
+
 @validator_app.command("agent")
 def validator_agent(
     config: Path = typer.Option(Path("config/validator.example.yaml")),
 ):
-    """Run the decentralized validator agent (own-broker executor).
+    """Run the decentralized validator agent (own-broker executor + submitter).
 
     Hotkey-registers + heartbeats with the master, pulls assignments, executes
     them on the validator's OWN broker + Docker, posts results, and routes all
-    LLM calls through the master gateway (no provider key on the validator).
+    LLM calls through the master gateway (no provider key on the validator). In
+    the same runtime it runs THIS node's OWN on-chain weight submitter, which
+    fetches the master-aggregated vector and commits it under this validator's
+    hotkey (a no-op while ``validator.submit_on_chain_enabled`` is off).
     """
 
     settings = load_settings(config)
     _configure_observability(settings)
     agent = _build_validator_agent(settings)
+    submitter = _build_validator_weight_submitter(settings)
     typer.echo(f"Starting validator agent for hotkey {agent.hotkey}")
-    asyncio.run(agent.run_forever())
+    asyncio.run(
+        _run_validator_agent_runtime(
+            agent, submitter, settings.validator.weights_interval_seconds
+        )
+    )
 
 
 @validator_app.command("subscribe")

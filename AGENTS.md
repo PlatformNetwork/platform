@@ -112,3 +112,54 @@ default-path comment now reflects this real behavior.)
 Tests: `tests/unit/test_master_registry_reconciler.py` (faked registry +
 orchestrator: start/idempotent/add/deactivate/remove/reactivate, non-ACTIVE never
 started, spec parity, start-failure retry, async registry, loop + lifespan).
+
+## Per-validator on-chain weight submission (architecture.md sec 9.3)
+
+The weights model is **single master aggregation + per-validator submission**:
+the MASTER aggregates the canonical weight vector and serves it at
+`GET /v1/weights/latest`; **every validator fetches that SAME vector and commits
+it on-chain under its OWN wallet/hotkey.** Validators do NOT compute or aggregate
+their own vector - aggregation lives entirely on the master
+(`base.master.aggregator` / `MasterWeightService`). This is the legacy
+`submit_latest_weights` relay pattern, run per-validator instead of from a single
+global submitter.
+
+### Behavior (per-validator, independent, idempotent, gated)
+
+- **Runs in the validator runtime.** `base validator agent`
+  (`cli_app/main.py::validator_agent` → `_run_validator_agent_runtime`) runs the
+  agent loop AND this node's OWN weight-submit loop concurrently, so every
+  validator node that runs the agent also submits its own weights. There is no
+  single global submitter assumption.
+- **Own keypair.** The submitter's `WeightSetter` is built lazily from THIS
+  node's wallet (`create_bittensor_submit_runtime(settings).weight_setter`), so
+  each validator commits under its own hotkey.
+- **No validator-side aggregation.** The vector always comes from the master via
+  `WeightsClient.fetch_latest()` (`/v1/weights/latest`); the validator submit
+  module imports NO `base.master.*` aggregation.
+- **Independent, no shared state.** Each `ValidatorWeightSubmitter` holds its own
+  in-memory idempotency marker; concurrent validators share nothing.
+- **Idempotent / crash-re-run safe.** The master stamps each computed vector with
+  `computed_at`; the submitter tracks the last vector it committed and re-running
+  over an unchanged vector is a no-op (`ALREADY_SUBMITTED`), so a running node
+  never re-commits the same vector. Across a crash/restart the on-chain
+  commit-reveal rate limit rejects a too-fast re-commit, surfaced as `REJECTED`
+  (logged, retried next tick, never a silent success, never double-counted).
+- **Gate-off no-op.** When `validator.submit_on_chain_enabled` is `False`
+  (default) the tick does NO fetch, NO submit-runtime construction (no live
+  `Subtensor`), and NO submission (`DISABLED`). Live enablement is human-gated.
+
+### Where it is wired
+
+| Concern | Code |
+|---------|------|
+| Per-validator submitter | `src/base/validator/weight_submitter.py::ValidatorWeightSubmitter` (+ `ValidatorSubmitOutcome`) |
+| Shared master-vector validation | `src/base/validator/weights_client.py::validate_master_weights_payload` (also used by the legacy `NormalValidatorRunner`) |
+| Runtime wire-up | `cli_app/main.py::_build_validator_weight_submitter` + `_run_validator_agent_runtime` (called by `validator_agent`) |
+| Gate | `ValidatorSettings.submit_on_chain_enabled` (default `False`) |
+
+Tests: `tests/unit/test_validator_weight_submitter.py` (fetch-master-vector +
+own-keypair submit, two independent submitters with their own hotkeys, idempotent
+re-run no-op, gate-off no-op, rejected-commit retry, no master-aggregation
+import); `tests/unit/test_validator_agent_cli_docs.py` (gate default off, gate-on
+enable, submit loop runs in the agent runtime).

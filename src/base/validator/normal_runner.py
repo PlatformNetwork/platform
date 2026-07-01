@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from base.bittensor.weight_setter import (
@@ -15,7 +14,10 @@ from base.master.docker_orchestrator import (
 from base.schemas.challenge import ChallengeStatus
 from base.schemas.weights import MasterWeightsResponse
 from base.validator.registry_client import RegistryClient
-from base.validator.weights_client import WeightsClient
+from base.validator.weights_client import (
+    WeightsClient,
+    validate_master_weights_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +79,11 @@ class NormalValidatorRunner:
         return True
 
     def _validate_weights_payload(self, payload: MasterWeightsResponse) -> str | None:
-        if payload.netuid != self.netuid:
-            return f"netuid mismatch: expected {self.netuid}, got {payload.netuid}"
-        now = datetime.now(UTC)
-        if payload.expires_at <= now:
-            return "payload expired"
-        if (now - payload.computed_at).total_seconds() > self.weights_freshness_seconds:
-            return "payload stale"
-        if not payload.uids:
-            return "uids vector is empty"
-        if not payload.weights:
-            return "weights vector is empty"
-        if len(payload.uids) != len(payload.weights):
-            return "uids and weights vector lengths differ"
-        return None
+        return validate_master_weights_payload(
+            payload,
+            netuid=self.netuid,
+            weights_freshness_seconds=self.weights_freshness_seconds,
+        )
 
     async def run_forever(self) -> None:
         while True:
