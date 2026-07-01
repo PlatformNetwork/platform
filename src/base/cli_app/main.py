@@ -236,6 +236,19 @@ class DockerRuntimeController:
             "detail": runtime.container_name,
         }
 
+    async def running_image(self, slug: str) -> str | None:
+        """Return the challenge service's ACTUALLY-running image ref, or None.
+
+        Delegates to the orchestrator's ``service_image`` accessor when
+        available so the challenge-image-updater can gate a roll on the running
+        service digest (not the DB record). A backend without that seam returns
+        None, and the updater then degrades to record-change gating.
+        """
+        accessor = getattr(self.orchestrator, "service_image", None)
+        if not callable(accessor):
+            return None
+        return accessor(slug)
+
     async def status(self, slug: str):
         runtime = self.orchestrator.runtime.get(slug)
         return {

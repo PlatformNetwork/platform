@@ -1006,7 +1006,13 @@ class SwarmChallengeOrchestrator:
         return runtime
 
     def restart_challenge(self, spec: ChallengeSpec) -> ChallengeRuntime:
-        """Force-update the service (rolling restart) and verify readiness."""
+        """Force-update the service to ``spec.image`` and verify readiness.
+
+        Passes ``--image spec.image`` so a rolling restart actually converges
+        the service onto the (digest-pinned) record image rather than merely
+        redeploying the currently-running digest — this is what lets the
+        challenge-image-updater roll a service that is behind the desired digest.
+        """
 
         service_id = self._service_id(spec.container_name)
         if service_id is None:
@@ -1018,6 +1024,8 @@ class SwarmChallengeOrchestrator:
                 "update",
                 "--detach",
                 "--force",
+                "--image",
+                spec.image,
                 spec.container_name,
             ]
         )
@@ -1048,6 +1056,33 @@ class SwarmChallengeOrchestrator:
         if service_id is not None:
             self._remove_named_service(container_name, service_id)
         self._runtime.pop(slug, None)
+
+    def service_image(self, slug: str) -> str | None:
+        """Return the challenge service's actually-running container image ref.
+
+        Reads ``{{.Spec.TaskTemplate.ContainerSpec.Image}}`` from
+        ``docker service inspect`` for the ``challenge-<slug>`` service, so a
+        caller can compare the running digest against the desired digest and
+        converge only a service that is actually behind (idempotent — no roll
+        when the running image already equals the desired one). Returns None
+        when the service does not exist or cannot be inspected.
+        """
+
+        container_name = f"challenge-{_safe_fragment(slug, 48)}"
+        inspected = self._command(
+            [
+                self.docker_bin,
+                "service",
+                "inspect",
+                "--format",
+                "{{.Spec.TaskTemplate.ContainerSpec.Image}}",
+                container_name,
+            ]
+        )
+        if inspected.returncode != 0:
+            return None
+        image = inspected.stdout.strip()
+        return image or None
 
     def ensure_network(self) -> None:
         """Create the encrypted overlay challenge network if missing."""

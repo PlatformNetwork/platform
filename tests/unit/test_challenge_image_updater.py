@@ -58,6 +58,24 @@ class FakeController:
         return {"slug": slug, "operation": "restart", "status": "ok"}
 
 
+class ServiceAwareController(FakeController):
+    """A controller that can introspect the running service image.
+
+    Mirrors the production ``DockerRuntimeController.running_image`` seam so the
+    updater gates a roll on the SERVICE's actually-running digest (not the DB
+    record).
+    """
+
+    def __init__(self, running: str | None = None) -> None:
+        super().__init__()
+        self.running = running
+        self.running_image_calls: list[str] = []
+
+    async def running_image(self, slug: str) -> str | None:
+        self.running_image_calls.append(slug)
+        return self.running
+
+
 def make_resolver(digest: str):
     def resolver(reference: ImageReference) -> str:
         return digest
@@ -235,6 +253,117 @@ def test_builder_tag_override_retargets_mutable_base() -> None:
     task.run()
     expected = f"ghcr.io/baseintelligence/demo:main@{DIGEST_B}"
     assert registry.updates == [("demo", ChallengeUpdate(image=expected))]
+
+
+# ---------------------------------------------------------------------------
+# Service convergence gated on the SERVICE's actually-running digest, decoupled
+# from the record update (VAL-CODE-AUTO-008). These use a controller that
+# exposes ``running_image`` (the production seam), so the roll decision is made
+# against the running service digest, not the DB record.
+# ---------------------------------------------------------------------------
+
+
+def test_service_behind_rolls_even_when_record_already_current() -> None:
+    # The desync this fixes: the record ALREADY equals the resolved digest (a
+    # prior tick advanced it), but the running service is stuck on an older
+    # digest -> the service is STILL rolled to desired this tick.
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_B}")])
+    controller = ServiceAwareController(running=f"{BASE}@{DIGEST_A}")
+    make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert registry.updates == []  # record already current -> no DB write
+    assert controller.restarts == ["demo"]  # service converged anyway
+    assert controller.running_image_calls == ["demo"]
+
+
+def test_service_current_is_a_noop() -> None:
+    # Idempotent: the running service already equals desired -> no roll, no churn.
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_B}")])
+    controller = ServiceAwareController(running=f"{BASE}@{DIGEST_B}")
+    make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert registry.updates == []
+    assert controller.restarts == []
+    assert controller.running_image_calls == ["demo"]
+
+
+def test_record_behind_updates_record_and_rolls_service() -> None:
+    # Record AND service behind desired -> both the record is updated and the
+    # service is rolled.
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_A}")])
+    controller = ServiceAwareController(running=f"{BASE}@{DIGEST_A}")
+    make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert registry.updates == [("demo", ChallengeUpdate(image=f"{BASE}@{DIGEST_B}"))]
+    assert controller.restarts == ["demo"]
+
+
+def test_service_image_unknown_triggers_roll() -> None:
+    # running_image returns None (service absent / not inspectable) -> roll to
+    # converge (restart_challenge starts the service when it does not exist).
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_B}")])
+    controller = ServiceAwareController(running=None)
+    make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert registry.updates == []
+    assert controller.restarts == ["demo"]
+
+
+def test_inactive_challenge_is_never_rolled_even_if_service_behind() -> None:
+    registry = FakeRegistry(
+        [record("demo", f"{BASE}@{DIGEST_B}", ChallengeStatus.INACTIVE)]
+    )
+    controller = ServiceAwareController(running=f"{BASE}@{DIGEST_A}")
+    make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert controller.restarts == []
+    # An INACTIVE challenge never queries/rolls the running service.
+    assert controller.running_image_calls == []
+
+
+def test_info_summary_reports_already_current(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_B}")])
+    controller = ServiceAwareController(running=f"{BASE}@{DIGEST_B}")
+    logger_name = "base.supervisor.challenge_image_updater"
+    with caplog.at_level("INFO", logger=logger_name):
+        make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert any(
+        f"demo: desired={BASE}@{DIGEST_B} action=already-current" in message
+        for message in caplog.messages
+    )
+
+
+def test_info_summary_reports_rolled(caplog: pytest.LogCaptureFixture) -> None:
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_B}")])
+    controller = ServiceAwareController(running=f"{BASE}@{DIGEST_A}")
+    logger_name = "base.supervisor.challenge_image_updater"
+    with caplog.at_level("INFO", logger=logger_name):
+        make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert any(
+        f"demo: desired={BASE}@{DIGEST_B} action=rolled" in message
+        for message in caplog.messages
+    )
+
+
+def test_info_summary_reports_skipped_not_tracked(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = FakeRegistry([record("demo", "docker.io/library/redis:7")])
+    controller = ServiceAwareController()
+    logger_name = "base.supervisor.challenge_image_updater"
+    with caplog.at_level("INFO", logger=logger_name):
+        make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert any(
+        "demo: desired=<untracked> action=skipped-not-tracked" in message
+        for message in caplog.messages
+    )
+
+
+def test_no_introspection_seam_degrades_to_record_change_gate() -> None:
+    # A controller WITHOUT running_image cannot introspect the service, so the
+    # updater degrades to record-change gating: record already current -> no roll.
+    registry = FakeRegistry([record("demo", f"{BASE}@{DIGEST_B}")])
+    controller = FakeController()
+    make_updater(registry, controller, make_resolver(DIGEST_B)).run_once()
+    assert registry.updates == []
+    assert controller.restarts == []
 
 
 # ---------------------------------------------------------------------------

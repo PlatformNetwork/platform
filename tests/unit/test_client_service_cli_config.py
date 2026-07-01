@@ -474,6 +474,30 @@ def test_cli_create_and_runtime_controller(tmp_path: Path) -> None:
     assert asyncio.run(controller.status("demo"))["status"] == "unknown"
 
 
+def test_runtime_controller_running_image_delegates_to_orchestrator() -> None:
+    class Registry:
+        pass
+
+    class OrchestratorWithInspect:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def service_image(self, slug: str) -> str | None:
+            self.calls.append(slug)
+            return "ghcr.io/o/demo:latest@sha256:" + "a" * 64
+
+    orchestrator = OrchestratorWithInspect()
+    controller = DockerRuntimeController(Registry(), orchestrator)  # type: ignore[arg-type]
+    result = asyncio.run(controller.running_image("demo"))
+    assert result == "ghcr.io/o/demo:latest@sha256:" + "a" * 64
+    assert orchestrator.calls == ["demo"]
+
+    # A backend without the service_image seam yields None (updater then degrades
+    # to record-change gating).
+    controller_no_seam = DockerRuntimeController(Registry(), object())  # type: ignore[arg-type]
+    assert asyncio.run(controller_no_seam.running_image("demo")) is None
+
+
 def test_cli_master_proxy_builds_single_port_app_with_admin_deps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

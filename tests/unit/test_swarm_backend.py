@@ -1381,6 +1381,84 @@ def test_reconciler_adopts_existing_challenge_service_no_duplicate(
     ) in runner.calls
 
 
+def test_service_image_reads_running_container_image() -> None:
+    # The accessor the challenge-image-updater uses to converge a service on the
+    # SERVICE's actually-running digest: it reads
+    # {{.Spec.TaskTemplate.ContainerSpec.Image}} for the challenge-<slug> service.
+    ref = "ghcr.io/baseintelligence/agent:latest@sha256:" + "a" * 64
+
+    class _ImageRunner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: Any,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: float | None = None,
+        ) -> SwarmCommandResult:
+            argv = tuple(argv)
+            self.calls.append(argv)
+            return _result(argv, out=ref + "\n")
+
+    runner = _ImageRunner()
+    orchestrator = SwarmChallengeOrchestrator(runner=runner, ledger=WorkloadLedger())
+
+    assert orchestrator.service_image("agent") == ref
+    call = runner.calls[-1]
+    assert call[:4] == ("docker", "service", "inspect", "--format")
+    assert "{{.Spec.TaskTemplate.ContainerSpec.Image}}" in call
+    assert call[-1] == "challenge-agent"
+
+
+def test_service_image_returns_none_when_service_absent() -> None:
+    class _MissingRunner:
+        def run(
+            self,
+            argv: Any,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: float | None = None,
+        ) -> SwarmCommandResult:
+            return _result(tuple(argv), rc=1, err="no such service")
+
+    orchestrator = SwarmChallengeOrchestrator(
+        runner=_MissingRunner(), ledger=WorkloadLedger()
+    )
+    assert orchestrator.service_image("agent") is None
+
+
+def test_restart_challenge_applies_record_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # restart_challenge force-rolls WITH --image <record.image> so the service
+    # actually converges onto the digest-pinned record image (not merely
+    # redeploying the currently-running digest).
+    runner = FakeSwarmRunner(service_exists=True)
+    orchestrator = SwarmChallengeOrchestrator(runner=runner, ledger=WorkloadLedger())
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    ref = "ghcr.io/baseintelligence/agent:latest@sha256:" + "a" * 64
+    spec = ChallengeSpec(
+        slug="agent",
+        image=ref,
+        challenge_token="tok-secret",
+        workload_class="service",
+    )
+
+    orchestrator.restart_challenge(spec)
+
+    update = next(c for c in runner.calls if c[1:3] == ("service", "update"))
+    assert "--force" in update
+    assert "--image" in update
+    assert ref in update
+    assert update[-1] == "challenge-agent"
+
+
 def test_build_service_create_argv_orders_image_and_command_last() -> None:
     plan = SwarmServicePlan(
         name="x",

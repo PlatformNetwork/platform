@@ -19,9 +19,22 @@ Per challenge record the tick reuses:
 
 Semantics preserved from the CLI command: DRAFT/DISABLED challenges are
 skipped entirely; INACTIVE challenges get their DB record refreshed but are
-never restarted; ACTIVE challenges are restarted only when the digest
-actually changed. Idempotency is restart-safe for free — the comparison is
-``desired != record.image`` against the DB record, never in-process state.
+never restarted.
+
+The record update and the service roll are DECOUPLED. The DB record is
+refreshed whenever the resolved digest differs from the record (unchanged),
+but the ACTIVE challenge's service is rolled based on the SERVICE's
+actually-running digest vs the desired digest — independently of whether the
+record changed this tick. This fixes a live-observed desync: if a prior tick
+advanced the record but its restart did not take effect (e.g. the docker
+socket was not yet mounted), the record equals the resolved digest forever, so
+a record-change-gated restart would never fire and the service would stay
+behind. Convergence is idempotent — the roll is gated on the running service
+image via ``controller.running_image`` (backed by
+``SwarmChallengeOrchestrator.service_image``), so no ``--force`` redeploy
+happens once the service already runs the desired digest. Each tick emits an
+INFO-level per-challenge summary (slug, desired digest, action taken) so the
+loop is observable in the proxy logs.
 
 Pin policy (Task 18 parity): an update is only ever written with a full
 ``tag@sha256:<64-hex>`` reference; a resolver that fails or returns
@@ -50,6 +63,7 @@ from base.config.settings import Settings
 from base.supervisor.health import BrokerHealthGate
 from base.supervisor.image_ref import (
     ImageReference,
+    extract_digest,
     parse_image_reference,
     resolve_remote_digest,
 )
@@ -132,8 +146,9 @@ class ChallengeImageUpdater:
             return
         base = self._mutable_base(record.image)
         if base is None:
-            logger.debug(
-                "challenge-image-updater: %s: skipped %s (not auto-tracked)",
+            logger.info(
+                "challenge-image-updater: %s: desired=<untracked> "
+                "action=skipped-not-tracked (%s)",
                 record.slug,
                 record.image,
             )
@@ -158,23 +173,60 @@ class ChallengeImageUpdater:
             )
             return
         desired = f"{base}@{digest}"
-        changed = desired != record.image
-        if changed:
+        # (a) Keep the registry record current — DECOUPLED from the service roll
+        # so a record already at the resolved digest does NOT suppress a roll of
+        # a service still running an older digest.
+        if desired != record.image:
             await registry.update(record.slug, ChallengeUpdate(image=desired))
-            logger.info("challenge-image-updater: %s: updated %s", record.slug, desired)
-        else:
-            logger.debug(
-                "challenge-image-updater: %s: already-current %s",
+            logger.info(
+                "challenge-image-updater: %s: record updated to %s",
                 record.slug,
                 desired,
             )
-        if record.status == ChallengeStatus.ACTIVE and changed:
-            result = await controller.restart(record.slug)
-            logger.info(
-                "challenge-image-updater: %s: restarted %s",
-                record.slug,
-                result.get("status") if isinstance(result, dict) else result,
-            )
+        # (b) Converge the running service, gated on the SERVICE's actually-running
+        # image (not the record) so a lagging service catches up even when the
+        # record already equals the resolved digest.
+        action = await self._converge_service(controller, record, desired, digest)
+        logger.info(
+            "challenge-image-updater: %s: desired=%s action=%s",
+            record.slug,
+            desired,
+            action,
+        )
+
+    async def _converge_service(
+        self, controller: Any, record: Any, desired: str, digest: str
+    ) -> str:
+        """Roll the ACTIVE challenge's service to ``desired`` iff it is behind.
+
+        Returns the per-tick action for the observability summary: ``rolled``,
+        ``already-current`` or ``skipped-inactive``.
+
+        The roll decision is made against the service's ACTUALLY-running image
+        digest via ``controller.running_image`` — idempotent, so no
+        ``--force`` redeploy fires once the service already runs ``desired``. A
+        controller without that introspection seam degrades to the legacy
+        record-change gate (behaviour-preserving for such controllers).
+        """
+        from base.schemas.challenge import ChallengeStatus
+
+        if record.status != ChallengeStatus.ACTIVE:
+            return "skipped-inactive"
+        accessor = getattr(controller, "running_image", None)
+        if callable(accessor):
+            running = await accessor(record.slug)
+            if running is not None and extract_digest(running) == digest:
+                return "already-current"
+        elif desired == record.image:
+            return "already-current"
+        result = await controller.restart(record.slug)
+        logger.info(
+            "challenge-image-updater: %s: rolled service to %s (%s)",
+            record.slug,
+            desired,
+            result.get("status") if isinstance(result, dict) else result,
+        )
+        return "rolled"
 
 
 def build_challenge_image_updater_task(
