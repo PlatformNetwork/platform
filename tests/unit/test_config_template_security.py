@@ -230,7 +230,7 @@ def _run_installer_dry_run(tmp_path: Path) -> subprocess.CompletedProcess[str]:
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env["BROKER_WORKSPACE_DIR"] = str(tmp_path / "broker-ws")
     env["MASTER_CONFIG_PATH"] = str(tmp_path / "master.yaml")
-    env["GATEWAY_PUBLIC_BASE_URL"] = "http://master.example:18080"
+    env["GATEWAY_PUBLIC_BASE_URL"] = "http://master.example:19080"
     return subprocess.run(
         [
             "bash",

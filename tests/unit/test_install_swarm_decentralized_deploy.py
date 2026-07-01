@@ -42,7 +42,7 @@ MOCK_METAGRAPH_JSON = (
     f'{{"hotkey":"{MMG_VAL_HOTKEY_2}","validator_permit":true,"stake":1000}}]'
 )
 
-GATEWAY_PUBLIC_BASE_URL = "http://master.example:18080"
+GATEWAY_PUBLIC_BASE_URL = "http://master.example:19080"
 
 REQUIRED_SECRET_ENV = {
     "GHCR_USER": "ci-user",

@@ -7,7 +7,7 @@
 ```mermaid
 flowchart TB
     subgraph MGR[Manager]
-      P["BASE API (single proxy :18080)"]
+      P["BASE API (single proxy :19080)"]
       B[Broker]
       S[Supervisor]
       G[Weight Aggregator]
@@ -35,9 +35,9 @@ flowchart TB
 
 ## Manager node
 
-BASE runs as a single Docker Swarm. The manager node owns registry metadata, admin operations, the Swarm challenge lifecycle, challenge tokens, emission configuration, and final weight computation. The platform API (the single proxy on `:18080`) serves the computed vector through the public weights API at `/v1/weights/latest`; the on-chain submitter performs the Bittensor submission.
+BASE runs as a single Docker Swarm. The manager node owns registry metadata, admin operations, the Swarm challenge lifecycle, challenge tokens, emission configuration, and final weight computation. The platform API (the single proxy on `:19080`) serves the computed vector through the public weights API at `/v1/weights/latest`; the on-chain submitter performs the Bittensor submission.
 
-The manager hosts the platform API (a single proxy on `:18080` that serves the `/v1/registry` and `/v1/weights/latest` reads, the `/health` check, the `/challenges/*` passthrough, and the token-gated admin routes), the broker, the supervisor, and the challenge service containers themselves. Challenge code runs on the host, pinned with the placement constraint `node.role==manager`, so the long-lived challenge APIs share the manager node with the control plane.
+The manager hosts the platform API (a single proxy on `:19080` that serves the `/v1/registry` and `/v1/weights/latest` reads, the `/health` check, the `/challenges/*` passthrough, and the token-gated admin routes), the broker, the supervisor, and the challenge service containers themselves. Challenge code runs on the host, pinned with the placement constraint `node.role==manager`, so the long-lived challenge APIs share the manager node with the control plane.
 
 Master and validator control-plane state uses a single shared PostgreSQL-compatible database URL (`BASE_DATABASE_URL`). That URL is private to the control-plane process and is never shared with challenge containers.
 

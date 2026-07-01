@@ -37,7 +37,7 @@ CENTRAL_GATEWAY_TOKEN_SENTINEL = "central-gtok-SENTINEL-must-not-leak"
 
 # Deterministic gateway root for the consumer-URL assertions (avoids depending on
 # the live default advertise address).
-GATEWAY_PUBLIC_BASE_URL = "http://master.example:18080"
+GATEWAY_PUBLIC_BASE_URL = "http://master.example:19080"
 GATEWAY_OPENROUTER_ROUTE = f"{GATEWAY_PUBLIC_BASE_URL}/llm/openrouter"
 
 REQUIRED_SECRET_ENV = {

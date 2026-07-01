@@ -369,15 +369,15 @@ The manager control-plane services are published on fixed host ports by
 
 | Manager service (host-published) | Host port |
 |---------|-----------|
-| base-master-proxy (single public API; serves `/v1/registry`, `/v1/weights/latest`, `/health`, and routes `/challenges/*`) | 18080 |
+| base-master-proxy (single public API; serves `/v1/registry`, `/v1/weights/latest`, `/health`, and routes `/challenges/*`) | 19080 |
 | base-docker-broker | 8082 |
 
-`/v1/registry` and `/v1/weights/latest` are served by the proxy on `18080`; there
+`/v1/registry` and `/v1/weights/latest` are served by the proxy on `19080`; there
 is no separate admin service or port.
 
 The challenge services and the Postgres backing stores are **overlay-internal**
 (no host publish): clients reach the challenges **through the proxy** over the
-`base_challenges` overlay (e.g. `http://127.0.0.1:18080/challenges/prism/...`),
+`base_challenges` overlay (e.g. `http://127.0.0.1:19080/challenges/prism/...`),
 and the master reaches Postgres by service name. They listen on their container
 ports only:
 
@@ -544,12 +544,12 @@ canonical client path) rather than on a host port:
 
 ```bash
 docker service ls
-curl -sf http://127.0.0.1:18080/health                                 # proxy
+curl -sf http://127.0.0.1:19080/health                                 # proxy
 curl -sf http://127.0.0.1:8082/health                                  # broker
-curl -sf http://127.0.0.1:18080/v1/registry                            # registry (served by the proxy)
-curl -sf http://127.0.0.1:18080/v1/weights/latest                      # weights (served by the proxy)
-curl -sf http://127.0.0.1:18080/challenges/prism/leaderboard           # prism, via the proxy
-curl -sf http://127.0.0.1:18080/challenges/agent-challenge/leaderboard  # agent-challenge, via the proxy
+curl -sf http://127.0.0.1:19080/v1/registry                            # registry (served by the proxy)
+curl -sf http://127.0.0.1:19080/v1/weights/latest                      # weights (served by the proxy)
+curl -sf http://127.0.0.1:19080/challenges/prism/leaderboard           # prism, via the proxy
+curl -sf http://127.0.0.1:19080/challenges/agent-challenge/leaderboard  # agent-challenge, via the proxy
 ```
 
 A GPU eval job lands on a GPU worker via `node.labels.base.workload==gpu` plus
@@ -557,20 +557,20 @@ A GPU eval job lands on a GPU worker via `node.labels.base.workload==gpu` plus
 
 ### Step 8 — Public edge (Cloudflare)
 
-The single platform API listens on `127.0.0.1:18080`. To expose it publicly as
+The single platform API listens on `127.0.0.1:19080`. To expose it publicly as
 `https://chain.joinbase.ai`, front it with a Cloudflare tunnel using **one catch-all ingress
-rule** — `chain.joinbase.ai -> http://127.0.0.1:18080` — with **no `/v1` path-split**, because
+rule** — `chain.joinbase.ai -> http://127.0.0.1:19080` — with **no `/v1` path-split**, because
 the one port already serves `/health`, `/v1/registry`, `/v1/weights/latest`, `/challenges/*`, and the
 token-gated admin/control-plane routes (which stay private on the same app). No edge-level path
 filtering is required.
 
 > **Public edge is LIVE.** `https://chain.joinbase.ai` is served entirely from this box via its
 > cloudflared tunnel, using the single catch-all ingress rule above
-> (`chain.joinbase.ai -> http://127.0.0.1:18080`). All public read routes return `200`:
+> (`chain.joinbase.ai -> http://127.0.0.1:19080`). All public read routes return `200`:
 > `/health`, `/v1/registry`, `/v1/weights/latest`, `/challenges/prism/leaderboard`, and
 > `/challenges/agent-challenge/leaderboard`. Admin-write/control-plane and management routes stay
 > private (they return `401`/`405`), and `/internal/*` (plus `/version`) return `404` at the edge.
-> Public responses are field-identical to the local proxy `http://127.0.0.1:18080` (see Step 7); the
+> Public responses are field-identical to the local proxy `http://127.0.0.1:19080` (see Step 7); the
 > PRISM CURRENT epoch may legitimately be empty, which is real data, not an unavailable state.
 
 ---

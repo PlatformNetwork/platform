@@ -35,11 +35,11 @@ validator:
   agent:
     # Master coordination plane (register/heartbeat/pull/progress/result). On the
     # live cluster this is the manager's published proxy host:port.
-    master_url: http://51.83.112.164:18080
+    master_url: http://88.216.198.199:19080
     # Master LLM gateway root advertised in the pull payload. Same proxy host:port;
     # the scoped per-assignment gateway token + base URLs are injected by the
     # master at pull time, so this validator holds NO provider key.
-    gateway_url: http://51.83.112.164:18080
+    gateway_url: http://88.216.198.199:19080
     # cpu => agent-challenge Terminal-Bench 2.1 CPU tasks only.
     # ["gpu","cpu"] (or ["gpu"]) => also receives prism GPU re-exec (concurrency 1).
     # Exactly one validator should advertise gpu on the 1-GPU cluster.

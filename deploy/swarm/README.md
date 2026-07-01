@@ -289,7 +289,7 @@ validator needs:
   master installer renders that set from its `MOCK_METAGRAPH` env (see
   `install-swarm.sh`);
 - `validator.agent.master_url` / `gateway_url` pointing at the manager's published
-  proxy (e.g. `http://<manager-ip>:18080`);
+  proxy (e.g. `http://<manager-ip>:19080`);
 - `validator.agent.capabilities`: `["cpu"]` for agent-challenge Terminal-Bench 2.1
   only, or `["gpu","cpu"]` (equivalently `["gpu"]`) for the one validator that also
   runs prism GPU re-execution (concurrency 1). On a single-GPU cluster exactly one
