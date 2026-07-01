@@ -1535,6 +1535,123 @@ def test_orchestrator_external_secret_emits_reference_without_create(
     ]
 
 
+def test_challenge_plan_mounts_shared_gateway_token_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every reconciler-managed challenge service mounts the shared
+    # base_gateway_token at /run/secrets/base_gateway_token, matching the live
+    # BASE_GATEWAY_TOKEN_FILE the challenges read.
+    runner = FakeSwarmRunner()
+    orchestrator = SwarmChallengeOrchestrator(runner=runner, ledger=WorkloadLedger())
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    spec = ChallengeSpec(
+        slug="prism",
+        image="ghcr.io/baseintelligence/prism:1.0.0",
+        workload_class="service",
+    )
+
+    orchestrator.start_challenge(spec)
+
+    pairs = _pairs(runner.create_argv())
+    assert (
+        "--secret",
+        "source=base_gateway_token,target=base_gateway_token",
+    ) in pairs
+    # The shared token is a pre-created external secret: never created here.
+    assert [c for c in runner.calls if c[1:3] == ("secret", "create")] == []
+
+
+def test_challenge_plan_shared_secret_refs_constructor_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = FakeSwarmRunner()
+    orchestrator = SwarmChallengeOrchestrator(
+        runner=runner,
+        ledger=WorkloadLedger(),
+        shared_secret_refs=(),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    spec = ChallengeSpec(
+        slug="prism",
+        image="ghcr.io/baseintelligence/prism:1.0.0",
+        workload_class="service",
+    )
+
+    orchestrator.start_challenge(spec)
+
+    secrets = [
+        value for flag, value in _pairs(runner.create_argv()) if flag == "--secret"
+    ]
+    assert secrets == []
+
+
+def test_reconciled_record_plan_references_declared_secrets_and_gateway_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # VAL-CODE-REG-004: a spec built by challenge_spec_from_registry from a
+    # prism-like record renders a Swarm plan that references base_<slug>_<name>
+    # for each declared secret AND the shared base_gateway_token target, is
+    # probed on the record's port, and creates NO secret (all reference-only).
+    runner = FakeSwarmRunner(network_exists=False)
+    orchestrator = SwarmChallengeOrchestrator(runner=runner, ledger=WorkloadLedger())
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    record = ChallengeRecord(
+        slug="prism",
+        name="PRISM",
+        image="ghcr.io/baseintelligence/prism:latest",
+        version="0.1.0",
+        emission_percent=Decimal("30"),
+        status=ChallengeStatus.ACTIVE,
+        token_hash="hash",
+        token_hint="hint",
+        internal_base_url="http://challenge-prism:8080",
+        public_proxy_base_path="/challenges/prism",
+        required_capabilities=["get_weights", "proxy_routes"],
+        resources={"cpu": "2", "memory": "8g"},
+        env={},
+        secrets=[
+            "challenge_token",
+            "docker_broker_token",
+            "submission_env_encryption_key",
+        ],
+        metadata={"combined_mode_env": "PRISM_COMBINED_MODE"},
+    )
+
+    spec = challenge_spec_from_registry(record)
+    assert spec.port == 8080
+    orchestrator.start_challenge(spec)
+
+    pairs = _pairs(runner.create_argv())
+    for name in (
+        "challenge_token",
+        "docker_broker_token",
+        "submission_env_encryption_key",
+    ):
+        assert (
+            "--secret",
+            f"source=base_prism_{name},target=base/{name}",
+        ) in pairs
+    assert (
+        "--secret",
+        "source=base_gateway_token,target=base_gateway_token",
+    ) in pairs
+    # The reconciler never has the token VALUES: every per-slug secret is
+    # reference-only, so NO ``docker secret create`` is issued.
+    assert [c for c in runner.calls if c[1:3] == ("secret", "create")] == []
+
+
 def test_orchestrator_secret_value_never_appears_in_argv_or_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

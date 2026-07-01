@@ -101,6 +101,16 @@ DEFAULT_CHALLENGE_CONSTRAINT = "node.role==manager"
 DEFAULT_CPU_JOB_CONSTRAINT = "node.labels.base.workload==cpu"
 DEFAULT_GPU_JOB_CONSTRAINT = "node.labels.base.workload==gpu"
 DEFAULT_JOB_NETWORK = "base_jobs_internal"
+#: Shared, pre-created (external) swarm secret references mounted on EVERY
+#: reconciler-managed challenge service. The single shared ``base_gateway_token``
+#: is referenced (never created here) and lands at
+#: ``/run/secrets/base_gateway_token`` to match the live ``BASE_GATEWAY_TOKEN_FILE``
+#: the challenge LLM gate / gateway auth reads. Unlike the per-slug
+#: ``target=base/<name>`` references, the shared token keeps a flat target so
+#: every challenge resolves the same path.
+DEFAULT_SHARED_SECRET_REFS: tuple[str, ...] = (
+    "source=base_gateway_token,target=base_gateway_token",
+)
 OVERLAY_MTU = "1450"
 #: Swarm generic-resource name advertised by the worker daemon.json
 #: (``node-generic-resources: ["NVIDIA-GPU=GPU-<uuid>"]``); case-sensitive.
@@ -903,6 +913,7 @@ class SwarmChallengeOrchestrator:
         challenge_placement_constraint: str | None = DEFAULT_CHALLENGE_CONSTRAINT,
         job_network: str = DEFAULT_JOB_NETWORK,
         job_network_slugs: frozenset[str] = frozenset(),
+        shared_secret_refs: tuple[str, ...] = DEFAULT_SHARED_SECRET_REFS,
         ledger: WorkloadLedger | None = None,
         gpu_leases: GpuLeaseLedger | None = None,
         request_timeout_seconds: float = 5.0,
@@ -917,6 +928,12 @@ class SwarmChallengeOrchestrator:
         self.pull_ghcr_only = pull_ghcr_only
         self.docker_broker_url = docker_broker_url
         self.challenge_placement_constraint = challenge_placement_constraint
+        #: Shared external swarm-secret references appended to EVERY challenge
+        #: service plan (in addition to the per-slug secrets). Defaults to the
+        #: shared ``base_gateway_token`` so every reconciler-managed challenge
+        #: service mounts it at ``/run/secrets/base_gateway_token``; set to an
+        #: empty tuple to mount no shared secret.
+        self.shared_secret_refs = shared_secret_refs
         #: The isolated eval overlay (``--internal``, no egress) that the eval
         #: JOB runs on; long-lived services for ``job_network_slugs`` are ALSO
         #: attached to it so the job can resolve/reach ONLY them by name.
@@ -1165,7 +1182,7 @@ class SwarmChallengeOrchestrator:
             labels=tuple(labels.items()),
             container_labels=tuple(labels.items()),
             mounts=tuple(mounts),
-            secrets=secrets,
+            secrets=secrets + self.shared_secret_refs,
             limit_cpus=resources.cpu,
             limit_memory=resources.memory,
             limit_pids=resources.pids_limit,

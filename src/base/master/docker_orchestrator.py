@@ -313,6 +313,15 @@ def challenge_spec_from_registry(challenge: Any) -> ChallengeSpec:
     in-process (combined mode): the ONE ``challenge-<slug>`` service both serves
     the API and drains the eval queue. The spec runs the image default CMD (no
     ``worker_command`` override), so no separate ``-worker`` service is needed.
+
+    The service ``port`` is parsed from the record's ``internal_base_url`` (so a
+    prism-like record listening on 8080 is probed and routed on 8080, not the
+    8000 default), falling back to :data:`DEFAULT_CHALLENGE_PORT` when absent or
+    unparseable. Every record-declared secret NAME is carried as a
+    reference-only ``external_secrets`` entry: the reconciler never holds the
+    token VALUES, so the Swarm backend references the pre-created (external)
+    swarm secrets rather than materializing values. A record with no
+    ``internal_base_url``/``secrets`` yields the legacy spec unchanged.
     """
 
     metadata = getattr(challenge, "metadata", {}) or {}
@@ -325,8 +334,10 @@ def challenge_spec_from_registry(challenge: Any) -> ChallengeSpec:
         image=challenge.image,
         version=challenge.version,
         env=env,
+        external_secrets=tuple(getattr(challenge, "secrets", []) or []),
         resources=ChallengeResources.from_mapping(dict(challenge.resources)),
         required_capabilities=tuple(challenge.required_capabilities),
+        port=port_from_internal_base_url(getattr(challenge, "internal_base_url", None)),
         workload_class="service",
     )
 

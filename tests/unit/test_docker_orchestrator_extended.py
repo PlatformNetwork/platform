@@ -267,6 +267,139 @@ def test_challenge_spec_from_registry_without_combined_env() -> None:
     assert spec.worker_command == ()
 
 
+@pytest.mark.parametrize(
+    "internal_base_url, expected_port",
+    [
+        ("http://challenge-prism:8080", 8080),
+        ("http://challenge-agent-challenge:8000", 8000),
+        ("http://challenge-prism", DEFAULT_CHALLENGE_PORT),
+        (None, DEFAULT_CHALLENGE_PORT),
+    ],
+)
+def test_challenge_spec_from_registry_sets_port_from_internal_base_url(
+    internal_base_url: str | None, expected_port: int
+) -> None:
+    challenge = SimpleNamespace(
+        slug="prism",
+        image="ghcr.io/o/prism:1",
+        version="1",
+        env={},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={},
+        internal_base_url=internal_base_url,
+        secrets=[],
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.port == expected_port
+    # ``internal_base_url`` property reflects the parsed port.
+    assert spec.internal_base_url == f"http://challenge-prism:{expected_port}"
+
+
+def test_challenge_spec_from_registry_defaults_port_when_url_attr_absent() -> None:
+    # A duck-typed record without an ``internal_base_url`` attribute at all
+    # keeps the legacy default port (byte-identical legacy path).
+    challenge = SimpleNamespace(
+        slug="demo",
+        image="ghcr.io/o/demo:1",
+        version="1",
+        env={},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={},
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.port == DEFAULT_CHALLENGE_PORT
+
+
+def test_challenge_spec_from_registry_references_declared_secrets() -> None:
+    # Every registry-declared secret NAME becomes a reference-only external
+    # secret; the reconciler never has the token VALUES, so no value-bearing
+    # challenge/broker token is set on the spec.
+    challenge = SimpleNamespace(
+        slug="agent-challenge",
+        image="ghcr.io/o/agent-challenge:1",
+        version="1",
+        env={},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={},
+        internal_base_url="http://challenge-agent-challenge:8000",
+        secrets=[
+            "challenge_token",
+            "docker_broker_token",
+            "submission_env_encryption_key",
+        ],
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.external_secrets == (
+        "challenge_token",
+        "docker_broker_token",
+        "submission_env_encryption_key",
+    )
+    # Reference-only: no value-bearing secrets are attached by the reconciler.
+    assert spec.challenge_token is None
+    assert spec.docker_broker_token is None
+    assert spec.all_secrets() == {}
+    # Every declared name is visible inside the container as an external ref.
+    assert spec.secret_names() == (
+        "challenge_token",
+        "docker_broker_token",
+        "submission_env_encryption_key",
+    )
+
+
+def test_challenge_spec_from_registry_does_not_force_add_provider_key() -> None:
+    # A raw provider key rides through ONLY if the record itself declares it;
+    # nothing forces openrouter/any provider secret onto every challenge.
+    challenge = SimpleNamespace(
+        slug="prism",
+        image="ghcr.io/o/prism:1",
+        version="1",
+        env={},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={},
+        internal_base_url="http://challenge-prism:8080",
+        secrets=["challenge_token", "docker_broker_token"],
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.external_secrets == ("challenge_token", "docker_broker_token")
+    assert not any("openrouter" in name for name in spec.external_secrets)
+
+
+def test_challenge_spec_from_registry_no_url_or_secrets_keeps_prior_behavior() -> None:
+    # Back-compat: a record with no internal_base_url and no secrets yields the
+    # legacy spec (default port, no external secrets) - byte-identical.
+    challenge = SimpleNamespace(
+        slug="demo",
+        image="ghcr.io/o/demo:1",
+        version="1",
+        env={"FOO": "bar"},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={},
+        internal_base_url=None,
+        secrets=[],
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.port == DEFAULT_CHALLENGE_PORT
+    assert spec.external_secrets == ()
+    assert spec.secret_names() == ()
+    assert spec.env == {"FOO": "bar"}
+    assert spec.workload_class == "service"
+
+
 def test_docker_orchestrator_database_url_defaults_to_sqlite_data_volume(
     tmp_path: Path,
 ) -> None:
