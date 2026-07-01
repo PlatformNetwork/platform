@@ -38,6 +38,7 @@ from base.master.docker_orchestrator import (
     ChallengeResources,
     ChallengeSpec,
     DockerOrchestrationError,
+    challenge_spec_from_registry,
 )
 from base.master.orchestration import MasterChallengeReconciler
 from base.master.swarm_backend import (
@@ -1103,6 +1104,63 @@ def test_orchestrator_service_spec_becomes_replicated_service(
     assert ledger.count("agent") == 1
     assert runtime.container_id == runner.service_id
     assert runtime.container_name == "challenge-agent"
+
+
+def test_combined_mode_service_renders_env_and_no_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reconciler-built combined-mode spec renders as ONE replicated service
+    with the combined-mode env var set and NO trailing command (image default
+    CMD runs the API + in-process worker) - no separate ``-worker`` service."""
+
+    runner = FakeSwarmRunner(network_exists=False)
+    orchestrator = SwarmChallengeOrchestrator(runner=runner, ledger=WorkloadLedger())
+    monkeypatch.setattr(
+        orchestrator,
+        "wait_until_ready",
+        lambda spec: ({"status": "ok"}, {"api_version": "1.0"}),
+    )
+    record = ChallengeRecord(
+        slug="prism",
+        name="PRISM",
+        image="ghcr.io/baseintelligence/prism:latest",
+        version="0.1.0",
+        emission_percent=Decimal("30"),
+        status=ChallengeStatus.ACTIVE,
+        token_hash="hash",
+        token_hint="hint",
+        internal_base_url="http://challenge-prism:8080",
+        public_proxy_base_path="/challenges/prism",
+        required_capabilities=["get_weights", "proxy_routes"],
+        resources={"cpu": "2", "memory": "8g"},
+        env={
+            "PRISM_DOCKER_BROKER_URL": "http://base-docker-broker:8082",
+            "PRISM_DOCKER_BROKER_TOKEN_FILE": "/run/secrets/base/docker_broker_token",
+        },
+        metadata={"combined_mode_env": "PRISM_COMBINED_MODE"},
+    )
+
+    spec = challenge_spec_from_registry(record)
+    orchestrator.start_challenge(spec)
+
+    argv = runner.create_argv()
+    pairs = _pairs(argv)
+    envs = [value for flag, value in pairs if flag == "--env"]
+    assert ("--mode", "replicated") in pairs
+    assert "PRISM_COMBINED_MODE=true" in envs
+    assert "PRISM_DOCKER_BROKER_URL=http://base-docker-broker:8082" in envs
+    assert (
+        "PRISM_DOCKER_BROKER_TOKEN_FILE=/run/secrets/base/docker_broker_token" in envs
+    )
+    # Image is the LAST token: no command override, so the image default CMD runs.
+    assert argv[-1] == "ghcr.io/baseintelligence/prism:latest"
+    # Exactly one ``service create`` and its name is ``challenge-prism`` (no -worker).
+    service_creates = [
+        call for call in runner.calls if call[1:3] == ("service", "create")
+    ]
+    assert len(service_creates) == 1
+    assert ("--name", "challenge-prism") in pairs
+    assert not any(value.endswith("-worker") for _, value in pairs if _ == "--name")
 
 
 def test_orchestrator_spec_placement_constraint_overrides_default(

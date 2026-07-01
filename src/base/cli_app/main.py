@@ -44,8 +44,8 @@ from base.master.docker_orchestrator import (
     DEFAULT_SECRET_MOUNT_DIR,
     ChallengeResources,
     ChallengeSpec,
+    combined_mode_env_from_metadata,
     port_from_internal_base_url,
-    worker_command_from_metadata,
 )
 from base.master.llm_gateway import (
     GatewayTokenAuthority,
@@ -190,21 +190,26 @@ class DockerRuntimeController:
             for name in (getattr(record, "secrets", []) or [])
             if name not in ("challenge_token", "docker_broker_token")
         )
+        # Combined mode: the single service runs the image default CMD with the
+        # worker loop in-process (no separate ``-worker`` service), enabled by the
+        # per-metadata opt-in env var.
+        metadata = getattr(record, "metadata", {}) or {}
+        env = dict(record.env)
+        combined_env = combined_mode_env_from_metadata(metadata)
+        if combined_env is not None:
+            env.setdefault(combined_env, "true")
         return ChallengeSpec(
             slug=record.slug,
             image=record.image,
             version=record.version,
             challenge_token=self.registry.get_token(slug),
             docker_broker_token=broker_token,
-            env=record.env,
+            env=env,
             external_secrets=external_secrets,
             resources=ChallengeResources.from_mapping(record.resources),
             required_capabilities=tuple(record.required_capabilities),
             port=port_from_internal_base_url(
                 getattr(record, "internal_base_url", None)
-            ),
-            worker_command=worker_command_from_metadata(
-                getattr(record, "metadata", {}) or {}
             ),
             workload_class="service",
         )
@@ -668,6 +673,9 @@ def prism_challenge_create(settings: Any | None = None) -> ChallengeCreate:
             "base_eval_image": evaluator_image,
             "base_eval_gpu_count": "1",
             "base_eval_max_gpu_count": "8",
+            # Combined mode: the single ``challenge-prism`` service runs the API
+            # AND the eval-drain worker loop in-process when this env var is set.
+            "combined_mode_env": "PRISM_COMBINED_MODE",
         },
     )
 
@@ -698,7 +706,11 @@ async def seed_prism_challenges(
     else:
         record = await _resolve(registry.get(AGENT_CHALLENGE_SLUG))
         metadata = dict(getattr(record, "metadata", {}) or {})
-        metadata["worker_command"] = ["agent-challenge-worker"]
+        # Combined mode: retire the separate-worker command hint (scrub any stale
+        # value from an already-seeded record) and declare the image's opt-in
+        # combined-worker env var so the single service drains in-process.
+        metadata.pop("worker_command", None)
+        metadata["combined_mode_env"] = "CHALLENGE_COMBINED_WORKER"
         env = dict(getattr(record, "env", {}) or {})
         env.update(_agent_challenge_own_runner_env(settings))
         required_capabilities = set(getattr(record, "required_capabilities", []) or [])

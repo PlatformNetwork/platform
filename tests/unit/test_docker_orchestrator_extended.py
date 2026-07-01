@@ -16,6 +16,8 @@ from base.master.docker_orchestrator import (
     DockerOrchestrator,
     _safe_secret_name,
     _safe_slug,
+    challenge_spec_from_registry,
+    combined_mode_env_from_metadata,
     port_from_internal_base_url,
 )
 
@@ -179,6 +181,90 @@ def test_create_container_without_worker_command_uses_image_default(
 
     run_call = client.containers.runs[0]
     assert "command" not in run_call
+
+
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({}, None),
+        ({"combined_mode_env": None}, None),
+        (
+            {"combined_mode_env": "CHALLENGE_COMBINED_WORKER"},
+            "CHALLENGE_COMBINED_WORKER",
+        ),
+        ({"combined_mode_env": "  PRISM_COMBINED_MODE  "}, "PRISM_COMBINED_MODE"),
+    ],
+)
+def test_combined_mode_env_from_metadata(
+    metadata: dict[str, object], expected: str | None
+) -> None:
+    assert combined_mode_env_from_metadata(metadata) == expected
+
+
+@pytest.mark.parametrize("bad", ["", "   ", 123, ["CHALLENGE_COMBINED_WORKER"]])
+def test_combined_mode_env_from_metadata_rejects_invalid(bad: object) -> None:
+    with pytest.raises(DockerOrchestrationError, match="combined_mode_env"):
+        combined_mode_env_from_metadata({"combined_mode_env": bad})
+
+
+def test_challenge_spec_from_registry_injects_combined_env_and_no_command() -> None:
+    challenge = SimpleNamespace(
+        slug="prism",
+        image="ghcr.io/o/prism:1",
+        version="1",
+        env={
+            "PRISM_DOCKER_BROKER_URL": "http://base-docker-broker:8082",
+            "PRISM_DOCKER_BROKER_TOKEN_FILE": "/run/secrets/base/docker_broker_token",
+        },
+        resources={"cpu": "2", "memory": "8g"},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={"combined_mode_env": "PRISM_COMBINED_MODE"},
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.env["PRISM_COMBINED_MODE"] == "true"
+    assert spec.env["PRISM_DOCKER_BROKER_URL"] == "http://base-docker-broker:8082"
+    assert spec.env["PRISM_DOCKER_BROKER_TOKEN_FILE"] == (
+        "/run/secrets/base/docker_broker_token"
+    )
+    assert spec.worker_command == ()
+    assert spec.workload_class == "service"
+    assert spec.container_name == "challenge-prism"
+
+
+def test_challenge_spec_from_registry_preserves_explicit_env_override() -> None:
+    # An operator-set value in the record env is preserved (setdefault semantics).
+    challenge = SimpleNamespace(
+        slug="prism",
+        image="ghcr.io/o/prism:1",
+        version="1",
+        env={"PRISM_COMBINED_MODE": "false"},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={"combined_mode_env": "PRISM_COMBINED_MODE"},
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.env["PRISM_COMBINED_MODE"] == "false"
+
+
+def test_challenge_spec_from_registry_without_combined_env() -> None:
+    challenge = SimpleNamespace(
+        slug="demo",
+        image="ghcr.io/o/demo:1",
+        version="1",
+        env={"FOO": "bar"},
+        resources={},
+        required_capabilities=["get_weights", "proxy_routes"],
+        metadata={},
+    )
+
+    spec = challenge_spec_from_registry(challenge)
+
+    assert spec.env == {"FOO": "bar"}
+    assert spec.worker_command == ()
 
 
 def test_docker_orchestrator_database_url_defaults_to_sqlite_data_volume(

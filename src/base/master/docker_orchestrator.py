@@ -14,7 +14,7 @@ import math
 import re
 import stat
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, get_args
@@ -277,18 +277,24 @@ class ChallengeSpec:
         return tuple(names)
 
 
-def worker_command_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = metadata.get("worker_command")
+def combined_mode_env_from_metadata(metadata: Mapping[str, Any]) -> str | None:
+    """Return the env-var NAME that enables in-API worker (combined) mode.
+
+    A registry challenge opts its single reconciler-deployed service into
+    combined mode (the API process ALSO runs the eval-drain worker loop) by
+    declaring the image's opt-in env var name here; the platform sets that var
+    to ``"true"`` on the single service. ``None`` (absent) leaves the image at
+    its default (worker OFF), preserving the legacy separate-service behavior.
+    """
+
+    raw = metadata.get("combined_mode_env")
     if raw is None:
-        return ()
-    if isinstance(raw, str) or not isinstance(raw, Sequence):
-        raise DockerOrchestrationError("worker_command metadata must be a string list")
-    command = tuple(raw)
-    if not command or any(not isinstance(item, str) or not item for item in command):
+        return None
+    if not isinstance(raw, str) or not raw.strip():
         raise DockerOrchestrationError(
-            "worker_command metadata must be a non-empty string list"
+            "combined_mode_env metadata must be a non-empty string"
         )
-    return command
+    return raw.strip()
 
 
 def challenge_spec_from_registry(challenge: Any) -> ChallengeSpec:
@@ -301,18 +307,26 @@ def challenge_spec_from_registry(challenge: Any) -> ChallengeSpec:
     ``metadata`` (a :class:`ChallengeRecord` or a registry ``RegistryChallenge``)
     works. Emits a ``"service"`` workload (a long-lived challenge API), never a
     reapable eval job.
+
+    When the record declares a ``combined_mode_env`` metadata name, that env var
+    is set to ``"true"`` on the single service so the image runs its worker loop
+    in-process (combined mode): the ONE ``challenge-<slug>`` service both serves
+    the API and drains the eval queue. The spec runs the image default CMD (no
+    ``worker_command`` override), so no separate ``-worker`` service is needed.
     """
 
+    metadata = getattr(challenge, "metadata", {}) or {}
+    env = dict(challenge.env)
+    combined_env = combined_mode_env_from_metadata(metadata)
+    if combined_env is not None:
+        env.setdefault(combined_env, "true")
     return ChallengeSpec(
         slug=challenge.slug,
         image=challenge.image,
         version=challenge.version,
-        env=dict(challenge.env),
+        env=env,
         resources=ChallengeResources.from_mapping(dict(challenge.resources)),
         required_capabilities=tuple(challenge.required_capabilities),
-        worker_command=worker_command_from_metadata(
-            getattr(challenge, "metadata", {}) or {}
-        ),
         workload_class="service",
     )
 

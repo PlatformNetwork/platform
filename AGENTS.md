@@ -113,6 +113,40 @@ Tests: `tests/unit/test_master_registry_reconciler.py` (faked registry +
 orchestrator: start/idempotent/add/deactivate/remove/reactivate, non-ACTIVE never
 started, spec parity, start-failure retry, async registry, loop + lifespan).
 
+### Challenge combined mode (single service = API + in-process worker; architecture.md sec 9.5)
+
+The reconciler deploys exactly ONE `challenge-<slug>` service per ACTIVE
+challenge, but both challenge images need TWO processes: the uvicorn API AND a
+worker loop that is the only eval-queue drainer. **Combined mode** collapses them
+so the API process ALSO runs the worker loop in-process; the single service both
+serves and drains. It is opt-in per challenge and default-OFF (the legacy
+`install-swarm.sh --static-challenges` two-service path is unchanged).
+
+- The registry records the image's opt-in env var name in the **internal**
+  metadata field `combined_mode_env` (NOT public — not in
+  `PUBLIC_REGISTRY_METADATA_KEYS`). The seed sets it per slug: agent-challenge →
+  `CHALLENGE_COMBINED_WORKER`, prism → `PRISM_COMBINED_MODE`. The old
+  `metadata.worker_command` seeding is retired (and popped on re-seed).
+- **Both** single-service spec builders inject `env.setdefault(<combined_mode_env>,
+  "true")` and no longer read `worker_command`, so the single service runs the
+  image default CMD (uvicorn API) with the worker in-process:
+  `docker_orchestrator.challenge_spec_from_registry` (reconciler + `NormalValidatorRunner`)
+  and `cli_app/main.py::DockerRuntimeController._spec` (admin pull/restart/status).
+- The single service **must also carry the docker/broker URL + token env** the
+  worker needs (the seed already sets `*_DOCKER_BROKER_URL` + `*_DOCKER_BROKER_TOKEN_FILE`
+  for both slugs); prism additionally reads the LLM gateway token from
+  `/run/secrets/base_gateway_token` by config default. prism needs NO GPU pinning
+  (the worker orchestrates GPU work via the broker; host-side scoring is CPU-only).
+- `ChallengeSpec.worker_command` + the `swarm_backend`/`docker_orchestrator` command
+  plumbing are KEPT as a generic, slug-agnostic override seam (unused by the
+  registry path). `combined_mode_env_from_metadata()` reads/validates the name.
+
+Tests: `tests/unit/test_master_registry_reconciler.py` (combined-env injected +
+broker env + no `-worker` service), `tests/unit/test_docker_orchestrator_extended.py`
+(`combined_mode_env_from_metadata` validation + spec builder), `tests/unit/test_swarm_backend.py`
+(combined service renders `--env` with image default CMD), `tests/unit/test_client_service_cli_config.py`
+(seed sets `combined_mode_env` per slug, drops `worker_command`).
+
 ## Per-validator on-chain weight submission (architecture.md sec 9.3)
 
 The weights model is **single master aggregation + per-validator submission**:

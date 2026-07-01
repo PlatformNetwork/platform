@@ -220,7 +220,7 @@ async def test_master_weight_service_and_validator_runner() -> None:
         volumes={},
         env={},
         secrets=[],
-        metadata={"worker_command": ["agent-challenge-worker"]},
+        metadata={"combined_mode_env": "CHALLENGE_COMBINED_WORKER"},
     )
     setter = Setter()
     service = MasterWeightService(
@@ -251,7 +251,9 @@ async def test_master_weight_service_and_validator_runner() -> None:
     assert orchestrator.specs[0].slug == "demo"
     assert orchestrator.specs[0].resources.cpu == 2.0
     assert orchestrator.specs[0].resources.memory == "1g"
-    assert orchestrator.specs[0].worker_command == ("agent-challenge-worker",)
+    # Combined mode: opt-in env var injected, no worker_command override.
+    assert orchestrator.specs[0].env["CHALLENGE_COMBINED_WORKER"] == "true"
+    assert orchestrator.specs[0].worker_command == ()
 
 
 @pytest.mark.asyncio
@@ -443,7 +445,7 @@ def test_cli_create_and_runtime_controller(tmp_path: Path) -> None:
             image="ghcr.io/o/demo:1",
             version="1",
             resources={"cpus": "1.5", "memory": "2g"},
-            metadata={"worker_command": ["agent-challenge-worker"]},
+            metadata={"combined_mode_env": "CHALLENGE_COMBINED_WORKER"},
         )
     )
 
@@ -466,7 +468,9 @@ def test_cli_create_and_runtime_controller(tmp_path: Path) -> None:
     assert asyncio.run(controller.restart("demo"))["detail"] == "challenge-demo"
     assert orchestrator.specs[0].resources.cpu == 1.5
     assert orchestrator.specs[0].resources.memory == "2g"
-    assert orchestrator.specs[0].worker_command == ("agent-challenge-worker",)
+    # Combined mode: opt-in env var injected, no worker_command override.
+    assert orchestrator.specs[0].env["CHALLENGE_COMBINED_WORKER"] == "true"
+    assert orchestrator.specs[0].worker_command == ()
     assert asyncio.run(controller.status("demo"))["status"] == "unknown"
 
 
@@ -1374,6 +1378,9 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
             version="0.1.0",
             status=ChallengeStatus.ACTIVE,
             emission_percent=Decimal("40"),
+            # Stale separate-worker hint from an earlier seed; the re-seed must
+            # scrub it (combined-mode migration).
+            metadata={"worker_command": ["agent-challenge-worker"]},
         )
     )
     settings = SimpleNamespace(
@@ -1422,11 +1429,18 @@ def test_seed_prism_challenges_is_idempotent_and_preserves_tokens() -> None:
     )
     assert prism.metadata["runtime_database_journal_mode"] == "wal"
     assert prism.metadata["workload_class"] == "service"
+    # Combined mode: prism single service opts in via PRISM_COMBINED_MODE; no
+    # separate-worker command hint is seeded.
+    assert prism.metadata["combined_mode_env"] == "PRISM_COMBINED_MODE"
+    assert "worker_command" not in prism.metadata
     assert "postgres" not in str(prism.metadata)
     assert "token" not in prism.metadata
     assert "database_url" not in prism.metadata
     assert agent.emission_percent == Decimal("15")
-    assert agent.metadata["worker_command"] == ["agent-challenge-worker"]
+    # Combined mode: agent-challenge single service opts in via
+    # CHALLENGE_COMBINED_WORKER; the retired worker_command hint is dropped.
+    assert agent.metadata["combined_mode_env"] == "CHALLENGE_COMBINED_WORKER"
+    assert "worker_command" not in agent.metadata
     assert agent.required_capabilities == [
         "docker_executor",
         "get_weights",

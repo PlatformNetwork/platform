@@ -237,7 +237,7 @@ async def test_spec_is_built_like_the_legacy_runner() -> None:
                 "agent-challenge",
                 resources={"cpu": "2", "memory": "1g"},
                 env={"FOO": "bar"},
-                metadata={"worker_command": ["agent-challenge-worker"]},
+                metadata={"combined_mode_env": "CHALLENGE_COMBINED_WORKER"},
             )
         ]
     )
@@ -251,8 +251,86 @@ async def test_spec_is_built_like_the_legacy_runner() -> None:
     assert spec.workload_class == "service"
     assert spec.resources.cpu == 2.0
     assert spec.resources.memory == "1g"
+    # Combined mode injects the opt-in env var; the single service runs the image
+    # default CMD (no worker_command override, no separate ``-worker`` service).
+    assert spec.env == {"FOO": "bar", "CHALLENGE_COMBINED_WORKER": "true"}
+    assert spec.worker_command == ()
+
+
+async def test_combined_mode_env_injected_with_broker_env_and_no_command() -> None:
+    """The single reconciler service carries the combined-mode env var AND the
+    broker URL/token env the in-process worker needs, with NO command override
+    and NO separate ``-worker`` service (VAL-CODE-COMBINED-003)."""
+
+    registry = FakeRegistry(
+        [
+            _record(
+                "prism",
+                env={
+                    "PRISM_DOCKER_BROKER_URL": "http://base-docker-broker:8082",
+                    "PRISM_DOCKER_BROKER_TOKEN_FILE": (
+                        "/run/secrets/base/docker_broker_token"
+                    ),
+                    "PRISM_SHARED_TOKEN_FILE": "/run/secrets/base/challenge_token",
+                },
+                metadata={"combined_mode_env": "PRISM_COMBINED_MODE"},
+            )
+        ]
+    )
+    orchestrator = FakeOrchestrator()
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    await reconciler.reconcile_once()
+
+    assert orchestrator.started == ["prism"]
+    assert len(orchestrator.specs) == 1
+    spec = orchestrator.specs[0]
+    # Combined-mode env var injected onto the single service.
+    assert spec.env["PRISM_COMBINED_MODE"] == "true"
+    # The broker URL/token env the worker needs is carried on the single service.
+    assert spec.env["PRISM_DOCKER_BROKER_URL"] == "http://base-docker-broker:8082"
+    assert spec.env["PRISM_DOCKER_BROKER_TOKEN_FILE"] == (
+        "/run/secrets/base/docker_broker_token"
+    )
+    assert spec.env["PRISM_SHARED_TOKEN_FILE"] == "/run/secrets/base/challenge_token"
+    # No command override -> the image default CMD runs the API + in-process worker.
+    assert spec.worker_command == ()
+    # Exactly ONE service, named ``challenge-<slug>`` with NO ``-worker`` variant.
+    assert spec.container_name == "challenge-prism"
+    assert not spec.container_name.endswith("-worker")
+
+
+async def test_no_combined_mode_env_leaves_worker_off_by_default() -> None:
+    """Without a ``combined_mode_env`` metadata name the single service keeps the
+    image default (worker OFF) and injects no combined-mode env var."""
+
+    registry = FakeRegistry([_record("prism", env={"FOO": "bar"}, metadata={})])
+    orchestrator = FakeOrchestrator()
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    await reconciler.reconcile_once()
+    spec = orchestrator.specs[0]
     assert spec.env == {"FOO": "bar"}
-    assert spec.worker_command == ("agent-challenge-worker",)
+    assert spec.worker_command == ()
+
+
+async def test_reconciler_creates_no_separate_worker_service() -> None:
+    """The reconciler deploys exactly ONE service per ACTIVE challenge; it never
+    creates a separate ``challenge-<slug>-worker`` service."""
+
+    registry = FakeRegistry(
+        [
+            _record("agent-challenge", metadata={"combined_mode_env": "X"}),
+            _record("prism", metadata={"combined_mode_env": "Y"}),
+        ]
+    )
+    orchestrator = FakeOrchestrator()
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    await reconciler.reconcile_once()
+    names = sorted(spec.container_name for spec in orchestrator.specs)
+    assert names == ["challenge-agent-challenge", "challenge-prism"]
+    assert not any(name.endswith("-worker") for name in names)
 
 
 async def test_start_failure_is_retried_next_pass() -> None:
