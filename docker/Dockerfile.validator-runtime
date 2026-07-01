@@ -43,9 +43,14 @@ RUN uv pip install --system --no-deps \
 #    already provides). torch comes from the CPU wheel index: the validator host
 #    only needs torch IMPORTABLE; the real GPU re-execution runs in the separate
 #    broker-launched prism-evaluator container.
+#    NOTE: no `substrate-interface` here on purpose. Both challenges sign/verify
+#    sr25519 via `bittensor.Keypair` (provided by `base[validator]` above); the
+#    legacy substrate-interface/scalecodec stack conflicts with bittensor 10's
+#    bundled async-substrate-interface and was what forced the :hotfix-scalecodec
+#    pin, so re-adding it would re-break the image.
 RUN uv pip install --system "torch>=2.3" --index-url https://download.pytorch.org/whl/cpu \
     && uv pip install --system \
-        cryptography substrate-interface \
+        cryptography \
         numpy langchain-openai tiktoken sentencepiece huggingface_hub
 
 # Build-time smoke check: prove a validator built from this image can dispatch

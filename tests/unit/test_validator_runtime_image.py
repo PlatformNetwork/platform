@@ -127,8 +127,7 @@ def test_runtime_dockerfile_adds_leaf_runtime_deps_with_cpu_torch() -> None:
     assert "torch>=2.3" in text
 
     # agent-challenge leaf deps.
-    for dep in ("cryptography", "substrate-interface"):
-        assert dep in text, dep
+    assert "cryptography" in text
     # prism leaf deps (everything except base/torch).
     for dep in (
         "numpy",
@@ -138,6 +137,23 @@ def test_runtime_dockerfile_adds_leaf_runtime_deps_with_cpu_torch() -> None:
         "huggingface_hub",
     ):
         assert dep in text, dep
+
+
+def test_runtime_dockerfile_is_bittensor_only_no_legacy_substrate_stack() -> None:
+    # VAL-CODE-VRT-001: the runtime image must NOT install the legacy
+    # substrate-interface/scalecodec stack. Both challenges sign/verify sr25519
+    # via bittensor.Keypair (bittensor comes from base[validator]); bittensor 10
+    # bundles async-substrate-interface, and the legacy stack conflicts with it
+    # (that conflict is what forced the :hotfix-scalecodec pin).
+    text = DOCKERFILE_RUNTIME.read_text(encoding="utf-8")
+    # Only the executable (non-comment) lines matter: the recipe documents WHY
+    # the legacy stack is absent, so comments may name it.
+    instructions = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "substrate-interface" not in instructions
+    assert "substrateinterface" not in instructions
+    assert "scalecodec" not in instructions
 
 
 def test_runtime_dockerfile_has_import_smoke_check() -> None:
