@@ -545,3 +545,43 @@ class ResponseWithBytes:
 
     def read(self) -> bytes:
         return self.data
+
+
+def test_list_running_challenge_slugs_reads_labels() -> None:
+    # VAL-CODE-REG-006: cross-restart self-heal discovers actually-running
+    # challenge containers by their ``base.component=challenge`` label and reads
+    # the original slug from ``base.challenge.slug``.
+    class _Container:
+        def __init__(self, labels: dict[str, str]) -> None:
+            self.labels = labels
+
+    class _ListContainers:
+        def __init__(self) -> None:
+            self.filters: dict[str, str] | None = None
+
+        def list(self, *, filters: dict[str, str]) -> list[object]:
+            self.filters = filters
+            return [
+                _Container(
+                    {"base.component": "challenge", "base.challenge.slug": "prism"}
+                ),
+                _Container(
+                    {
+                        "base.component": "challenge",
+                        "base.challenge.slug": "agent-challenge",
+                    }
+                ),
+                _Container({"base.component": "challenge"}),  # no slug -> skipped
+            ]
+
+    class _Client:
+        def __init__(self) -> None:
+            self.containers = _ListContainers()
+
+    client = _Client()
+    orchestrator = DockerOrchestrator(client=client)
+
+    slugs = orchestrator.list_running_challenge_slugs()
+
+    assert slugs == frozenset({"prism", "agent-challenge"})
+    assert client.containers.filters == {"label": "base.component=challenge"}

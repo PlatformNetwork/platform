@@ -1429,6 +1429,62 @@ def test_service_image_returns_none_when_service_absent() -> None:
     assert orchestrator.service_image("agent") is None
 
 
+def test_list_running_challenge_slugs_discovers_by_label() -> None:
+    # VAL-CODE-REG-006: the reconciler's cross-restart self-heal reads the
+    # ACTUALLY-running challenge services from the backend. The orchestrator
+    # lists ``challenge-<slug>`` services by their ``base.component=challenge``
+    # label and derives the slug from the service name.
+    class _LsRunner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def run(
+            self,
+            argv: Any,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: float | None = None,
+        ) -> SwarmCommandResult:
+            argv = tuple(argv)
+            self.calls.append(argv)
+            if argv[1:3] == ("service", "ls"):
+                # Includes a non-challenge service to prove the prefix guard.
+                return _result(
+                    argv,
+                    out="challenge-prism\nchallenge-agent-challenge\n"
+                    "base-master-proxy\n\n",
+                )
+            return _result(argv)
+
+    runner = _LsRunner()
+    orchestrator = SwarmChallengeOrchestrator(runner=runner, ledger=WorkloadLedger())
+
+    slugs = orchestrator.list_running_challenge_slugs()
+
+    assert slugs == frozenset({"prism", "agent-challenge"})
+    ls_call = next(c for c in runner.calls if c[1:3] == ("service", "ls"))
+    assert ("--filter", "label=base.component=challenge") == (ls_call[3], ls_call[4])
+    assert ls_call[-2:] == ("--format", "{{.Name}}")
+
+
+def test_list_running_challenge_slugs_raises_on_error() -> None:
+    class _FailRunner:
+        def run(
+            self,
+            argv: Any,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: float | None = None,
+        ) -> SwarmCommandResult:
+            return _result(tuple(argv), rc=1, err="daemon down")
+
+    orchestrator = SwarmChallengeOrchestrator(
+        runner=_FailRunner(), ledger=WorkloadLedger()
+    )
+    with pytest.raises(DockerOrchestrationError):
+        orchestrator.list_running_challenge_slugs()
+
+
 def test_restart_challenge_applies_record_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -86,19 +86,31 @@ default-path comment now reflects this real behavior.)
 ### Behavior (idempotent, reconcile-to-registry)
 
 - Each pass reads `registry.list(active_only=True)` and calls
-  `orchestrator.start_challenge(spec)` for every ACTIVE challenge. Start is
-  invoked **exactly once per challenge** (the reconciler tracks what it has
-  deployed), and `start_challenge` is itself idempotent (it reuses an existing
-  service), so a fresh master that inherits already-running services converges
-  harmlessly.
+  `orchestrator.start_challenge(spec)` for every ACTIVE challenge with no running
+  service. Start is invoked **exactly once per challenge** (the reconciler tracks
+  what it has deployed), and `start_challenge` is itself idempotent (it reuses an
+  existing service).
+- **Cross-restart self-heal:** the managed set the reconciler tears down from is
+  the challenge services ACTUALLY running (discovered from the backend via
+  `orchestrator.list_running_challenge_slugs()` — swarm services named
+  `challenge-<slug>` labelled `base.component=challenge`) **UNIONED** with this
+  process's in-memory `_deployed` set. So a service a PRIOR process created for a
+  challenge that is no longer ACTIVE is stopped even though this process never had
+  that slug in `_deployed` (closes the live-observed orphan gap where a
+  deactivated `challenge-regtest` kept running after a proxy restart). An ACTIVE
+  challenge whose service is already running is **adopted** (tracked, start NOT
+  called again — a healthy service is never recreated).
 - A challenge whose status is no longer ACTIVE (DRAFT / INACTIVE / DISABLED, or
   removed from the registry) has its service **stopped** via
   `orchestrator.stop_challenge(slug)` on the next pass.
 - DRAFT / INACTIVE / DISABLED challenges are **never** started (belt-and-suspenders:
   the reconciler also re-filters to ACTIVE even if a registry ignores
   `active_only`).
-- A start/stop that raises is logged and retried next pass; one failure never
-  aborts the whole pass or stops the loop.
+- Each pass emits an INFO-level summary (`adopted`/`started`/`stopped` slugs) so
+  the loop's activity is observable in the proxy logs (it was previously silent
+  except on exceptions). A start/stop that raises is logged and retried next pass;
+  service discovery that raises degrades to the in-memory `_deployed` set; one
+  failure never aborts the whole pass or stops the loop.
 
 ### Where it is wired
 
@@ -111,7 +123,11 @@ default-path comment now reflects this real behavior.)
 
 Tests: `tests/unit/test_master_registry_reconciler.py` (faked registry +
 orchestrator: start/idempotent/add/deactivate/remove/reactivate, non-ACTIVE never
-started, spec parity, start-failure retry, async registry, loop + lifespan).
+started, spec parity, start-failure retry, async registry, loop + lifespan,
+cross-restart self-heal of an orphaned service from an EMPTY in-memory set,
+adopt-not-restart of an already-running ACTIVE service, INFO summary log,
+discovery-failure degradation); orchestrator discovery accessor in
+`tests/unit/test_swarm_backend.py` + `tests/unit/test_docker_orchestrator_extended.py`.
 
 ### Challenge combined mode (single service = API + in-process worker; architecture.md sec 9.5)
 

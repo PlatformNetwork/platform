@@ -324,11 +324,23 @@ class ChallengeServiceOrchestrator(Protocol):
 
     def stop_challenge(self, slug: str, *, remove: bool = ...) -> None: ...
 
+    def list_running_challenge_slugs(self) -> frozenset[str]:
+        """Return the slugs of challenge services actually running now.
+
+        Discovered from the backend (e.g. ``challenge-<slug>`` swarm services),
+        so the reconciler can tear down a service a PRIOR process created even
+        though this process never tracked it in ``_deployed``.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class RegistryReconcilePassResult:
     """Observable outcome of one registry reconcile pass."""
 
+    #: slugs whose already-running service this pass adopted (an ACTIVE challenge
+    #: whose service a prior process created, so start was not called again).
+    adopted: list[str]
     #: slugs whose challenge service was started this pass (newly ACTIVE).
     started: list[str]
     #: slugs whose challenge service was torn down this pass (no longer ACTIVE).
@@ -345,12 +357,21 @@ class MasterChallengeReconciler:
     newly-registered ACTIVE challenge propagate automatically on the next pass,
     with no static per-challenge ``docker service create`` step.
 
-    Idempotency: a challenge already deployed by this process is left untouched
-    on subsequent passes (start is called exactly once per challenge), and the
-    underlying :meth:`start_challenge` itself reuses an existing service, so a
-    fresh master that inherits already-running services converges harmlessly.
-    A start/stop that raises is logged and retried on the next pass rather than
-    aborting the whole pass.
+    Cross-restart self-heal: the managed set the reconciler tears down from is
+    the challenge services ACTUALLY running (discovered from the orchestrator via
+    :meth:`ChallengeServiceOrchestrator.list_running_challenge_slugs`) UNIONED
+    with this process's in-memory ``_deployed`` set. So a service a PRIOR process
+    created for a challenge that is no longer ACTIVE is stopped even though this
+    process never had that slug in ``_deployed`` (the live-observed orphan gap
+    after a proxy restart).
+
+    Idempotency: a challenge already deployed/adopted by this process is left
+    untouched on subsequent passes (start is called exactly once per challenge),
+    a still-ACTIVE challenge whose service is already running is ADOPTED (its
+    slug tracked without calling start again, so a healthy service is never
+    recreated), and the underlying :meth:`start_challenge` itself reuses an
+    existing service. A start/stop that raises is logged and retried on the next
+    pass rather than aborting the whole pass.
     """
 
     def __init__(
@@ -361,13 +382,26 @@ class MasterChallengeReconciler:
     ) -> None:
         self._registry = registry
         self._orchestrator = orchestrator
-        self._deployed: dict[str, ChallengeSpec] = {}
+        self._deployed: set[str] = set()
 
     async def reconcile_once(self) -> RegistryReconcilePassResult:
         """Start newly-ACTIVE challenges and stop no-longer-ACTIVE ones."""
 
         active = await self._active_challenges()
-        active_slugs = {challenge.slug for challenge in active}
+        active_by_slug = {challenge.slug: challenge for challenge in active}
+        active_slugs = set(active_by_slug)
+
+        running = self._running_challenge_slugs()
+
+        # Adopt a service a prior process already started for a still-ACTIVE
+        # challenge: track the slug so it is torn down when it later leaves
+        # ACTIVE, but do NOT call start again (never recreate a healthy service).
+        adopted: list[str] = []
+        for slug in sorted(running):
+            if slug in self._deployed or slug not in active_slugs:
+                continue
+            self._deployed.add(slug)
+            adopted.append(slug)
 
         started: list[str] = []
         for challenge in active:
@@ -380,11 +414,15 @@ class MasterChallengeReconciler:
             except Exception:
                 logger.exception("failed to start challenge service %s", slug)
                 continue
-            self._deployed[slug] = spec
+            self._deployed.add(slug)
             started.append(slug)
 
+        # Managed set = everything this process tracks UNIONED with everything
+        # actually running, so an orphaned service for a non-ACTIVE challenge is
+        # stopped even across a restart that emptied ``_deployed``.
+        managed = set(self._deployed) | running
         stopped: list[str] = []
-        for slug in list(self._deployed):
+        for slug in sorted(managed):
             if slug in active_slugs:
                 continue
             try:
@@ -392,10 +430,32 @@ class MasterChallengeReconciler:
             except Exception:
                 logger.exception("failed to stop challenge service %s", slug)
                 continue
-            del self._deployed[slug]
+            self._deployed.discard(slug)
             stopped.append(slug)
 
-        return RegistryReconcilePassResult(started=started, stopped=stopped)
+        logger.info(
+            "registry reconcile pass: adopted=%s started=%s stopped=%s",
+            adopted,
+            started,
+            stopped,
+        )
+        return RegistryReconcilePassResult(
+            adopted=adopted, started=started, stopped=stopped
+        )
+
+    def _running_challenge_slugs(self) -> set[str]:
+        """Discover the slugs of challenge services actually running now.
+
+        Degrades to an empty set (logged) if discovery fails, so a transient
+        backend/docker error never aborts a reconcile pass: the pass then falls
+        back to this process's in-memory ``_deployed`` set only.
+        """
+
+        try:
+            return set(self._orchestrator.list_running_challenge_slugs())
+        except Exception:
+            logger.exception("failed to list running challenge services")
+            return set()
 
     async def _active_challenges(self) -> list[Any]:
         listed = self._registry.list(active_only=True)

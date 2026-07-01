@@ -1084,6 +1084,43 @@ class SwarmChallengeOrchestrator:
         image = inspected.stdout.strip()
         return image or None
 
+    def list_running_challenge_slugs(self) -> frozenset[str]:
+        """Return the slugs of challenge services currently running in Swarm.
+
+        Discovers every ``challenge-<slug>`` service by its
+        ``base.component=challenge`` label (set by :meth:`_challenge_plan`) so
+        the registry reconciler can tear down a service a PRIOR master process
+        created for a challenge that is no longer ACTIVE (cross-restart
+        self-heal), not only services this process started. The slug is derived
+        from the ``challenge-<slug>`` service name, matching
+        :meth:`stop_challenge`'s naming.
+        """
+
+        listed = self._command(
+            [
+                self.docker_bin,
+                "service",
+                "ls",
+                "--filter",
+                "label=base.component=challenge",
+                "--format",
+                "{{.Name}}",
+            ]
+        )
+        if listed.returncode != 0:
+            raise DockerOrchestrationError(
+                f"Swarm challenge service list failed: {listed.stderr.strip()}"
+            )
+        slugs: set[str] = set()
+        for line in listed.stdout.splitlines():
+            name = line.strip()
+            if not name.startswith("challenge-"):
+                continue
+            slug = name.removeprefix("challenge-")
+            if slug:
+                slugs.add(slug)
+        return frozenset(slugs)
+
     def ensure_network(self) -> None:
         """Create the encrypted overlay challenge network if missing."""
 

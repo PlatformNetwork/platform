@@ -498,6 +498,27 @@ class DockerOrchestrator:
                 container.remove(v=False)
         self._runtime.pop(slug, None)
 
+    def list_running_challenge_slugs(self) -> frozenset[str]:
+        """Return the slugs of challenge containers currently running.
+
+        Discovers every challenge container by its ``base.component=challenge``
+        label (set in :meth:`_create_container`) so the registry reconciler can
+        tear down a container a PRIOR master process created for a challenge no
+        longer ACTIVE (cross-restart self-heal). The slug is read from the
+        ``base.challenge.slug`` label.
+        """
+
+        containers = self.client.containers.list(
+            filters={"label": "base.component=challenge"}
+        )
+        slugs: set[str] = set()
+        for container in containers:
+            labels = getattr(container, "labels", None) or {}
+            slug = labels.get("base.challenge.slug")
+            if slug:
+                slugs.add(slug)
+        return frozenset(slugs)
+
     def restart_challenge(self, spec: ChallengeSpec) -> ChallengeRuntime:
         """Restart a challenge container and verify readiness."""
 

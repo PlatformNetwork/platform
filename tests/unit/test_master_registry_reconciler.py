@@ -10,8 +10,10 @@ orchestrator are faked here. Fulfills VAL-CODE-REG-001 / VAL-CODE-REG-002.
 from __future__ import annotations
 
 import asyncio
+import logging
 from decimal import Decimal
 
+import pytest
 from fastapi import FastAPI
 
 from base.master.docker_orchestrator import ChallengeSpec
@@ -80,26 +82,42 @@ class FakeOrchestrator:
     def __init__(
         self,
         *,
+        running: set[str] | None = None,
         fail_slugs: set[str] | None = None,
         fail_stop_slugs: set[str] | None = None,
+        fail_list: bool = False,
     ) -> None:
         self.started: list[str] = []
         self.stopped: list[str] = []
         self.specs: list[ChallengeSpec] = []
+        # Models the challenge services actually running in the backend. Seed it
+        # to simulate services a PRIOR process created before a restart emptied
+        # the reconciler's in-memory ``_deployed`` set (cross-restart self-heal).
+        self.running: set[str] = set(running or set())
         self.fail_slugs = fail_slugs or set()
         self.fail_stop_slugs = fail_stop_slugs or set()
+        self.fail_list = fail_list
+        self.list_calls = 0
 
     def start_challenge(self, spec: ChallengeSpec, *, recreate: bool = False) -> object:
         if spec.slug in self.fail_slugs:
             raise RuntimeError(f"start failed for {spec.slug}")
         self.started.append(spec.slug)
         self.specs.append(spec)
+        self.running.add(spec.slug)
         return object()
 
     def stop_challenge(self, slug: str, *, remove: bool = False) -> None:
         if slug in self.fail_stop_slugs:
             raise RuntimeError(f"stop failed for {slug}")
         self.stopped.append(slug)
+        self.running.discard(slug)
+
+    def list_running_challenge_slugs(self) -> frozenset[str]:
+        self.list_calls += 1
+        if self.fail_list:
+            raise RuntimeError("list running services failed")
+        return frozenset(self.running)
 
 
 async def test_starts_all_active_challenges_once_idempotent() -> None:
@@ -228,6 +246,147 @@ async def test_reactivated_challenge_is_started_again() -> None:
     result = await reconciler.reconcile_once()
     assert result.started == ["prism"]
     assert orchestrator.started == ["prism", "prism"]
+
+
+async def test_stops_orphaned_service_across_restart_empty_in_memory_set() -> None:
+    """Cross-restart self-heal (VAL-CODE-REG-006): a fresh reconciler starting
+    with an EMPTY in-memory set but a running service for a NON-ACTIVE challenge
+    tears that orphaned service down on the next pass, because the managed set is
+    derived from the actually-running services, not only ``_deployed``."""
+
+    # regtest was deactivated (INACTIVE) but its service kept running after the
+    # proxy restarted, so this new process never had it in ``_deployed``.
+    registry = FakeRegistry([_record("regtest", ChallengeStatus.INACTIVE)])
+    orchestrator = FakeOrchestrator(running={"regtest"})
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    assert reconciler._deployed == set()  # fresh process: nothing tracked
+    result = await reconciler.reconcile_once()
+
+    assert result.started == []
+    assert result.adopted == []
+    assert result.stopped == ["regtest"]
+    assert orchestrator.stopped == ["regtest"]
+    assert "regtest" not in orchestrator.running
+
+
+async def test_active_challenge_with_running_service_is_adopted_not_restarted() -> None:
+    """An ACTIVE challenge whose service is already running (created by a prior
+    process) is ADOPTED - tracked for future teardown without calling start
+    again, so a healthy service is never recreated."""
+
+    registry = FakeRegistry([_record("prism", ChallengeStatus.ACTIVE)])
+    orchestrator = FakeOrchestrator(running={"prism"})
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    result = await reconciler.reconcile_once()
+
+    # Adopted (tracked) but NOT started - start_challenge is never called.
+    assert result.adopted == ["prism"]
+    assert result.started == []
+    assert result.stopped == []
+    assert orchestrator.started == []
+    assert orchestrator.stopped == []
+    assert orchestrator.running == {"prism"}
+
+    # It is now tracked, so a later deactivation tears it down.
+    registry.records = [_record("prism", ChallengeStatus.INACTIVE)]
+    second = await reconciler.reconcile_once()
+    assert second.stopped == ["prism"]
+    assert orchestrator.stopped == ["prism"]
+
+
+async def test_new_active_challenge_with_no_running_service_is_started() -> None:
+    """Forward behavior preserved: a newly-ACTIVE challenge with no running
+    service is deployed."""
+
+    registry = FakeRegistry([_record("prism", ChallengeStatus.ACTIVE)])
+    orchestrator = FakeOrchestrator(running=set())
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    result = await reconciler.reconcile_once()
+    assert result.adopted == []
+    assert result.started == ["prism"]
+    assert orchestrator.started == ["prism"]
+
+
+async def test_mixed_pass_adopts_starts_and_stops_across_restart() -> None:
+    """One pass on a fresh process: adopt an ACTIVE running service, start a new
+    ACTIVE one with no service, and stop an orphaned NON-ACTIVE running one."""
+
+    registry = FakeRegistry(
+        [
+            _record("prism", ChallengeStatus.ACTIVE),  # already running -> adopt
+            _record("agent-challenge", ChallengeStatus.ACTIVE),  # no svc -> start
+            _record("regtest", ChallengeStatus.INACTIVE),  # orphan svc -> stop
+        ]
+    )
+    orchestrator = FakeOrchestrator(running={"prism", "regtest"})
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    result = await reconciler.reconcile_once()
+
+    assert result.adopted == ["prism"]
+    assert result.started == ["agent-challenge"]
+    assert result.stopped == ["regtest"]
+    assert orchestrator.started == ["agent-challenge"]
+    assert orchestrator.stopped == ["regtest"]
+    assert orchestrator.running == {"prism", "agent-challenge"}
+
+
+async def test_reconcile_pass_emits_info_summary(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each reconcile pass emits an INFO-level summary naming the adopted /
+    started / stopped slugs so the loop is observable in the proxy logs."""
+
+    registry = FakeRegistry(
+        [
+            _record("agent-challenge", ChallengeStatus.ACTIVE),
+            _record("prism", ChallengeStatus.ACTIVE),  # already running -> adopt
+            _record("regtest", ChallengeStatus.INACTIVE),  # orphan -> stop
+        ]
+    )
+    orchestrator = FakeOrchestrator(running={"prism", "regtest"})
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    with caplog.at_level(logging.INFO, logger="base.master.orchestration"):
+        await reconciler.reconcile_once()
+
+    summaries = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.INFO and "reconcile pass" in record.getMessage()
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert "adopted=['prism']" in summary
+    assert "started=['agent-challenge']" in summary
+    assert "stopped=['regtest']" in summary
+
+
+async def test_discovery_failure_degrades_to_in_memory_set() -> None:
+    """If listing running services raises, the pass still runs off the in-memory
+    ``_deployed`` set (start ACTIVE, stop tracked-but-now-inactive) rather than
+    aborting the whole pass."""
+
+    registry = FakeRegistry([_record("prism", ChallengeStatus.ACTIVE)])
+    orchestrator = FakeOrchestrator(fail_list=True)
+    reconciler = MasterChallengeReconciler(registry=registry, orchestrator=orchestrator)
+
+    # First pass: discovery fails, but the ACTIVE challenge is still deployed
+    # (falls back to the empty in-memory set + registry).
+    first = await reconciler.reconcile_once()
+    assert first.started == ["prism"]
+    assert orchestrator.started == ["prism"]
+    assert orchestrator.list_calls == 1
+
+    # Deactivate prism: even with discovery still failing, the in-memory set
+    # tracks it, so it is torn down.
+    registry.records = [_record("prism", ChallengeStatus.INACTIVE)]
+    second = await reconciler.reconcile_once()
+    assert second.stopped == ["prism"]
+    assert orchestrator.stopped == ["prism"]
 
 
 async def test_spec_is_built_like_the_legacy_runner() -> None:
